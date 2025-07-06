@@ -1,6 +1,8 @@
-# LLM Checker 2.0 🚀
+# LLM Checker 2.0.3 🚀
 
 Advanced CLI tool that scans your hardware and tells you exactly **which LLM or sLLM models you can run locally**, with **full Ollama integration**.
+![image](https://github.com/user-attachments/assets/77d156b7-e484-4475-80cc-2e4f275a161b)
+
 
 ---
 
