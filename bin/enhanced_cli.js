@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const { Command } = require('commander');
 const chalk = require('chalk');
 const ora = require('ora');
