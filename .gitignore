@@ -1,0 +1,74 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+lib/
+*.tgz
+
+# Build
+/build/
+/coverage/
+/.eslintcache
+/.parcel-cache/
+/.cache/
+/.next/
+/out/
+/.vite/
+
+# Logs
+logs
+*.log
+*.log.*
+
+# Environment variables
+.env
+.env.*.local
+
+# Ollama model cache (if used locally)
+~/.ollama/
+~/.cache/ollama/
+
+# Local test files
+*.test.*
+*.spec.*
+test/
+__tests__/
+jest.config.js
+coverage/
+
+# System
+.DS_Store
+Thumbs.db
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# Windows
+ehthumbs.db
+desktop.ini
+
+# Output reports
+*.md.html
+*.report.txt
+performance-report.md
+*.csv
+*.json
+debug.log
+
+# LLM Checker analysis cache
+/.llm-checker-cache/
