@@ -1,0 +1,73 @@
+{
+  "name": "llm-checker",
+  "version": "2.0.3",
+  "description": "Advanced CLI tool to check which LLM models your computer can run locally, with Ollama integration and sLLM support",
+  "bin": {
+    "llm-checker": "bin/enhanced_cli.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "test": "jest",
+    "build": "echo 'No build needed'",
+    "dev": "node bin/enhanced_cli.js",
+    "start": "node bin/enhanced_cli.js",
+    "postinstall": "echo '🎉 LLM Checker installed! Try: llm-checker check'"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "inquirer": "^8.2.6",
+    "node-fetch": "^2.7.0",
+    "ora": "^5.4.1",
+    "systeminformation": "^5.21.0",
+    "table": "^6.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "jest": "^29.7.0"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "machine-learning",
+    "hardware",
+    "compatibility",
+    "cli",
+    "ollama",
+    "small-language-models",
+    "sllm",
+    "local-ai",
+    "quantization",
+    "inference",
+    "gpu",
+    "vram",
+    "performance",
+    "benchmark"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pavelevich/llm-checker.git"
+  },
+  "homepage": "https://github.com/Pavelevich/llm-checker#readme",
+  "bugs": {
+    "url": "https://github.com/Pavelevich/llm-checker/issues"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "preferGlobal": true,
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ]
+}
