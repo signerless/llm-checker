@@ -35,6 +35,35 @@ class LLMChecker {
 
             const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, models);
 
+            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
+                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
+                    if (ollamaModel.matchedModel && ollamaModel.canRun) {
+                        const enhancedModel = {
+                            ...ollamaModel.matchedModel,
+                            score: ollamaModel.compatibilityScore,
+                            issues: ollamaModel.issues || [],
+                            notes: [...(ollamaModel.notes || []), '📦 Installed in Ollama'],
+                            performanceEstimate: ollamaModel.performanceEstimate,
+                            isOllamaInstalled: true,
+                            ollamaInfo: {
+                                localName: ollamaModel.name,
+                                isRunning: ollamaModel.isRunning,
+                                cloudInfo: ollamaModel.cloudInfo
+                            }
+                        };
+
+                        if (ollamaModel.compatibilityScore >= 75) {
+                            compatibility.compatible.push(enhancedModel);
+                        } else if (ollamaModel.compatibilityScore >= 60) {
+                            compatibility.marginal.push(enhancedModel);
+                        }
+                    }
+                }
+
+                compatibility.compatible.sort((a, b) => b.score - a.score);
+                compatibility.marginal.sort((a, b) => b.score - a.score);
+            }
+
             const enrichedResults = await this.enrichWithPerformanceData(hardware, compatibility);
 
             const recommendations = await this.generateEnhancedRecommendations(
@@ -106,9 +135,9 @@ class LLMChecker {
 
                         let finalScore = compatibility.score;
                         if (compatibleMatch.match_type === 'exact') {
-                            finalScore = Math.max(finalScore, 75); // Exact matches get at least 75
+                            finalScore = Math.max(finalScore, 75);
                         } else {
-                            finalScore = Math.max(finalScore, 65); // Fuzzy matches get at least 65
+                            finalScore = Math.max(finalScore, 65);
                         }
 
                         const enrichedOllamaModel = {
@@ -118,7 +147,7 @@ class LLMChecker {
                             issues: compatibility.issues || [],
                             notes: compatibility.notes || [],
                             isRunning: runningModels.some(r => r.name === ollamaModel.name),
-                            canRun: finalScore >= 60, // This should now always be true for found models
+                            canRun: finalScore >= 60,
                             performanceEstimate: await this.performanceAnalyzer.estimateModelPerformance(matchedModel, hardware),
                             cloudInfo: {
                                 pulls: cloudModel.pulls,
@@ -333,88 +362,6 @@ class LLMChecker {
         };
     }
 
-// 1. Fix the analyze method in index.js to include Ollama models in compatible list
-
-    async analyze(options = {}) {
-        try {
-            const hardware = await this.hardwareDetector.getSystemInfo();
-            this.logger.info('Hardware detected', { hardware });
-
-            let models = this.expandedModelsDatabase.getAllModels();
-
-            const ollamaIntegration = await this.integrateOllamaModels(hardware, models);
-
-            if (options.filter) {
-                models = this.filterModels(models, options.filter);
-            }
-
-            if (!options.includeCloud) {
-                models = models.filter(model => model.type === 'local');
-            }
-
-            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, models);
-
-            // Add Ollama models to compatible list
-            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
-                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
-                    if (ollamaModel.matchedModel && ollamaModel.canRun) {
-                        const enhancedModel = {
-                            ...ollamaModel.matchedModel,
-                            score: ollamaModel.compatibilityScore,
-                            issues: ollamaModel.issues || [],
-                            notes: [...(ollamaModel.notes || []), '📦 Installed in Ollama'],
-                            performanceEstimate: ollamaModel.performanceEstimate,
-                            isOllamaInstalled: true,
-                            ollamaInfo: {
-                                localName: ollamaModel.name,
-                                isRunning: ollamaModel.isRunning,
-                                cloudInfo: ollamaModel.cloudInfo
-                            }
-                        };
-
-                        // Add to appropriate category based on score
-                        if (ollamaModel.compatibilityScore >= 75) {
-                            compatibility.compatible.push(enhancedModel);
-                        } else if (ollamaModel.compatibilityScore >= 60) {
-                            compatibility.marginal.push(enhancedModel);
-                        }
-                    }
-                }
-
-                // Re-sort after adding Ollama models
-                compatibility.compatible.sort((a, b) => b.score - a.score);
-                compatibility.marginal.sort((a, b) => b.score - a.score);
-            }
-
-            const enrichedResults = await this.enrichWithPerformanceData(hardware, compatibility);
-
-            const recommendations = await this.generateEnhancedRecommendations(
-                hardware,
-                enrichedResults,
-                ollamaIntegration,
-                options.useCase || 'general'
-            );
-
-            return {
-                hardware,
-                compatible: enrichedResults.compatible,
-                marginal: enrichedResults.marginal,
-                incompatible: enrichedResults.incompatible,
-                recommendations,
-                ollamaInfo: ollamaIntegration.ollamaInfo,
-                ollamaModels: ollamaIntegration.compatibleOllamaModels,
-                summary: this.generateEnhancedSummary(hardware, enrichedResults, ollamaIntegration),
-                performanceEstimates: enrichedResults.performanceEstimates
-            };
-
-        } catch (error) {
-            this.logger.error('Analysis failed', { error: error.message, component: 'LLMChecker', method: 'analyze' });
-            throw new Error(`Analysis failed: ${error.message}`);
-        }
-    }
-
-// 2. Fix the generateEnhancedRecommendations method
-
     async generateEnhancedRecommendations(hardware, results, ollamaIntegration, useCase) {
         const recommendations = [];
 
@@ -424,7 +371,6 @@ class LLMChecker {
             if (ollamaIntegration.compatibleOllamaModels.length === 0) {
                 recommendations.push('🦙 No compatible models installed in Ollama - install recommended models below');
             } else {
-                // Show the found Ollama models
                 recommendations.push(`🦙 ${ollamaIntegration.compatibleOllamaModels.length} compatible models found in Ollama:`);
 
                 ollamaIntegration.compatibleOllamaModels.forEach((model, index) => {
@@ -433,7 +379,6 @@ class LLMChecker {
                     recommendations.push(`  ${index + 1}. 📦 ${model.name} (Score: ${score}/100)${runningStatus}`);
                 });
 
-                // Show usage commands instead of install commands
                 const bestModel = ollamaIntegration.compatibleOllamaModels
                     .sort((a, b) => (b.compatibilityScore || 0) - (a.compatibilityScore || 0))[0];
 
@@ -442,19 +387,30 @@ class LLMChecker {
                 }
             }
 
-            // Suggest additional models to install (not already installed)
-            const installedNames = new Set(ollamaIntegration.compatibleOllamaModels.map(m => m.name.toLowerCase()));
-            const suggestedModels = [
-                { name: 'qwen:0.5b', reason: 'Ultra-fast small model' },
-                { name: 'tinyllama:1.1b', reason: 'Great for testing' },
-                { name: 'phi3:mini', reason: 'Excellent reasoning' }
-            ].filter(model => !installedNames.has(model.name));
+            try {
+                const cloudRecommendations = await this.searchOllamaCloudRecommendations(hardware, ollamaIntegration.compatibleOllamaModels);
 
-            if (suggestedModels.length > 0) {
-                recommendations.push('💡 Additional models you might want to try:');
-                suggestedModels.slice(0, 2).forEach((model, index) => {
-                    recommendations.push(`${index + 1}. 🚀 ollama pull ${model.name} - ${model.reason}`);
-                });
+                if (cloudRecommendations.length > 0) {
+                    recommendations.push('💡 Recommended models from Ollama library for your hardware:');
+                    cloudRecommendations.forEach((model, index) => {
+                        recommendations.push(`${index + 1}. 🚀 ollama pull ${model.identifier} - ${model.reason} (${model.pulls.toLocaleString()} pulls)`);
+                    });
+                }
+            } catch (error) {
+                this.logger.warn('Failed to get cloud recommendations:', error);
+                const installedNames = new Set(ollamaIntegration.compatibleOllamaModels.map(m => m.name.toLowerCase()));
+                const basicSuggestions = [
+                    { name: 'qwen:0.5b', reason: 'Ultra-fast small model' },
+                    { name: 'tinyllama:1.1b', reason: 'Great for testing' },
+                    { name: 'phi3:mini', reason: 'Excellent reasoning' }
+                ].filter(model => !installedNames.has(model.name));
+
+                if (basicSuggestions.length > 0) {
+                    recommendations.push('💡 Additional models you might want to try:');
+                    basicSuggestions.slice(0, 2).forEach((model, index) => {
+                        recommendations.push(`${index + 1}. 🚀 ollama pull ${model.name} - ${model.reason}`);
+                    });
+                }
             }
 
         } else {
@@ -465,6 +421,177 @@ class LLMChecker {
         recommendations.push(...useCaseRecs);
 
         return [...new Set(recommendations)];
+    }
+
+    async searchOllamaCloudRecommendations(hardware, installedModels) {
+        try {
+            const { getOllamaModelsIntegration } = require('./ollama/native-scraper');
+
+            const allModelsData = await getOllamaModelsIntegration([]);
+
+            if (!allModelsData.recommendations || allModelsData.recommendations.length === 0) {
+                return [];
+            }
+
+            const installedIdentifiers = new Set(
+                installedModels.map(m => {
+                    const name = m.name.toLowerCase();
+                    return name.split(':')[0];
+                })
+            );
+
+            const compatibleModels = allModelsData.recommendations
+                .filter(model => {
+                    const baseIdentifier = model.model_identifier.split(':')[0].toLowerCase();
+                    return !installedIdentifiers.has(baseIdentifier) &&
+                        !installedIdentifiers.has(model.model_identifier.toLowerCase());
+                })
+                .map(model => ({
+                    ...model,
+                    compatibilityScore: this.calculateCloudModelCompatibility(model, hardware),
+                    reason: this.getCloudModelReason(model, hardware)
+                }))
+                .filter(model => model.compatibilityScore >= 60)
+                .sort((a, b) => {
+                    if (b.compatibilityScore !== a.compatibilityScore) {
+                        return b.compatibilityScore - a.compatibilityScore;
+                    }
+                    return (b.pulls || 0) - (a.pulls || 0);
+                })
+                .slice(0, 5);
+
+            return compatibleModels.map(model => ({
+                identifier: model.model_identifier,
+                name: model.model_name,
+                pulls: model.pulls || 0,
+                reason: model.reason,
+                score: model.compatibilityScore,
+                size: this.extractModelSize(model.model_identifier),
+                description: model.description || ''
+            }));
+
+        } catch (error) {
+            this.logger.error('Error searching Ollama cloud recommendations:', error);
+            return [];
+        }
+    }
+
+    calculateCloudModelCompatibility(model, hardware) {
+        let score = 50;
+
+        const sizeMatch = model.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+        let modelSizeB = 1;
+
+        if (sizeMatch) {
+            const num = parseFloat(sizeMatch[1]);
+            const unit = sizeMatch[0].slice(-1).toLowerCase();
+            modelSizeB = unit === 'm' ? num / 1000 : num;
+        }
+
+        const estimatedRAM = modelSizeB * 0.6;
+        const ramRatio = hardware.memory.total / estimatedRAM;
+
+        if (ramRatio >= 3) {
+            score += 40;
+        } else if (ramRatio >= 2) {
+            score += 30;
+        } else if (ramRatio >= 1.5) {
+            score += 20;
+        } else if (ramRatio >= 1) {
+            score += 10;
+        } else {
+            score -= 30;
+        }
+
+        if (modelSizeB <= 1) {
+            score += 20;
+        } else if (modelSizeB <= 3) {
+            score += 15;
+        } else if (modelSizeB <= 7) {
+            score += 10;
+        } else if (modelSizeB > 13) {
+            score -= 20;
+        }
+
+        if (hardware.cpu.cores >= 8) {
+            score += 10;
+        } else if (hardware.cpu.cores >= 4) {
+            score += 5;
+        }
+
+        const pulls = model.pulls || 0;
+        if (pulls > 1000000) {
+            score += 10;
+        } else if (pulls > 100000) {
+            score += 5;
+        }
+
+        if (model.model_type === 'official') {
+            score += 5;
+        }
+
+        const identifier = model.model_identifier.toLowerCase();
+        if (identifier.includes('code') && hardware.cpu.cores >= 6) {
+            score += 5;
+        }
+        if (identifier.includes('mini') || identifier.includes('tiny')) {
+            score += 10;
+        }
+
+        return Math.max(0, Math.min(100, Math.round(score)));
+    }
+
+    getCloudModelReason(model, hardware) {
+        const identifier = model.model_identifier.toLowerCase();
+        const sizeMatch = model.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+        const modelSizeB = sizeMatch ?
+            (sizeMatch[0].slice(-1).toLowerCase() === 'm' ? parseFloat(sizeMatch[1]) / 1000 : parseFloat(sizeMatch[1])) : 1;
+
+        if (identifier.includes('qwen') && modelSizeB <= 1) {
+            return 'Ultra-efficient Chinese model, great for limited hardware';
+        }
+        if (identifier.includes('tinyllama')) {
+            return 'Tiny but capable, perfect for testing and light tasks';
+        }
+        if (identifier.includes('phi3') && identifier.includes('mini')) {
+            return 'Microsoft\'s efficient model with excellent reasoning';
+        }
+        if (identifier.includes('gemma') && modelSizeB <= 2) {
+            return 'Google\'s compact model, well-optimized';
+        }
+        if (identifier.includes('mistral') && modelSizeB <= 7) {
+            return 'High-quality European model, excellent performance';
+        }
+        if (identifier.includes('llama3.2') && modelSizeB <= 3) {
+            return 'Meta\'s latest compact model, state-of-the-art';
+        }
+        if (identifier.includes('code')) {
+            return 'Specialized for coding tasks';
+        }
+
+        const ramRatio = hardware.memory.total / (modelSizeB * 0.6);
+
+        if (modelSizeB <= 1) {
+            return 'Ultra-small model, runs very fast on your hardware';
+        } else if (modelSizeB <= 3 && ramRatio >= 2) {
+            return 'Small model with good performance balance';
+        } else if (modelSizeB <= 7 && ramRatio >= 1.5) {
+            return 'Medium-sized model, good capabilities';
+        } else if (ramRatio >= 1.2) {
+            return 'Should run well on your system';
+        } else {
+            return 'Recommended with quantization for your hardware';
+        }
+    }
+
+    extractModelSize(identifier) {
+        const sizeMatch = identifier.match(/(\d+\.?\d*)[bm]/i);
+        if (sizeMatch) {
+            const num = parseFloat(sizeMatch[1]);
+            const unit = sizeMatch[0].slice(-1).toUpperCase();
+            return `${num}${unit}`;
+        }
+        return 'Unknown';
     }
 
     getOllamaCommand(model) {
