@@ -1,16 +1,20 @@
-# LLM Checker 🚀
+# LLM Checker 🚀
 
-Advanced CLI tool that scans your hardware and tells you exactly **which LLM or sLLM models you can run locally**, with **full Ollama integration**.
+Advanced CLI tool that scans your hardware and tells you exactly **which LLM or sLLM models you can run locally**, with **full Ollama integration and intelligent cloud recommendations**.
 ![image](https://github.com/user-attachments/assets/77d156b7-e484-4475-80cc-2e4f275a161b)
-
 
 ---
 
-## ✨ What’s New in v2.0
+## ✨ What's New in v2.1
 
+- ☁️ **Intelligent Ollama Cloud Search** – Automatically finds compatible models from Ollama's library based on your specific hardware
+- 🎯 **Smart Model Filtering** – Excludes already installed models and suggests only new, compatible options
+- 📊 **Enhanced Compatibility Scoring** – Advanced algorithm considers RAM ratios, model popularity, and hardware tiers
+- 🔄 **Structured Recommendations** – Organized suggestions by category (installed, cloud, quick commands)
+- 🛡️ **Robust Fallback System** – Curated model suggestions when cloud search is unavailable
 - 🦙 **Full Ollama integration** – Detects installed models, benchmarks performance and handles downloads automatically
-- 🐣 **sLLM (Small Language Model) support** – From 0.5 B all the way up to ultra‑efficient models
-- 📊 **Expanded model database** – 40 + models including **Gemma 3, Phi‑4, DeepSeek‑R1, Qwen 2.5**
+- 🐣 **sLLM (Small Language Model) support** – From 0.5 B all the way up to ultra‑efficient models
+- 📊 **Expanded model database** – 40 + models including **Gemma 3, Phi‑4, DeepSeek‑R1, Qwen 2.5**
 - 🎯 **Improved compatibility analysis** – Granular 0‑100 scoring system
 - 🏷️ **Detailed categorisation** – ultra‑small, small, medium, large, embedding, multimodal
 - ⚡ **Performance estimation** – tokens/s, memory footprint, energy consumption
@@ -21,26 +25,26 @@ Advanced CLI tool that scans your hardware and tells you exactly **which LLM or 
 
 ## 🚀 Installation
 
-### Option 1 – Global NPM **(recommended)**
+### Option 1 – Global NPM **(recommended)**
 
 ```bash
 npm install -g llm-checker
 ```
 
-### Option 2 – With Ollama **(recommended for running models)**
+### Option 2 – With Ollama **(recommended for running models)**
 
 ```bash
-# 1 Install Ollama
+# 1 Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# 2 Install LLM Checker
+# 2 Install LLM Checker
 npm install -g llm-checker
 
-# 3 Verify
+# 3 Verify
 llm-checker check
 ```
 
-### Option 3 – Local development
+### Option 3 – Local development
 
 ```bash
 git clone https://github.com/signerless/llm-checker.git
@@ -56,7 +60,7 @@ npm link
 ### Main command – full analysis
 
 ```bash
-# Full system scan + Ollama detection
+# Full system scan + Ollama detection + cloud recommendations
 llm-checker check
 
 # Detailed hardware info
@@ -69,10 +73,10 @@ llm-checker check --performance-test
 #### Filter by model category
 
 ```bash
-llm-checker check --filter ultra_small   # Models < 1 B params
-llm-checker check --filter small         # 1–4 B
-llm-checker check --filter medium        # 5–15 B
-llm-checker check --filter large         # > 15 B
+llm-checker check --filter ultra_small   # Models < 1 B params
+llm-checker check --filter small         # 1–4 B
+llm-checker check --filter medium        # 5–15 B
+llm-checker check --filter large         # > 15 B
 ```
 
 #### Filter by specialisation
@@ -80,7 +84,7 @@ llm-checker check --filter large         # > 15 B
 ```bash
 llm-checker check --filter code         # Programming models
 llm-checker check --filter chat         # Conversational
-llm-checker check --filter multimodal   # Vision + text
+llm-checker check --filter multimodal   # Vision + text
 llm-checker check --filter embeddings   # Embedding models
 ```
 
@@ -145,20 +149,20 @@ llm-checker ollama --help
 
 ## 🎯 Example output
 
-### High‑end system with Ollama
+### High‑end system with Ollama and Cloud Recommendations
 
 ```
 🖥️  System Information:
-CPU: Apple M2 Pro (12 cores, 3.5 GHz)
-Architecture: Apple Silicon
-RAM: 32 GB total (24 GB free, 25 % used)
-GPU: Apple M2 Pro (16 GB VRAM, dedicated)
-OS: macOS Sonoma 14.2.1 (arm64)
+CPU: Apple M2 Pro (12 cores, 3.5 GHz)
+Architecture: Apple Silicon
+RAM: 32 GB total (24 GB free, 25 % used)
+GPU: Apple M2 Pro (16 GB VRAM, dedicated)
+OS: macOS Sonoma 14.2.1 (arm64)
 
-🏆 Hardware Tier: HIGH (Overall Score: 92/100)
+🏆 Hardware Tier: HIGH (Overall Score: 92/100)
 
-🦙 Ollama Status: ✅ Running (v0.1.17)
-📦 Local Models: 5 installed
+🦙 Ollama Status: ✅ Running (v0.1.17)
+📦 Local Models: 5 installed, 3 compatible
 🚀 Running Models: llama3.1:8b
 
 ⚡ Performance Benchmark:
@@ -166,85 +170,173 @@ CPU Score: 95/100
 Memory Score: 88/100
 Overall Score: 91/100
 
-✅ Compatible Models (Score ≥ 75):
+✅ Compatible Models (Score ≥ 75):
 ┌─────────────────────┬──────────┬───────────┬──────────┬──────────┬───────────┬──────────┐
 │ Model               │ Size     │ Score     │ RAM      │ VRAM     │ Speed     │ Status   │
 ├─────────────────────┼──────────┼───────────┼──────────┼──────────┼───────────┼──────────┤
-│ Llama 3.1 8B        │ 8 B      │ 98/100    │ 8 GB     │ 4 GB     │ medium    │ 📦 🚀    │
-│ Mistral 7B v0.3     │ 7 B      │ 97/100    │ 8 GB     │ 4 GB     │ medium    │ 📦       │
-│ CodeLlama 7B        │ 7 B      │ 97/100    │ 8 GB     │ 4 GB     │ medium    │ 💻       │
-│ Phi‑3 Mini 3.8B     │ 3.8 B    │ 99/100    │ 4 GB     │ 2 GB     │ fast      │          │
-│ Gemma 3 1B          │ 1 B      │ 100/100   │ 2 GB     │ 0 GB     │ very_fast │          │
+│ Llama 3.1 8B 🦙     │ 8 B      │ 98/100    │ 8 GB     │ 4 GB     │ medium    │ 🚀 Running│
+│ Mistral 7B v0.3 🦙  │ 7 B      │ 97/100    │ 8 GB     │ 4 GB     │ medium    │ 📦 Installed│
+│ CodeLlama 7B 🦙     │ 7 B      │ 97/100    │ 8 GB     │ 4 GB     │ medium    │ 📦 Installed│
+│ Phi‑3 Mini 3.8B     │ 3.8 B    │ 99/100    │ 4 GB     │ 2 GB     │ fast      │          │
+│ Gemma 3 1B          │ 1 B      │ 100/100   │ 2 GB     │ 0 GB     │ very_fast │          │
 └─────────────────────┴──────────┴───────────┴──────────┴──────────┴───────────┴──────────┘
+
+🎯 Smart Recommendations:
+💡 General Recommendations:
+   1. 🚀 Any model size supported - try the largest available
+   2. 💎 Use Q6_K or Q8_0 for maximum quality
+   3. 🦙 Install Ollama for easy model management
+
+📦 Your Installed Ollama Models:
+   🦙 3 compatible models found in Ollama:
+   1. 📦 llama3.1:8b (Score: 98/100) 🚀 (running)
+   2. 📦 mistral:7b (Score: 97/100)
+   3. 📦 codellama:7b (Score: 97/100)
+
+☁️ Recommended from Ollama Cloud:
+   💡 Recommended models from Ollama library for your hardware:
+   1. 🚀 ollama pull deepseek-r1:7b - Advanced reasoning model, state-of-the-art (2,547,832 pulls)
+   2. 🚀 ollama pull qwen2.5:14b - Large Chinese model with excellent capabilities (1,892,156 pulls)
+   3. 🚀 ollama pull gemma2:27b - Google's flagship model for your tier (987,234 pulls)
+   4. 🚀 ollama pull phi4:14b - Microsoft's latest model with improved reasoning (756,891 pulls)
+
+⚡ Quick Commands:
+   > ollama run llama3.1:8b
+   > ollama pull deepseek-r1:7b
+   > ollama pull qwen2.5:14b
+
+🎯 Next Steps:
+1. 🚀 Install a recommended model from above
+2. 💬 Start chatting: ollama run <model-name>
+3. 📊 Analyze: llm-checker analyze-model <model>
 ```
 
-### Resource‑limited system
+### Resource‑limited system with Cloud Suggestions
 
 ```
 🖥️  System Information:
-CPU: Intel Core i5‑8400 (6 cores, 2.8 GHz)
+CPU: Intel Core i5‑8400 (6 cores, 2.8 GHz)
 Architecture: x86‑64
-RAM: 8 GB total (3 GB free, 62 % used)
-GPU: Intel UHD Graphics 630 (0 GB VRAM, integrated)
-OS: Ubuntu 22.04 LTS (x64)
+RAM: 8 GB total (3 GB free, 62 % used)
+GPU: Intel UHD Graphics 630 (0 GB VRAM, integrated)
+OS: Ubuntu 22.04 LTS (x64)
 
-🏆 Hardware Tier: LOW (Overall Score: 45/100)
+🏆 Hardware Tier: LOW (Overall Score: 45/100)
 
-🦙 Ollama Status: ❌ Ollama not running (connection refused)
+🦙 Ollama Status: ✅ Running (v0.1.17)
+📦 No models installed yet
+
+🎯 Smart Recommendations:
+💡 General Recommendations:
+   1. 🐤 Small models (1B-3B) work well on your system
+   2. 🎯 Use Q4_0 quantization for good balance
+   3. 🦙 Install Ollama for easy model management
+
+☁️ Recommended from Ollama Cloud:
+   💡 Recommended models from Ollama library for your hardware:
+   1. 🚀 ollama pull qwen:0.5b - Ultra-efficient model, great for limited hardware (3,245,123 pulls)
+   2. 🚀 ollama pull tinyllama:1.1b - Tiny but capable, perfect for testing (2,891,456 pulls)
+   3. 🚀 ollama pull phi3:mini - Microsoft's efficient model with excellent reasoning (1,934,567 pulls)
+   4. 🚀 ollama pull llama3.2:1b - Meta's latest compact model (1,567,890 pulls)
+
+⚡ Quick Commands:
+   > ollama pull qwen:0.5b
+   > ollama pull tinyllama:1.1b
+   > ollama pull phi3:mini
+
+🎯 Next Steps:
+1. 🚀 Install a recommended model from above
+2. 💬 Start chatting: ollama run <model-name>
 ```
 
 ---
 
-## 🔧 Supported models (40 +)
+## ☁️ Intelligent Cloud Recommendations
 
-### 🐣 Ultra‑small (< 1 B params)
+LLM Checker now features an **intelligent cloud search system** that automatically finds the best models for your specific hardware from Ollama's extensive library.
 
-- **Qwen 0.5B** – Ultra lightweight, requires 1 GB RAM
-- **LaMini‑GPT 774 M** – Multilingual compact model, 1.5 GB RAM
+### How it works
 
-### 🐤 Small (1 – 4 B)
+1. **Hardware Analysis**: Evaluates your RAM, CPU cores, and architecture
+2. **Smart Filtering**: Excludes models you already have installed
+3. **Compatibility Scoring**: Rates each model based on:
+    - RAM requirements vs available memory
+    - Model size optimization for your tier
+    - CPU compatibility and core count
+    - Model popularity and reliability
+    - Architecture-specific optimizations
 
-- **TinyLlama 1.1 B** – Perfect for testing, 2 GB RAM
-- **Gemma 3 1 B** – Mobile‑optimised, 2 GB RAM, 32 K context
-- **MobileLLaMA 1.4 B / 2.7 B** – 40 % faster than TinyLlama
-- **Llama 3.2 1 B / 3 B** – Compact Meta models
-- **Phi‑3 Mini 3.8 B** – Great reasoning from Microsoft, 4 GB RAM
-- **Gemma 2 B** – Efficient Google model, 3 GB RAM
+4. **Curated Suggestions**: Returns the top 5 most compatible models
+5. **Fallback System**: Provides curated suggestions if cloud search fails
 
-### 🐦 Medium (5 – 15 B)
+### Cloud recommendation scoring factors
 
-- **Llama 3.1 8 B** – Perfect balance, 8 GB RAM
-- **Mistral 7 B v0.3** – High‑quality EU model, 8 GB RAM
-- **Qwen 2.5 7 B** – Multilingual with strong coding ability
-- **CodeLlama 7 B** – Specialised for coding, 8 GB RAM
-- **DeepSeek Coder 6.7 B** – Advanced code generation
-- **Phi‑4 14 B** – Latest Microsoft model with improved capabilities
-- **Gemma 3 4 B** – Multimodal with long context (128 K)
+- **RAM Compatibility** (40%): Model memory requirements vs available RAM
+- **Model Size Optimization** (25%): Preference for appropriately sized models
+- **Hardware Tier Matching** (15%): Bonus for models suited to your hardware class
+- **Popularity & Reliability** (10%): Models with high download counts
+- **Architecture Bonuses** (10%): Apple Silicon, x86-64, ARM optimizations
 
-### 🦅 Large (> 15 B)
+### Supported hardware tiers
 
-- **Llama 3.3 70 B** – Meta flagship, 48 GB RAM
-- **DeepSeek‑R1 70 B** – Advanced reasoning (o1‑style)
-- **Mistral Small 3.1 22 B** – High‑end EU model
-- **Gemma 3 12 B / 27 B** – Google multimodal flagships
-- **CodeLlama 34 B** – Heavy coding tasks, 24 GB RAM
-- **Mixtral 8×7 B** – Mixture‑of‑Experts, 32 GB RAM
+- 🚀 **ULTRA_HIGH** (64GB+ RAM): All models, including 70B+ parameters
+- ⚡ **HIGH** (32GB+ RAM): Large models up to 34B parameters
+- 🎯 **MEDIUM** (16GB+ RAM): Medium models 7B-14B parameters
+- 💻 **LOW** (8GB+ RAM): Small models 1B-7B parameters
+- 📱 **ULTRA_LOW** (<8GB RAM): Ultra-small models 0.5B-3B parameters
 
-### 🖼️ Multimodal (Vision + text)
+---
 
-- **LLaVA 7 B** – Image understanding, 10 GB RAM
-- **LLaVA‑NeXT 34 B** – Advanced vision capabilities
-- **Gemma 3 4 B / 12 B / 27 B** – Google multimodal family
+## 🔧 Supported models (40 +)
 
-### 🧲 Embedding models (semantic search)
+### 🐣 Ultra‑small (< 1 B params)
 
-- **all‑MiniLM‑L6‑v2** – Compact 0.5 GB embedding model
+- **Qwen 0.5B** – Ultra lightweight, requires 1 GB RAM
+- **LaMini‑GPT 774 M** – Multilingual compact model, 1.5 GB RAM
+
+### 🐤 Small (1 – 4 B)
+
+- **TinyLlama 1.1 B** – Perfect for testing, 2 GB RAM
+- **Gemma 3 1 B** – Mobile‑optimised, 2 GB RAM, 32 K context
+- **MobileLLaMA 1.4 B / 2.7 B** – 40 % faster than TinyLlama
+- **Llama 3.2 1 B / 3 B** – Compact Meta models
+- **Phi‑3 Mini 3.8 B** – Great reasoning from Microsoft, 4 GB RAM
+- **Gemma 2 B** – Efficient Google model, 3 GB RAM
+
+### 🐦 Medium (5 – 15 B)
+
+- **Llama 3.1 8 B** – Perfect balance, 8 GB RAM
+- **Mistral 7 B v0.3** – High‑quality EU model, 8 GB RAM
+- **Qwen 2.5 7 B** – Multilingual with strong coding ability
+- **CodeLlama 7 B** – Specialised for coding, 8 GB RAM
+- **DeepSeek Coder 6.7 B** – Advanced code generation
+- **Phi‑4 14 B** – Latest Microsoft model with improved capabilities
+- **Gemma 3 4 B** – Multimodal with long context (128 K)
+
+### 🦅 Large (> 15 B)
+
+- **Llama 3.3 70 B** – Meta flagship, 48 GB RAM
+- **DeepSeek‑R1 70 B** – Advanced reasoning (o1‑style)
+- **Mistral Small 3.1 22 B** – High‑end EU model
+- **Gemma 3 12 B / 27 B** – Google multimodal flagships
+- **CodeLlama 34 B** – Heavy coding tasks, 24 GB RAM
+- **Mixtral 8×7 B** – Mixture‑of‑Experts, 32 GB RAM
+
+### 🖼️ Multimodal (Vision + text)
+
+- **LLaVA 7 B** – Image understanding, 10 GB RAM
+- **LLaVA‑NeXT 34 B** – Advanced vision capabilities
+- **Gemma 3 4 B / 12 B / 27 B** – Google multimodal family
+
+### 🧲 Embedding models (semantic search)
+
+- **all‑MiniLM‑L6‑v2** – Compact 0.5 GB embedding model
 - **BGE‑small‑en‑v1.5** – High‑quality English embeddings
 
-### ☁️ Cloud models (for comparison)
+### ☁️ Cloud models (for comparison)
 
 - **GPT‑4** – OpenAI, requires API key & internet
-- **Claude 3.5 Sonnet** – Anthropic, 200 K context
+- **Claude 3.5 Sonnet** – Anthropic, 200 K context
 
 ---
 
@@ -258,11 +350,18 @@ llm-checker ollama --running    # Monitor VRAM usage
 llm-checker ollama --test llama3.1:8b
 ```
 
-### Smart installation
+### Smart installation with cloud recommendations
 
 ```bash
-# After analysis, install all recommended models automatically
-llm-checker check --filter small | grep "ollama pull" | bash
+# Get personalized recommendations for your hardware
+llm-checker check
+
+# Install all recommended cloud models automatically
+llm-checker check | grep "ollama pull" | head -3 | bash
+
+# Install specific model from cloud recommendations
+ollama pull qwen:0.5b  # Ultra-efficient for limited hardware
+ollama pull phi3:mini  # Great reasoning for medium systems
 ```
 
 ### Real‑time model comparison
@@ -274,11 +373,22 @@ for model in $(ollama list | grep -v NAME | awk '{print $1}'); do
 done
 ```
 
+### Debug cloud recommendations
+
+```bash
+# Enable debug logging to see cloud search process
+DEBUG=1 llm-checker check
+
+# Test cloud search specifically
+export LLM_CHECKER_LOG_LEVEL=debug
+llm-checker check --detailed
+```
+
 ---
 
 ## 📊 Detailed compatibility system
 
-### Scoring scale (0‑100)
+### Scoring scale (0‑100)
 
 | Score | Meaning      |
 |-------|--------------|
@@ -290,18 +400,26 @@ done
 
 ### Compatibility factors
 
-1. **Total RAM vs requirement** (40 %)
-2. **Available VRAM** (25 %)
-3. **CPU cores** (15 %)
-4. **CPU architecture** (10 %)
-5. **Quantisation availability** (10 %)
+1. **Total RAM vs requirement** (40 %)
+2. **Available VRAM** (25 %)
+3. **CPU cores** (15 %)
+4. **CPU architecture** (10 %)
+5. **Quantisation availability** (10 %)
+
+### Cloud recommendation factors
+
+1. **RAM ratio** (40%): Available RAM vs model requirements
+2. **Model size optimization** (25%): Appropriate size for hardware tier
+3. **Hardware tier bonuses** (15%): Tier-specific optimizations
+4. **CPU compatibility** (10%): Core count and architecture matching
+5. **Popularity & quality** (10%): Download counts and official status
 
 ### Hardware tiers
 
-- 🚀 **ULTRA_HIGH** – 64 GB RAM, 32 GB VRAM, 12+ cores
-- ⚡ **HIGH** – 32 GB RAM, 16 GB VRAM, 8+ cores
-- 🎯 **MEDIUM** – 16 GB RAM, 8 GB VRAM, 6+ cores
-- 💻 **LOW** – 8 GB RAM, 2 GB VRAM, 4+ cores
+- 🚀 **ULTRA_HIGH** – 64 GB RAM, 32 GB VRAM, 12+ cores
+- ⚡ **HIGH** – 32 GB RAM, 16 GB VRAM, 8+ cores
+- 🎯 **MEDIUM** – 16 GB RAM, 8 GB VRAM, 6+ cores
+- 💻 **LOW** – 8 GB RAM, 2 GB VRAM, 4+ cores
 - 📱 **ULTRA_LOW** – below the above
 
 ---
@@ -317,31 +435,37 @@ export LLM_CHECKER_VRAM_GB=8
 export LLM_CHECKER_CPU_CORES=8
 export LLM_CHECKER_LOG_LEVEL=debug
 export LLM_CHECKER_CACHE_DIR=/custom/cache
+export LLM_CHECKER_CLOUD_SEARCH=true
 export NO_COLOR=1
 ```
 
-### Configuration file `~/.llm-checker.json`
+### Configuration file `~/.llm-checker.json`
 
 ```json
 {
   "analysis": {
     "defaultUseCase": "code",
     "performanceTesting": true,
-    "includeCloudModels": false
+    "includeCloudModels": false,
+    "enableCloudSearch": true,
+    "maxCloudSuggestions": 5
   },
   "ollama": {
     "baseURL": "http://localhost:11434",
     "enabled": true,
-    "timeout": 30000
+    "timeout": 30000,
+    "cloudSearchEnabled": true
   },
   "display": {
     "maxModelsPerTable": 15,
     "showEmojis": true,
-    "compactMode": false
+    "compactMode": false,
+    "showCloudRecommendations": true
   },
   "filters": {
     "minCompatibilityScore": 70,
-    "excludeModels": ["very-large-model"]
+    "excludeModels": ["very-large-model"],
+    "minCloudScore": 60
   },
   "customModels": [
     {
@@ -361,7 +485,8 @@ export NO_COLOR=1
 
 ```bash
 llm-checker check --use-case code --filter medium
-ollama pull $(llm-checker check --use-case code --ollama-only | grep "ollama pull" | head -1 | awk '{print $3}')
+# Look for cloud recommendations for coding models
+ollama pull $(llm-checker check --use-case code | grep "codellama\|deepseek\|phi" | head -1 | awk '{print $3}')
 echo "def fibonacci(n):" | ollama run codellama:7b "Complete this Python function"
 ```
 
@@ -369,6 +494,7 @@ echo "def fibonacci(n):" | ollama run codellama:7b "Complete this Python functio
 
 ```bash
 llm-checker check --use-case chat --filter small,medium
+# Install recommended chat model from cloud
 ollama pull llama3.2:3b
 ollama run llama3.2:3b "Hello! How can you help me today?"
 ```
@@ -385,7 +511,19 @@ ollama pull all-minilm
 ```bash
 llm-checker check --multimodal
 ollama pull llava:7b
-# echo "image.jpg" | ollama run llava:7b "Describe this image"
+```
+
+### Hardware-optimized workflow
+
+```bash
+# Get recommendations for your specific hardware
+llm-checker check > recommendations.txt
+
+# Install the top 3 recommended models
+grep "ollama pull" recommendations.txt | head -3 | bash
+
+# Test performance of installed models
+ollama list | grep -v NAME | awk '{print $1}' | xargs -I {} llm-checker ollama --test {}
 ```
 
 ---
@@ -400,6 +538,21 @@ curl http://localhost:11434/api/version          # Should return JSON
 # Install or start service
 curl -fsSL https://ollama.ai/install.sh | sh
 sudo systemctl start ollama                      # Linux
+```
+
+### Cloud recommendations not showing
+
+```bash
+# Check Ollama cloud connectivity
+curl -s https://ollama.ai/api/tags | head -20
+
+# Enable debug mode
+export LLM_CHECKER_LOG_LEVEL=debug
+llm-checker check
+
+# Force cloud search
+export LLM_CHECKER_CLOUD_SEARCH=true
+llm-checker check --detailed
 ```
 
 ### Incorrect hardware detection
@@ -443,6 +596,12 @@ const analysis = await checker.analyze({
 });
 
 console.log('Compatible models:', analysis.compatible);
+console.log('Cloud recommendations:', analysis.recommendations.cloudSuggestions);
+
+// Get cloud recommendations directly
+const hardware = await checker.getSystemInfo();
+const installedModels = await checker.getOllamaInfo();
+const cloudRecs = await checker.searchOllamaCloudRecommendations(hardware, installedModels.compatibleOllamaModels);
 
 const ollama = new OllamaClient();
 const localModels = await ollama.getLocalModels();
@@ -452,7 +611,7 @@ const localModels = await ollama.getLocalModels();
 
 ## 🚀 CI/CD Workflows
 
-### GitHub Actions
+### GitHub Actions
 
 ```yaml
 name: LLM Compatibility Check
@@ -489,8 +648,11 @@ jobs:
 ```dockerfile
 FROM node:18-alpine
 
-RUN apk add --no-cache dmidecode lm-sensors
+RUN apk add --no-cache dmidecode lm-sensors curl
 RUN npm install -g llm-checker
+
+# Install Ollama for cloud recommendations
+RUN curl -fsSL https://ollama.ai/install.sh | sh
 
 COPY analyze.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/analyze.sh
@@ -542,6 +704,24 @@ Edit `src/models/expanded_database.js`:
 }
 ```
 
+### Improving cloud search
+
+Edit `src/index.js` to enhance the `searchOllamaCloudRecommendations` method:
+
+```javascript
+calculateCloudModelCompatibility(model, hardware) {
+  // Add new scoring factors
+  let score = 50;
+  
+  // Your custom compatibility logic
+  if (model.specialization === 'custom') {
+    score += 10;
+  }
+  
+  return Math.max(0, Math.min(100, score));
+}
+```
+
 ### Improving hardware detection
 
 Edit `src/hardware/detector.js`:
@@ -584,29 +764,29 @@ npm --version
 
 ## 📊 Roadmap
 
-### v2.1 (Q2 2025)
+### v2.2 (Q2 2025)
 
 - 🔌 Plugin system for extensions
-- 📱 Mobile optimisations
-- 🌐 Optional web UI
+- 🌐 Enhanced cloud model search with filters
+- 📊 Model performance prediction based on real usage data
+- 🎯 Custom model compatibility profiles
 - 📈 Usage metrics & analytics
-- 🔄 Automatic model DB updates
 
-### v2.2 (Q3 2025)
+### v2.3 (Q3 2025)
 
 - 🤖 More back‑end frameworks (MLX, TensorRT)
-- ☁️ Local vs cloud auto comparison
-- 🎯 Fine‑tuning advisor
+- ☁️ Multi-provider cloud comparison (Ollama, HuggingFace, OpenRouter)
+- 🎯 Fine‑tuning advisor with hardware requirements
 - 📊 Historical performance dashboard
-- 🔒 Enterprise mode
+- 🔒 Enterprise mode with team sharing
 
-### v3.0 (Q4 2025)
+### v3.0 (Q4 2025)
 
-- 🧠 AI performance predictor
-- 🔄 Multi‑model orchestration
+- 🧠 AI performance predictor using machine learning
+- 🔄 Multi‑model orchestration for different tasks
 - 📱 Mobile companion app
-- 🌍 Advanced multilingual models
-- 🚀 Public cloud integrations
+- 🌍 Advanced multilingual model recommendations
+- 🚀 Public cloud integrations (AWS, GCP, Azure)
 
 ---
 
@@ -615,7 +795,7 @@ npm --version
 ### Technologies used
 
 - **systeminformation** – cross‑platform HW detection
-- **Ollama** – local LLM management
+- **Ollama** – local LLM management and cloud search
 - **Commander.js** – CLI framework
 - **Chalk** – terminal colours
 - **Ora** – elegant spinners
@@ -625,19 +805,20 @@ npm --version
 - **llama.cpp** – efficient LLM inference
 - **Hugging Face** – model & dataset hub
 - **Meta Llama** – open‑source Llama models
-- **Mistral AI** – European LLMs
+- **Mistral AI** – European LLMs
 - **Google Gemma** – open Gemma family
+- **Ollama Community** – for the extensive model library
 
 ### Contributors
 
 - **[signerless](mailto:agenc.marketplace@proton.me)** – Lead developer & maintainer
 
-
 ### Special thanks
 
-- **The Ollama team** for an amazing local LLM tool
-- **Georgi Gerganov** for `llama.cpp`
+- **The Ollama team** for an amazing local LLM tool and extensive model library
+- **Georgi Gerganov** for `llama.cpp`
 - **The open‑source community** for making AI accessible
+- **Model creators** who make their models available through Ollama
 
 ---
 
@@ -649,7 +830,7 @@ MIT – see [LICENSE](LICENSE) for details.
 
 ## 💝 Support the project
 
-If **LLM Checker** saves you time:
+If **LLM Checker** saves you time finding the perfect models for your hardware:
 
 ⭐ **Star** the repo  
 🐛 **Report bugs** & suggest features  
