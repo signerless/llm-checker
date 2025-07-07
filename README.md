@@ -680,28 +680,9 @@ npm link
 Edit `src/models/expanded_database.js`:
 
 ```javascript
-{
-  name: "New Model 7B",
-  size: "7B",
-  type: "local",
-  category: "medium",
-  requirements: { ram: 8, vram: 4, cpu_cores: 4, storage: 7 },
-  frameworks: ["ollama", "llama.cpp"],
-  quantization: ["Q4_0", "Q4_K_M", "Q5_0"],
-  performance: {
-    speed: "medium",
-    quality: "very_good",
-    context_length: 8192,
-    tokens_per_second_estimate: "15-30"
-  },
-  installation: {
-    ollama: "ollama pull new-model:7b",
-    description: "Description of the new model"
-  },
-  specialization: "general",
-  languages: ["en"],
-  year: 2024
-}
+
+
+
 ```
 
 ### Improving cloud search
@@ -709,7 +690,7 @@ Edit `src/models/expanded_database.js`:
 Edit `src/index.js` to enhance the `searchOllamaCloudRecommendations` method:
 
 ```javascript
-calculateCloudModelCompatibility(model, hardware) {
+calculateCloudModelCompatibility(model, hardware) 
   // Add new scoring factors
   let score = 50;
   
@@ -719,7 +700,7 @@ calculateCloudModelCompatibility(model, hardware) {
   }
   
   return Math.max(0, Math.min(100, score));
-}
+
 ```
 
 ### Improving hardware detection
@@ -727,7 +708,7 @@ calculateCloudModelCompatibility(model, hardware) {
 Edit `src/hardware/detector.js`:
 
 ```javascript
-detectNewGPU(gpu) {
+detectNewGPU(gpu)
   const model = gpu.model.toLowerCase();
   if (model.includes('new-gpu')) {
     return {
@@ -737,7 +718,7 @@ detectNewGPU(gpu) {
     };
   }
   return null;
-}
+
 ```
 
 ### Contribution guide
