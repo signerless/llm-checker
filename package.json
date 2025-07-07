@@ -1,6 +1,6 @@
 {
   "name": "llm-checker",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Advanced CLI tool to check which LLM models your computer can run locally, with Ollama integration and sLLM support",
   "bin": {
     "llm-checker": "bin/enhanced_cli.js"
