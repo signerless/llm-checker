@@ -1,3 +1,5 @@
+const { getLogger } = require('../src/utils/logger');
+
 class CompatibilityAnalyzer {
     constructor() {
         this.compatibilityThresholds = {
@@ -7,9 +9,42 @@ class CompatibilityAnalyzer {
             poor: 40,
             incompatible: 0
         };
+
+        this.logger = getLogger().createChild('CompatibilityAnalyzer');
+
+        this.ollamaOptimizations = {
+            quantizationBonuses: {
+                'Q2_K': 0.4,
+                'Q3_K_M': 0.5,
+                'Q4_0': 0.6,
+                'Q4_K_M': 0.7,
+                'Q5_0': 0.8,
+                'Q5_K_M': 0.85,
+                'Q6_K': 0.9,
+                'Q8_0': 0.95
+            },
+            hardwareOptimizations: {
+                'Apple Silicon': {
+                    metalBonus: 1.15,
+                    unifiedMemoryBonus: 1.1
+                },
+                'x86_64': {
+                    avxBonus: 1.05,
+                    vectorBonus: 1.02
+                }
+            }
+        };
     }
 
-    analyzeCompatibility(hardware, models) {
+    analyzeCompatibility(hardware, models, options = {}) {
+        this.logger.info('Starting compatibility analysis', {
+            data: {
+                modelCount: models.length,
+                hardwareTier: this.getHardwareTier(hardware),
+                includeOllama: options.includeOllamaOptimizations !== false
+            }
+        });
+
         const results = {
             compatible: [],
             marginal: [],
@@ -18,324 +53,466 @@ class CompatibilityAnalyzer {
         };
 
         models.forEach(model => {
-            const compatibility = this.calculateModelCompatibility(hardware, model);
-            const modelWithScore = { ...model, score: compatibility.score, issues: compatibility.issues };
+            const compatibility = this.calculateModelCompatibility(hardware, model, options);
+            const enrichedModel = {
+                ...model,
+                score: compatibility.score,
+                issues: compatibility.issues,
+                notes: compatibility.notes,
+                recommendations: compatibility.modelSpecificRecommendations
+            };
 
-            if (compatibility.score >= this.compatibilityThresholds.marginal) {
-                if (compatibility.score >= this.compatibilityThresholds.good) {
-                    results.compatible.push(modelWithScore);
-                } else {
-                    results.marginal.push(modelWithScore);
-                }
+            if (compatibility.score >= this.compatibilityThresholds.good) {
+                results.compatible.push(enrichedModel);
+            } else if (compatibility.score >= this.compatibilityThresholds.marginal) {
+                results.marginal.push(enrichedModel);
             } else {
-                results.incompatible.push(modelWithScore);
+                results.incompatible.push(enrichedModel);
             }
-        });
 
+            this.logger.debug(`Model compatibility: ${model.name} - Score: ${compatibility.score}`);
+        });
 
         results.compatible.sort((a, b) => b.score - a.score);
         results.marginal.sort((a, b) => b.score - a.score);
         results.incompatible.sort((a, b) => b.score - a.score);
 
+        results.recommendations = this.generateRecommendations(hardware, results, options);
 
-        results.recommendations = this.generateRecommendations(hardware, results);
+        this.logger.info('Compatibility analysis completed', {
+            data: {
+                compatible: results.compatible.length,
+                marginal: results.marginal.length,
+                incompatible: results.incompatible.length
+            }
+        });
 
         return results;
     }
 
-    calculateModelCompatibility(hardware, model) {
-
+    calculateModelCompatibility(hardware, model, options = {}) {
         if (model.type === 'cloud') {
             return {
                 score: 100,
                 issues: [],
-                notes: ['Requires internet connection and API key']
+                notes: ['Requires internet connection and API key'],
+                modelSpecificRecommendations: ['Ensure stable internet connection', 'Configure API key']
             };
         }
-
-        const { memory, gpu, cpu } = hardware;
-        const req = model.requirements;
 
         let score = 100;
         const issues = [];
         const notes = [];
+        const modelSpecificRecommendations = [];
 
+        const ramAnalysis = this.analyzeRAMCompatibility(hardware.memory, model.requirements);
+        score *= ramAnalysis.factor;
+        issues.push(...ramAnalysis.issues);
+        notes.push(...ramAnalysis.notes);
 
-        const ramCompatibility = this.checkRAMCompatibility(memory, req);
-        score *= ramCompatibility.factor;
-        if (ramCompatibility.issues.length > 0) {
-            issues.push(...ramCompatibility.issues);
+        const gpuAnalysis = this.analyzeGPUCompatibility(hardware.gpu, model.requirements);
+        score *= gpuAnalysis.factor;
+        issues.push(...gpuAnalysis.issues);
+        notes.push(...gpuAnalysis.notes);
+
+        const cpuAnalysis = this.analyzeCPUCompatibility(hardware.cpu, model.requirements);
+        score *= cpuAnalysis.factor;
+        issues.push(...cpuAnalysis.issues);
+        notes.push(...cpuAnalysis.notes);
+
+        const archAnalysis = this.analyzeArchitectureOptimizations(hardware, model);
+        score *= archAnalysis.factor;
+        notes.push(...archAnalysis.notes);
+
+        const quantAnalysis = this.analyzeQuantizationOptions(model, hardware);
+        score *= quantAnalysis.factor;
+        notes.push(...quantAnalysis.notes);
+        modelSpecificRecommendations.push(...quantAnalysis.recommendations);
+
+        if (options.includeOllamaOptimizations !== false && model.frameworks?.includes('ollama')) {
+            const ollamaAnalysis = this.analyzeOllamaOptimizations(hardware, model);
+            score *= ollamaAnalysis.factor;
+            notes.push(...ollamaAnalysis.notes);
+            modelSpecificRecommendations.push(...ollamaAnalysis.recommendations);
         }
-        notes.push(...ramCompatibility.notes);
 
-
-        if (req.vram > 0) {
-            const vramCompatibility = this.checkVRAMCompatibility(gpu, req);
-            score *= vramCompatibility.factor;
-            if (vramCompatibility.issues.length > 0) {
-                issues.push(...vramCompatibility.issues);
-            }
-            notes.push(...vramCompatibility.notes);
+        const edgeAnalysis = this.analyzeEdgeCases(hardware, model);
+        score *= edgeAnalysis.factor;
+        if (edgeAnalysis.warning) {
+            issues.push(edgeAnalysis.warning);
         }
-
-
-        const cpuCompatibility = this.checkCPUCompatibility(cpu, req);
-        score *= cpuCompatibility.factor;
-        if (cpuCompatibility.issues.length > 0) {
-            issues.push(...cpuCompatibility.issues);
-        }
-        notes.push(...cpuCompatibility.notes);
-
-
-        const archBonus = this.getArchitectureBonus(cpu, model);
-        score *= archBonus.factor;
-        notes.push(...archBonus.notes);
-
-
-        const quantBonus = this.getQuantizationBonus(model, hardware);
-        score *= quantBonus.factor;
-        notes.push(...quantBonus.notes);
 
         return {
             score: Math.round(Math.max(0, Math.min(100, score))),
-            issues,
-            notes: notes.filter(note => note)
+            issues: issues.filter(Boolean),
+            notes: notes.filter(Boolean),
+            modelSpecificRecommendations: modelSpecificRecommendations.filter(Boolean)
         };
     }
 
-    checkRAMCompatibility(memory, requirements) {
-        const factor = { factor: 1.0, issues: [], notes: [] };
-        const availableRAM = memory.free;
+    analyzeRAMCompatibility(memory, requirements) {
+        const analysis = { factor: 1.0, issues: [], notes: [] };
         const totalRAM = memory.total;
+        const availableRAM = memory.free;
         const requiredRAM = requirements.ram;
-        const recommendedRAM = requirements.recommended_ram || requiredRAM;
+        const recommendedRAM = requirements.recommended_ram || requiredRAM * 1.5;
 
         if (totalRAM < requiredRAM) {
-            factor.factor = 0.1;
-            factor.issues.push(`Insufficient total RAM: ${totalRAM}GB available, ${requiredRAM}GB required`);
-        } else if (availableRAM < requiredRAM) {
-            factor.factor = 0.4;
-            factor.issues.push(`Low available RAM: ${availableRAM}GB free, ${requiredRAM}GB needed`);
-            factor.notes.push('Close other applications to free up memory');
+            analysis.factor = 0.1;
+            analysis.issues.push(`Critical: ${totalRAM}GB total RAM < ${requiredRAM}GB required`);
         } else if (totalRAM < recommendedRAM) {
-            factor.factor = 0.7;
-            factor.notes.push(`Consider upgrading to ${recommendedRAM}GB RAM for optimal performance`);
-        } else if (availableRAM >= recommendedRAM) {
-            factor.factor = 1.0;
-            factor.notes.push('RAM requirements fully satisfied');
+            analysis.factor = 0.75;
+            analysis.notes.push(`Consider upgrading to ${recommendedRAM}GB for optimal performance`);
         } else {
-            factor.factor = 0.85;
-            factor.notes.push('RAM is adequate but close to recommended minimum');
+            analysis.factor = 1.0;
+            analysis.notes.push('✅ RAM requirements fully satisfied');
+
+
+            if (totalRAM >= recommendedRAM * 2) {
+                analysis.factor = 1.05;
+                analysis.notes.push('🚀 Abundant RAM allows multiple models simultaneously');
+            }
         }
 
-        return factor;
+        if (totalRAM >= requiredRAM && availableRAM < requiredRAM) {
+
+            analysis.notes.push(`💡 Currently only ${availableRAM}GB free RAM - close other applications before running this model`);
+        }
+
+        return analysis;
     }
 
-    checkVRAMCompatibility(gpu, requirements) {
-        const factor = { factor: 1.0, issues: [], notes: [] };
-        const availableVRAM = gpu.vram;
-        const requiredVRAM = requirements.vram;
-        const recommendedVRAM = requirements.recommended_vram || requiredVRAM;
+    analyzeGPUCompatibility(gpu, requirements) {
+        const analysis = { factor: 1.0, issues: [], notes: [] };
+        const availableVRAM = gpu.vram || 0;
+        const requiredVRAM = requirements.vram || 0;
+
+        if (requiredVRAM === 0) {
+            analysis.notes.push('Model runs on CPU - GPU not required');
+            return analysis;
+        }
 
         if (!gpu.dedicated && requiredVRAM > 0) {
-            factor.factor = 0.6; // Integrated GPU penalty
-            factor.notes.push('Integrated GPU detected - performance may be limited');
+            analysis.factor = 0.6;
+            analysis.notes.push('⚠️ Integrated GPU - consider CPU-only mode');
         }
 
         if (availableVRAM < requiredVRAM) {
-            if (requiredVRAM <= 2) {
-                factor.factor = 0.3; // Podría funcionar en CPU
-                factor.issues.push(`Insufficient VRAM: ${availableVRAM}GB available, ${requiredVRAM}GB required`);
-                factor.notes.push('Model will run on CPU (slower performance)');
+            if (requiredVRAM <= 4) {
+                analysis.factor = 0.3;
+                analysis.issues.push(`Low VRAM: ${availableVRAM}GB < ${requiredVRAM}GB required`);
+                analysis.notes.push('💡 Model will fallback to CPU (slower)');
             } else {
-                factor.factor = 0.1; // Muy problemático
-                factor.issues.push(`Insufficient VRAM: ${availableVRAM}GB available, ${requiredVRAM}GB required`);
-                factor.notes.push('Consider using heavy quantization or CPU-only mode');
+                analysis.factor = 0.1;
+                analysis.issues.push(`Critical VRAM shortage: ${availableVRAM}GB << ${requiredVRAM}GB`);
+                analysis.notes.push('🔧 Use heavy quantization or CPU-only mode');
             }
-        } else if (availableVRAM >= recommendedVRAM) {
-            factor.factor = 1.0; // Perfecto
-            factor.notes.push('VRAM requirements fully satisfied');
         } else {
-            factor.factor = 0.8; // Bueno
-            factor.notes.push('VRAM is adequate but close to minimum requirements');
+            analysis.factor = 1.0;
+            analysis.notes.push('✅ VRAM requirements satisfied');
+
+            if (availableVRAM >= requiredVRAM * 2) {
+                analysis.factor = 1.1;
+                analysis.notes.push('🎮 Excellent VRAM headroom for acceleration');
+            }
         }
 
-        return factor;
+        if (gpu.vendor === 'NVIDIA' && gpu.dedicated) {
+            analysis.factor *= 1.05;
+            analysis.notes.push('🟢 NVIDIA GPU - excellent CUDA support');
+        } else if (gpu.vendor === 'AMD' && gpu.dedicated) {
+            analysis.factor *= 1.02;
+            analysis.notes.push('🔴 AMD GPU - ROCm support available');
+        }
+
+        return analysis;
     }
 
-    checkCPUCompatibility(cpu, requirements) {
-        const factor = { factor: 1.0, issues: [], notes: [] };
-        const availableCores = cpu.cores;
-        const requiredCores = requirements.cpu_cores;
-        const cpuSpeed = cpu.speedMax || cpu.speed;
+    analyzeCPUCompatibility(cpu, requirements) {
+        const analysis = { factor: 1.0, issues: [], notes: [] };
+        const cores = cpu.cores;
+        const requiredCores = requirements.cpu_cores || 4;
+        const cpuSpeed = cpu.speedMax || cpu.speed || 2.0;
 
-        if (availableCores < requiredCores) {
-            factor.factor = Math.max(0.5, availableCores / requiredCores);
-            factor.issues.push(`Limited CPU cores: ${availableCores} available, ${requiredCores} recommended`);
+        if (cores < requiredCores) {
+            analysis.factor = Math.max(0.5, cores / requiredCores);
+            analysis.issues.push(`Limited cores: ${cores} available, ${requiredCores} recommended`);
+        } else if (cores >= requiredCores * 2) {
+            analysis.factor = 1.05;
+            analysis.notes.push('🚀 Abundant CPU cores for parallel processing');
         }
 
-        // Bonus por velocidad de CPU alta
-        if (cpuSpeed > 3.5) {
-            factor.factor *= 1.1;
-            factor.notes.push('High CPU speed will help with inference performance');
+        if (cpuSpeed >= 3.5) {
+            analysis.factor *= 1.1;
+            analysis.notes.push('⚡ High CPU speed boosts inference performance');
         } else if (cpuSpeed < 2.0) {
-            factor.factor *= 0.8;
-            factor.notes.push('Low CPU speed may impact performance');
+            analysis.factor *= 0.85;
+            analysis.notes.push('⚠️ Low CPU speed may impact performance');
         }
 
-        // Bonus por CPU score alto
-        if (cpu.score > 80) {
-            factor.factor *= 1.05;
-        } else if (cpu.score < 40) {
-            factor.factor *= 0.9;
-        }
-
-        return factor;
-    }
-
-    getArchitectureBonus(cpu, model) {
-        const bonus = { factor: 1.0, notes: [] };
-
-        if (cpu.architecture === 'Apple Silicon') {
-
-            if (model.frameworks && model.frameworks.includes('llama.cpp')) {
-                bonus.factor = 1.15;
-                bonus.notes.push('Apple Silicon optimizations available');
-            }
-            // Metal GPU acceleration
-            if (model.requirements.vram === 0) {
-                bonus.factor *= 1.1;
-                bonus.notes.push('Can utilize Metal GPU acceleration');
+        if (cpu.score) {
+            if (cpu.score >= 80) {
+                analysis.factor *= 1.05;
+                analysis.notes.push('💪 High-performance CPU detected');
+            } else if (cpu.score < 40) {
+                analysis.factor *= 0.9;
+                analysis.notes.push('🐌 CPU performance may be limiting factor');
             }
         }
 
-        if (cpu.architecture === 'x86_64' && cpu.speed > 3.0) {
-            bonus.factor = 1.05;
-            bonus.notes.push('Modern x86_64 CPU with vector optimizations');
-        }
-
-        return bonus;
+        return analysis;
     }
 
-    getQuantizationBonus(model, hardware) {
-        const bonus = { factor: 1.0, notes: [] };
+    analyzeArchitectureOptimizations(hardware, model) {
+        const analysis = { factor: 1.0, notes: [] };
+        const arch = hardware.cpu.architecture;
+
+        switch (arch) {
+            case 'Apple Silicon':
+                if (model.frameworks?.includes('llama.cpp')) {
+                    analysis.factor = this.ollamaOptimizations.hardwareOptimizations['Apple Silicon'].metalBonus;
+                    analysis.notes.push('🍎 Apple Silicon with Metal acceleration');
+                }
+
+                if (model.requirements?.vram === 0) {
+                    analysis.factor *= this.ollamaOptimizations.hardwareOptimizations['Apple Silicon'].unifiedMemoryBonus;
+                    analysis.notes.push('🔄 Unified memory architecture advantage');
+                }
+                break;
+
+            case 'x86_64':
+                if (hardware.cpu.features?.includes('AVX2')) {
+                    analysis.factor = this.ollamaOptimizations.hardwareOptimizations['x86_64'].avxBonus;
+                    analysis.notes.push('🏃‍♂️ AVX2 vector optimizations available');
+                }
+                break;
+
+            case 'ARM64':
+                analysis.factor = 0.95;
+                analysis.notes.push('🔧 ARM64 - good efficiency, some optimizations available');
+                break;
+
+            default:
+                analysis.notes.push('❓ Unknown architecture - performance may vary');
+        }
+
+        return analysis;
+    }
+
+    analyzeQuantizationOptions(model, hardware) {
+        const analysis = { factor: 1.0, notes: [], recommendations: [] };
 
         if (!model.quantization || model.quantization.length === 0) {
-            return bonus;
+            return analysis;
         }
 
-        const { memory, gpu } = hardware;
-        const totalRAM = memory.total;
-        const vram = gpu.vram;
+        const totalRAM = hardware.memory.total;
+        const vram = hardware.gpu.vram || 0;
 
-
-        if (totalRAM < 16 || vram < 8) {
-            if (model.quantization.includes('Q4_0') || model.quantization.includes('Q4_K_M')) {
-                bonus.factor = 1.2;
-                bonus.notes.push('Q4 quantization recommended for your hardware');
-            } else if (model.quantization.includes('Q2_K')) {
-                bonus.factor = 1.3;
-                bonus.notes.push('Q2 quantization available for very limited hardware');
-            }
-        }
+        let recommendedQuant = null;
+        let quantBonus = 1.0;
 
         if (totalRAM >= 32 && vram >= 16) {
             if (model.quantization.includes('Q8_0')) {
-                bonus.factor = 1.1;
-                bonus.notes.push('High-quality Q8 quantization recommended');
+                recommendedQuant = 'Q8_0';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q8_0'];
+                analysis.recommendations.push('Use Q8_0 for highest quality');
             } else if (model.quantization.includes('Q6_K')) {
-                bonus.factor = 1.05;
-                bonus.notes.push('Q6 quantization offers good quality/performance balance');
+                recommendedQuant = 'Q6_K';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q6_K'];
+                analysis.recommendations.push('Use Q6_K for excellent quality');
+            }
+        } else if (totalRAM >= 16 && vram >= 8) {
+            if (model.quantization.includes('Q5_K_M')) {
+                recommendedQuant = 'Q5_K_M';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q5_K_M'];
+                analysis.recommendations.push('Use Q5_K_M for good quality balance');
+            } else if (model.quantization.includes('Q4_K_M')) {
+                recommendedQuant = 'Q4_K_M';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q4_K_M'];
+                analysis.recommendations.push('Use Q4_K_M for balanced performance');
+            }
+        } else if (totalRAM >= 8) {
+            if (model.quantization.includes('Q4_0')) {
+                recommendedQuant = 'Q4_0';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q4_0'];
+                analysis.recommendations.push('Use Q4_0 for your hardware tier');
+            } else if (model.quantization.includes('Q3_K_M')) {
+                recommendedQuant = 'Q3_K_M';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q3_K_M'];
+                analysis.recommendations.push('Use Q3_K_M to reduce memory usage');
+            }
+        } else {
+            if (model.quantization.includes('Q2_K')) {
+                recommendedQuant = 'Q2_K';
+                quantBonus = this.ollamaOptimizations.quantizationBonuses['Q2_K'];
+                analysis.recommendations.push('Use Q2_K for minimal memory usage');
             }
         }
 
-        return bonus;
+        if (recommendedQuant) {
+            analysis.factor = quantBonus;
+            analysis.notes.push(`🎯 Recommended quantization: ${recommendedQuant}`);
+        } else {
+            analysis.notes.push('⚠️ Limited quantization options for your hardware');
+        }
+
+        return analysis;
     }
 
-    generateRecommendations(hardware, results) {
+    analyzeOllamaOptimizations(hardware, model) {
+        const analysis = { factor: 1.0, notes: [], recommendations: [] };
+
+        if (!model.frameworks?.includes('ollama')) {
+            return analysis;
+        }
+
+        analysis.factor = 1.05;
+        analysis.notes.push('🦙 Native Ollama support');
+
+        if (model.name.includes('Llama')) {
+            analysis.factor *= 1.02;
+            analysis.notes.push('🦙 Llama models are well-optimized in Ollama');
+        }
+
+        if (model.name.includes('Mistral')) {
+            analysis.factor *= 1.02;
+            analysis.notes.push('🌪️ Mistral models have excellent Ollama integration');
+        }
+
+        if (hardware.gpu.dedicated && hardware.gpu.vram >= 8) {
+            analysis.recommendations.push('Enable GPU acceleration in Ollama');
+        }
+
+        if (hardware.cpu.architecture === 'Apple Silicon') {
+            analysis.recommendations.push('Ollama will use Metal acceleration automatically');
+        }
+
+        analysis.recommendations.push('Use ollama run for interactive sessions');
+        analysis.recommendations.push('Monitor with ollama ps for resource usage');
+
+        return analysis;
+    }
+
+    analyzeEdgeCases(hardware, model) {
+        const analysis = { factor: 1.0, warning: null };
+
+        const modelSizeGB = this.parseModelSize(model.size);
+        if (modelSizeGB > hardware.memory.total * 0.8) {
+            analysis.factor = 0.2;
+            analysis.warning = `Model size (${modelSizeGB}GB) near total RAM limit`;
+        }
+
+        if (hardware.cpu.year && hardware.cpu.year < 2015) {
+            analysis.factor *= 0.8;
+            analysis.warning = 'Very old CPU may have compatibility issues';
+        }
+
+        if (hardware.memory.usagePercent > 90) {
+            analysis.factor *= 0.6;
+            analysis.warning = 'Very high memory usage - close applications first';
+        }
+
+        return analysis;
+    }
+
+    parseModelSize(sizeString) {
+        const match = sizeString.match(/(\d+\.?\d*)[BM]/i);
+        if (!match) return 1;
+
+        const num = parseFloat(match[1]);
+        const unit = match[0].slice(-1).toUpperCase();
+
+        return unit === 'B' ? num : num / 1000;
+    }
+
+    getHardwareTier(hardware) {
+        if (hardware.memory.total >= 64 && hardware.gpu.vram >= 32) return 'ultra_high';
+        if (hardware.memory.total >= 32 && hardware.gpu.vram >= 16) return 'high';
+        if (hardware.memory.total >= 16 && hardware.gpu.vram >= 8) return 'medium';
+        if (hardware.memory.total >= 8) return 'low';
+        return 'ultra_low';
+    }
+
+    generateRecommendations(hardware, results, options = {}) {
         const recommendations = [];
-        const { memory, gpu, cpu } = hardware;
+        const tier = this.getHardwareTier(hardware);
 
-        if (memory.total < 8) {
-            recommendations.push('💡 Upgrade to at least 16GB RAM to run more models');
-        } else if (memory.total < 16) {
-            recommendations.push('💡 Consider upgrading to 32GB RAM for medium-large models');
+        if (hardware.memory.total < 16) {
+            recommendations.push('💾 Upgrade to 16GB+ RAM for better compatibility');
         }
 
-        if (gpu.vram < 4 && gpu.dedicated) {
-            recommendations.push('💡 GPU has limited VRAM - consider CPU-only inference');
-        } else if (!gpu.dedicated) {
-            recommendations.push('💡 Dedicated GPU would significantly improve performance');
-        }
-
-        if (cpu.cores < 4) {
-            recommendations.push('💡 More CPU cores would help with parallel processing');
+        if (!hardware.gpu.dedicated && hardware.memory.total >= 16) {
+            recommendations.push('🎮 Consider dedicated GPU for significant speedup');
         }
 
         if (results.compatible.length === 0) {
-            recommendations.push('🔧 No models fully compatible - try TinyLlama for testing');
-            recommendations.push('☁️ Consider cloud-based models for better performance');
+            recommendations.push('🔧 No compatible models - try ultra-small models like TinyLlama');
+            recommendations.push('☁️ Consider cloud-based models for complex tasks');
         } else if (results.compatible.length < 3) {
-            recommendations.push('📈 Limited model options - hardware upgrade recommended');
+            recommendations.push('📈 Limited options - hardware upgrade recommended');
         }
 
-        if (results.compatible.length > 0) {
-            recommendations.push('🛠️ Install Ollama for easy model management: https://ollama.ai');
-            recommendations.push('⚡ Use quantized models (Q4_K_M) for better performance');
+        switch (tier) {
+            case 'ultra_low':
+                recommendations.push('🐣 Focus on ultra-small models (0.5B-1B parameters)');
+                recommendations.push('🔧 Use Q2_K quantization for minimum memory usage');
+                break;
+
+            case 'low':
+                recommendations.push('🐤 Small models (1B-3B) work well on your system');
+                recommendations.push('🎯 Use Q4_0 quantization for good balance');
+                break;
+
+            case 'medium':
+                recommendations.push('🐦 Medium models (3B-8B) are ideal for your hardware');
+                recommendations.push('⚡ Use Q5_K_M for high quality');
+                break;
+
+            case 'high':
+                recommendations.push('🦅 Large models (8B-30B) run excellently');
+                recommendations.push('💎 Use Q6_K or Q8_0 for maximum quality');
+                break;
+
+            case 'ultra_high':
+                recommendations.push('🚀 Any model size supported - try the largest available');
+                recommendations.push('🌟 Consider running multiple models simultaneously');
+                break;
         }
 
-        if (memory.total >= 16 && gpu.vram >= 8) {
-            recommendations.push('🎯 Your system can handle Q5_K_M or Q6_K quantization');
-        } else if (memory.total >= 8) {
-            recommendations.push('🎯 Use Q4_0 or Q4_K_M quantization for optimal balance');
-        } else {
-            recommendations.push('🎯 Stick to Q2_K or Q3_K quantization for your hardware');
-        }
+        if (options.includeOllamaOptimizations !== false) {
+            recommendations.push('🦙 Install Ollama for easy model management');
 
-        if (cpu.architecture === 'Apple Silicon') {
-            recommendations.push('🍎 Use llama.cpp with Metal support for Apple Silicon optimization');
+            if (hardware.cpu.architecture === 'Apple Silicon') {
+                recommendations.push('🍎 Ollama will use Metal acceleration automatically');
+            }
+
+            if (results.compatible.length > 0) {
+                const topModel = results.compatible[0];
+                const ollamaCmd = this.getOllamaCommand(topModel.name);
+                if (ollamaCmd) {
+                    recommendations.push(`🚀 Try: ${ollamaCmd}`);
+                }
+            }
         }
 
         return recommendations;
     }
 
-    getPerformanceEstimate(hardware, model) {
-        const { memory, gpu, cpu } = hardware;
-        const req = model.requirements;
-
-
-        let baseTokensPerSecond = 10;
-
-
-        const cpuFactor = Math.min(2.0, cpu.score / 50);
-        baseTokensPerSecond *= cpuFactor;
-
-
-        if (gpu.dedicated && gpu.vram >= req.vram) {
-            const gpuFactor = Math.min(3.0, gpu.score / 30);
-            baseTokensPerSecond *= gpuFactor;
-        }
-
-
-        const memoryFactor = Math.min(1.5, memory.total / req.ram);
-        baseTokensPerSecond *= memoryFactor;
-
-
-        const sizeGB = parseInt(model.size.replace('B', ''));
-        if (sizeGB > 30) {
-            baseTokensPerSecond *= 0.3;
-        } else if (sizeGB > 10) {
-            baseTokensPerSecond *= 0.6;
-        } else if (sizeGB > 5) {
-            baseTokensPerSecond *= 0.8;
-        }
-
-        return {
-            tokensPerSecond: Math.round(baseTokensPerSecond),
-            category: baseTokensPerSecond > 50 ? 'fast' :
-                baseTokensPerSecond > 20 ? 'medium' :
-                    baseTokensPerSecond > 5 ? 'slow' : 'very_slow'
+    getOllamaCommand(modelName) {
+        const mapping = {
+            'TinyLlama 1.1B': 'ollama pull tinyllama:1.1b',
+            'Qwen 0.5B': 'ollama pull qwen:0.5b',
+            'Gemma 2B': 'ollama pull gemma2:2b',
+            'Phi-3 Mini 3.8B': 'ollama pull phi3:mini',
+            'Llama 3.2 3B': 'ollama pull llama3.2:3b',
+            'Llama 3.1 8B': 'ollama pull llama3.1:8b',
+            'Mistral 7B v0.3': 'ollama pull mistral:7b',
+            'CodeLlama 7B': 'ollama pull codellama:7b',
+            'Qwen 2.5 7B': 'ollama pull qwen2.5:7b'
         };
+
+        return mapping[modelName] || null;
     }
 }
 
