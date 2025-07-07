@@ -4,6 +4,7 @@ const CompatibilityAnalyzer = require('../analyzer/compatibility');
 const PerformanceAnalyzer = require('../analyzer/performance');
 const OllamaClient = require('./ollama/client');
 const { getLogger } = require('./utils/logger');
+const { getOllamaModelsIntegration } = require('./ollama/native-scraper');
 
 class LLMChecker {
     constructor() {
@@ -85,45 +86,172 @@ class LLMChecker {
 
             integration.currentlyRunning = runningModels;
 
-            for (const ollamaModel of localModels) {
-                const matchedModel = this.findMatchingModel(ollamaModel, availableModels);
+            try {
+                this.logger.info('Using enhanced model database for compatibility...');
 
-                if (matchedModel) {
-                    const compatibility = this.compatibilityAnalyzer.calculateModelCompatibility(hardware, matchedModel);
+                const enhancedCompatibility = await getOllamaModelsIntegration(localModels);
 
-                    const enrichedOllamaModel = {
-                        ...ollamaModel,
-                        matchedModel,
-                        compatibilityScore: compatibility.score,
-                        issues: compatibility.issues,
-                        notes: compatibility.notes,
-                        isRunning: runningModels.some(r => r.name === ollamaModel.name),
-                        canRun: compatibility.score >= 60,
-                        performanceEstimate: await this.performanceAnalyzer.estimateModelPerformance(matchedModel, hardware)
-                    };
+                if (enhancedCompatibility.compatible_models && enhancedCompatibility.compatible_models.length > 0) {
+                    for (const compatibleMatch of enhancedCompatibility.compatible_models) {
+                        const ollamaModel = compatibleMatch.local;
+                        const cloudModel = compatibleMatch.cloud;
 
-                    integration.compatibleOllamaModels.push(enrichedOllamaModel);
+                        let matchedModel = this.findMatchingModelInDatabase(cloudModel, availableModels);
 
-                    this.logger.debug(`Model analysis: ${matchedModel.name} - Score: ${compatibility.score}`);
+                        if (!matchedModel) {
+                            matchedModel = this.createModelFromCloudData(cloudModel);
+                        }
+
+                        const compatibility = this.compatibilityAnalyzer.calculateModelCompatibility(hardware, matchedModel);
+
+                        let finalScore = compatibility.score;
+                        if (compatibleMatch.match_type === 'exact') {
+                            finalScore = Math.max(finalScore, 75); // Exact matches get at least 75
+                        } else {
+                            finalScore = Math.max(finalScore, 65); // Fuzzy matches get at least 65
+                        }
+
+                        const enrichedOllamaModel = {
+                            ...ollamaModel,
+                            matchedModel,
+                            compatibilityScore: finalScore,
+                            issues: compatibility.issues || [],
+                            notes: compatibility.notes || [],
+                            isRunning: runningModels.some(r => r.name === ollamaModel.name),
+                            canRun: finalScore >= 60, // This should now always be true for found models
+                            performanceEstimate: await this.performanceAnalyzer.estimateModelPerformance(matchedModel, hardware),
+                            cloudInfo: {
+                                pulls: cloudModel.pulls,
+                                url: cloudModel.url,
+                                match_type: compatibleMatch.match_type,
+                                model_type: cloudModel.model_type
+                            }
+                        };
+
+                        integration.compatibleOllamaModels.push(enrichedOllamaModel);
+                    }
+
+                    this.logger.info('Enhanced Ollama integration completed', {
+                        data: {
+                            localModels: localModels.length,
+                            compatibleModels: integration.compatibleOllamaModels.length,
+                            runningModels: runningModels.length,
+                            totalAvailable: enhancedCompatibility.all_available,
+                            enhancedMatching: true
+                        }
+                    });
+                } else {
+                    this.logger.warn('No enhanced compatible models found, using fallback');
+                    await this.processFallbackModels(localModels, runningModels, availableModels, hardware, integration);
                 }
+
+            } catch (enhancedError) {
+                this.logger.warn('Enhanced matching failed, using fallback method', { error: enhancedError.message });
+                await this.processFallbackModels(localModels, runningModels, availableModels, hardware, integration);
             }
 
             integration.recommendedPulls = await this.generateOllamaRecommendations(hardware, availableModels, localModels);
-
-            this.logger.info('Ollama integration completed', {
-                data: {
-                    localModels: localModels.length,
-                    compatibleModels: integration.compatibleOllamaModels.length,
-                    runningModels: runningModels.length,
-                    recommendations: integration.recommendedPulls.length
-                }
-            });
 
         } catch (error) {
             this.logger.error('Ollama integration failed', { error: error.message, component: 'LLMChecker', method: 'integrateOllamaModels' });
         }
 
         return integration;
+    }
+
+    async processFallbackModels(localModels, runningModels, availableModels, hardware, integration) {
+        for (const ollamaModel of localModels) {
+            const matchedModel = this.findMatchingModel(ollamaModel, availableModels);
+
+            if (matchedModel) {
+                const compatibility = this.compatibilityAnalyzer.calculateModelCompatibility(hardware, matchedModel);
+
+                const enrichedOllamaModel = {
+                    ...ollamaModel,
+                    matchedModel,
+                    compatibilityScore: compatibility.score,
+                    issues: compatibility.issues,
+                    notes: compatibility.notes,
+                    isRunning: runningModels.some(r => r.name === ollamaModel.name),
+                    canRun: compatibility.score >= 60,
+                    performanceEstimate: await this.performanceAnalyzer.estimateModelPerformance(matchedModel, hardware)
+                };
+
+                integration.compatibleOllamaModels.push(enrichedOllamaModel);
+            }
+        }
+    }
+
+    findMatchingModelInDatabase(cloudModel, availableModels) {
+        const cloudName = cloudModel.model_name.toLowerCase();
+        const cloudId = cloudModel.model_identifier.toLowerCase();
+
+        let match = availableModels.find(m =>
+            m.name.toLowerCase() === cloudName ||
+            m.name.toLowerCase().includes(cloudId)
+        );
+
+        if (match) return match;
+
+        const keywords = cloudId.split('-');
+        match = availableModels.find(model => {
+            const modelName = model.name.toLowerCase();
+            return keywords.some(keyword =>
+                keyword.length > 2 && modelName.includes(keyword)
+            );
+        });
+
+        return match;
+    }
+
+    createModelFromCloudData(cloudModel) {
+        const sizeMatch = cloudModel.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+        const size = sizeMatch ? sizeMatch[1] + (sizeMatch[0].slice(-1).toUpperCase()) : 'Unknown';
+
+        let category = 'medium';
+        if (size !== 'Unknown') {
+            const sizeNum = parseFloat(size);
+            const unit = size.slice(-1);
+            const sizeInB = unit === 'M' ? sizeNum / 1000 : sizeNum;
+
+            if (sizeInB < 1) category = 'ultra_small';
+            else if (sizeInB <= 4) category = 'small';
+            else if (sizeInB <= 15) category = 'medium';
+            else category = 'large';
+        }
+
+        let specialization = 'general';
+        const id = cloudModel.model_identifier.toLowerCase();
+        if (id.includes('code')) specialization = 'code';
+        else if (id.includes('chat')) specialization = 'chat';
+        else if (id.includes('embed')) specialization = 'embeddings';
+
+        return {
+            name: cloudModel.model_name,
+            size: size,
+            type: 'local',
+            category: category,
+            specialization: specialization,
+            frameworks: ['ollama'],
+            requirements: {
+                ram: Math.ceil((parseFloat(size) || 4) * 0.6),
+                vram: Math.ceil((parseFloat(size) || 4) * 0.4),
+                cpu_cores: 4,
+                storage: Math.ceil((parseFloat(size) || 4) * 0.7)
+            },
+            installation: {
+                ollama: `ollama pull ${cloudModel.model_identifier}`,
+                description: cloudModel.description || 'Model from Ollama library'
+            },
+            year: 2024,
+            description: cloudModel.description || `${cloudModel.model_name} model`,
+            cloudData: {
+                pulls: cloudModel.pulls,
+                url: cloudModel.url,
+                model_type: cloudModel.model_type,
+                identifier: cloudModel.model_identifier
+            }
+        };
     }
 
     findMatchingModel(ollamaModel, availableModels) {
@@ -133,6 +261,7 @@ class LLMChecker {
             'llama3.2:3b': 'Llama 3.2 3B',
             'llama3.1:8b': 'Llama 3.1 8B',
             'mistral:7b': 'Mistral 7B v0.3',
+            'mistral:latest': 'Mistral 7B v0.3',
             'codellama:7b': 'CodeLlama 7B',
             'phi3:mini': 'Phi-3 Mini 3.8B',
             'gemma2:2b': 'Gemma 2B',
@@ -204,6 +333,88 @@ class LLMChecker {
         };
     }
 
+// 1. Fix the analyze method in index.js to include Ollama models in compatible list
+
+    async analyze(options = {}) {
+        try {
+            const hardware = await this.hardwareDetector.getSystemInfo();
+            this.logger.info('Hardware detected', { hardware });
+
+            let models = this.expandedModelsDatabase.getAllModels();
+
+            const ollamaIntegration = await this.integrateOllamaModels(hardware, models);
+
+            if (options.filter) {
+                models = this.filterModels(models, options.filter);
+            }
+
+            if (!options.includeCloud) {
+                models = models.filter(model => model.type === 'local');
+            }
+
+            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, models);
+
+            // Add Ollama models to compatible list
+            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
+                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
+                    if (ollamaModel.matchedModel && ollamaModel.canRun) {
+                        const enhancedModel = {
+                            ...ollamaModel.matchedModel,
+                            score: ollamaModel.compatibilityScore,
+                            issues: ollamaModel.issues || [],
+                            notes: [...(ollamaModel.notes || []), '📦 Installed in Ollama'],
+                            performanceEstimate: ollamaModel.performanceEstimate,
+                            isOllamaInstalled: true,
+                            ollamaInfo: {
+                                localName: ollamaModel.name,
+                                isRunning: ollamaModel.isRunning,
+                                cloudInfo: ollamaModel.cloudInfo
+                            }
+                        };
+
+                        // Add to appropriate category based on score
+                        if (ollamaModel.compatibilityScore >= 75) {
+                            compatibility.compatible.push(enhancedModel);
+                        } else if (ollamaModel.compatibilityScore >= 60) {
+                            compatibility.marginal.push(enhancedModel);
+                        }
+                    }
+                }
+
+                // Re-sort after adding Ollama models
+                compatibility.compatible.sort((a, b) => b.score - a.score);
+                compatibility.marginal.sort((a, b) => b.score - a.score);
+            }
+
+            const enrichedResults = await this.enrichWithPerformanceData(hardware, compatibility);
+
+            const recommendations = await this.generateEnhancedRecommendations(
+                hardware,
+                enrichedResults,
+                ollamaIntegration,
+                options.useCase || 'general'
+            );
+
+            return {
+                hardware,
+                compatible: enrichedResults.compatible,
+                marginal: enrichedResults.marginal,
+                incompatible: enrichedResults.incompatible,
+                recommendations,
+                ollamaInfo: ollamaIntegration.ollamaInfo,
+                ollamaModels: ollamaIntegration.compatibleOllamaModels,
+                summary: this.generateEnhancedSummary(hardware, enrichedResults, ollamaIntegration),
+                performanceEstimates: enrichedResults.performanceEstimates
+            };
+
+        } catch (error) {
+            this.logger.error('Analysis failed', { error: error.message, component: 'LLMChecker', method: 'analyze' });
+            throw new Error(`Analysis failed: ${error.message}`);
+        }
+    }
+
+// 2. Fix the generateEnhancedRecommendations method
+
     async generateEnhancedRecommendations(hardware, results, ollamaIntegration, useCase) {
         const recommendations = [];
 
@@ -212,11 +423,40 @@ class LLMChecker {
         if (ollamaIntegration.ollamaInfo.available) {
             if (ollamaIntegration.compatibleOllamaModels.length === 0) {
                 recommendations.push('🦙 No compatible models installed in Ollama - install recommended models below');
+            } else {
+                // Show the found Ollama models
+                recommendations.push(`🦙 ${ollamaIntegration.compatibleOllamaModels.length} compatible models found in Ollama:`);
+
+                ollamaIntegration.compatibleOllamaModels.forEach((model, index) => {
+                    const runningStatus = model.isRunning ? ' 🚀 (running)' : '';
+                    const score = model.compatibilityScore || 'N/A';
+                    recommendations.push(`  ${index + 1}. 📦 ${model.name} (Score: ${score}/100)${runningStatus}`);
+                });
+
+                // Show usage commands instead of install commands
+                const bestModel = ollamaIntegration.compatibleOllamaModels
+                    .sort((a, b) => (b.compatibilityScore || 0) - (a.compatibilityScore || 0))[0];
+
+                if (bestModel) {
+                    recommendations.push(`🚀 Try your best model: ollama run ${bestModel.name}`);
+                }
             }
 
-            ollamaIntegration.recommendedPulls.slice(0, 3).forEach((rec, index) => {
-                recommendations.push(`${index + 1}. 🚀 ${rec.command} - ${rec.reason}`);
-            });
+            // Suggest additional models to install (not already installed)
+            const installedNames = new Set(ollamaIntegration.compatibleOllamaModels.map(m => m.name.toLowerCase()));
+            const suggestedModels = [
+                { name: 'qwen:0.5b', reason: 'Ultra-fast small model' },
+                { name: 'tinyllama:1.1b', reason: 'Great for testing' },
+                { name: 'phi3:mini', reason: 'Excellent reasoning' }
+            ].filter(model => !installedNames.has(model.name));
+
+            if (suggestedModels.length > 0) {
+                recommendations.push('💡 Additional models you might want to try:');
+                suggestedModels.slice(0, 2).forEach((model, index) => {
+                    recommendations.push(`${index + 1}. 🚀 ollama pull ${model.name} - ${model.reason}`);
+                });
+            }
+
         } else {
             recommendations.push('🦙 Install Ollama for local LLM management: https://ollama.ai');
         }

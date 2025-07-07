@@ -122,7 +122,15 @@ function displayOllamaIntegration(ollamaInfo, ollamaModels) {
         lines.push(`${chalk.green('✅ Status:')} Running ${chalk.gray(`(v${ollamaInfo.version || 'unknown'})`)}`);
 
         if (ollamaModels && ollamaModels.length > 0) {
-            const compatibleCount = ollamaModels.filter(m => m.canRun).length;
+            // Debug: Check what we actually have
+
+            // Fix: Use multiple criteria to determine compatibility
+            const compatibleCount = ollamaModels.filter(m => {
+                return m.canRun === true ||
+                    m.compatibilityScore >= 60 ||
+                    (m.matchedModel && true);
+            }).length;
+
             const runningCount = ollamaModels.filter(m => m.isRunning).length;
 
             lines.push(`📦 ${chalk.cyan('Installed:')} ${ollamaModels.length} total, ${chalk.green(compatibleCount)} compatible`);
@@ -136,16 +144,13 @@ function displayOllamaIntegration(ollamaInfo, ollamaModels) {
         lines.push(`${chalk.red('❌ Status:')} Not available`);
     }
 
-    // 🧾 Header
     console.log('\n' + chalk.bgMagenta.white.bold(' 🦙 OLLAMA INTEGRATION '));
     console.log(chalk.hex('#a259ff')('╭' + '─'.repeat(50)));
 
-    // 📋 Content
     lines.forEach(line => {
         console.log(chalk.hex('#a259ff')('│') + ' ' + line);
     });
 
-    // 🧵 Footer
     console.log(chalk.hex('#a259ff')('╰'));
 }
 
@@ -170,23 +175,33 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
         ]
     ];
 
-
     compatible.slice(0, 15).forEach(model => {
-        //const statusIcon = getStatusIcon(model, ollamaModels);
         const tokensPerSec = model.performanceEstimate?.estimatedTokensPerSecond || 'N/A';
-
         const ramReq = model.requirements?.ram || 1;
         const vramReq = model.requirements?.vram || 0;
         const speedFormatted = formatSpeed(model.performance?.speed || 'medium');
-
         const scoreColor = getScoreColor(model.score || 0);
         const scoreDisplay = scoreColor(`${model.score || 0}/100`);
 
-        // Status with tokens per second
-        const statusDisplay = `${tokensPerSec}t/s`;
+        // Enhanced status display
+        let statusDisplay = `${tokensPerSec}t/s`;
+        if (model.isOllamaInstalled) {
+            const ollamaInfo = model.ollamaInfo || {};
+            if (ollamaInfo.isRunning) {
+                statusDisplay = '🚀 Running';
+            } else {
+                statusDisplay = '📦 Installed';
+            }
+        }
+
+        // Enhanced model name for Ollama models
+        let modelName = model.name;
+        if (model.isOllamaInstalled) {
+            modelName = `${model.name} 🦙`;
+        }
 
         const row = [
-            model.name,
+            modelName,
             formatSize(model.size || 'Unknown'),
             scoreDisplay,
             `${ramReq}GB`,
@@ -203,10 +218,9 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
         console.log(chalk.gray(`\n... and ${compatible.length - 15} more compatible models`));
     }
 
-    // Summary
     displayCompatibleModelsSummary(compatible.length);
-
 }
+
 
 function displayCompatibleModelsSummary(count) {
     console.log('\n' + chalk.bgMagenta.white.bold(' COMPATIBLE MODELS '));
@@ -303,30 +317,50 @@ function displayIncompatibleModels(incompatible) {
 function displayEnhancedRecommendations(recommendations) {
     if (!recommendations || recommendations.length === 0) return;
 
-    const normalRecs = recommendations.slice(0, 8);
-    const quickInstalls = recommendations.filter(r => r.includes('ollama pull'));
+    // Filter different types of recommendations
+    const generalRecs = [];
+    const ollamaFoundRecs = [];
+    const quickInstallRecs = [];
 
-    // Header
+    recommendations.forEach(rec => {
+        if (rec.includes('📦') && rec.includes('Score:')) {
+            ollamaFoundRecs.push(rec);
+        } else if (rec.includes('ollama pull')) {
+            quickInstallRecs.push(rec);
+        } else if (rec.includes('ollama run')) {
+            quickInstallRecs.push(rec);
+        } else {
+            generalRecs.push(rec);
+        }
+    });
+
     console.log('\n' + chalk.bgCyan.white.bold(' SMART RECOMMENDATIONS '));
     console.log(chalk.cyan('╭' + '─'.repeat(40)));
 
-    // Main recommendations
-    normalRecs.forEach((rec, index) => {
+    // Show general recommendations first
+    generalRecs.slice(0, 8).forEach((rec, index) => {
         const number = chalk.green.bold(`${index + 1}.`);
-        //const icon = '🔹';
         console.log(chalk.cyan('│') + ` ${number} ${chalk.white(rec)}`);
     });
 
-    // Quick install section (if any)
-    if (quickInstalls.length > 0) {
+    // Show found Ollama models
+    if (ollamaFoundRecs.length > 0) {
         console.log(chalk.cyan('│'));
-        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('🚀 Quick Install Commands:')}`);
-        quickInstalls.forEach(cmd => {
+        console.log(chalk.cyan('│') + ` ${chalk.bold.green('📦 Your Installed Ollama Models:')}`);
+        ollamaFoundRecs.forEach(rec => {
+            console.log(chalk.cyan('│') + `   ${chalk.green(rec)}`);
+        });
+    }
+
+    // Show quick install/run commands
+    if (quickInstallRecs.length > 0) {
+        console.log(chalk.cyan('│'));
+        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('🚀 Quick Commands:')}`);
+        quickInstallRecs.slice(0, 3).forEach(cmd => {
             console.log(chalk.cyan('│') + `   > ${chalk.cyan.bold(cmd)}`);
         });
     }
 
-    // Footer
     console.log(chalk.cyan('╰'));
 }
 
