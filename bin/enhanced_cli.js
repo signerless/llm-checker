@@ -35,7 +35,6 @@ function getStatusIcon(model, ollamaModels) {
 function formatSize(size) {
     if (!size) return 'Unknown';
 
-    // Clean and format size
     const cleanSize = size.replace(/[^\d.BMK]/gi, '');
     const numMatch = cleanSize.match(/(\d+\.?\d*)/);
     const unitMatch = cleanSize.match(/[BMK]/i);
@@ -101,19 +100,15 @@ function displaySystemInfo(hardware, analysis) {
 
     lines.push(`🏆 ${chalk.bold('Hardware Tier:')} ${tierColor.bold(tier)}`);
 
-    // 🎨 Header
     console.log('\n' + chalk.bgBlue.white.bold(' 🖥️  SYSTEM INFORMATION '));
     console.log(chalk.blue('╭' + '─'.repeat(50)));
 
-    // 📦 Content with left-side border only
     lines.forEach(line => {
         console.log(chalk.blue('│') + ' ' + line);
     });
 
-    // 🔚 Footer
     console.log(chalk.blue('╰'));
 }
-
 
 function displayOllamaIntegration(ollamaInfo, ollamaModels) {
     const lines = [];
@@ -122,9 +117,6 @@ function displayOllamaIntegration(ollamaInfo, ollamaModels) {
         lines.push(`${chalk.green('✅ Status:')} Running ${chalk.gray(`(v${ollamaInfo.version || 'unknown'})`)}`);
 
         if (ollamaModels && ollamaModels.length > 0) {
-            // Debug: Check what we actually have
-
-            // Fix: Use multiple criteria to determine compatibility
             const compatibleCount = ollamaModels.filter(m => {
                 return m.canRun === true ||
                     m.compatibilityScore >= 60 ||
@@ -154,7 +146,6 @@ function displayOllamaIntegration(ollamaInfo, ollamaModels) {
     console.log(chalk.hex('#a259ff')('╰'));
 }
 
-
 function displayEnhancedCompatibleModels(compatible, ollamaModels) {
     if (compatible.length === 0) {
         console.log('\n' + chalk.yellow('No compatible models found.'));
@@ -183,7 +174,6 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
         const scoreColor = getScoreColor(model.score || 0);
         const scoreDisplay = scoreColor(`${model.score || 0}/100`);
 
-        // Enhanced status display
         let statusDisplay = `${tokensPerSec}t/s`;
         if (model.isOllamaInstalled) {
             const ollamaInfo = model.ollamaInfo || {};
@@ -194,7 +184,6 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
             }
         }
 
-        // Enhanced model name for Ollama models
         let modelName = model.name;
         if (model.isOllamaInstalled) {
             modelName = `${model.name} 🦙`;
@@ -221,14 +210,12 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
     displayCompatibleModelsSummary(compatible.length);
 }
 
-
 function displayCompatibleModelsSummary(count) {
     console.log('\n' + chalk.bgMagenta.white.bold(' COMPATIBLE MODELS '));
     console.log(chalk.hex('#a259ff')('╭' + '─'.repeat(40)));
     console.log(chalk.hex('#a259ff')('│') + ` Total compatible models: ${chalk.green.bold(count)}`);
     console.log(chalk.hex('#a259ff')('╰'));
 }
-
 
 function displayMarginalModels(marginal) {
     if (marginal.length === 0) return;
@@ -246,7 +233,6 @@ function displayMarginalModels(marginal) {
         ]
     ];
 
-
     marginal.slice(0, 6).forEach(model => {
         const mainIssue = model.issues?.[0] || 'Performance limitations';
         const scoreColor = getScoreColor(model.score || 0);
@@ -255,7 +241,6 @@ function displayMarginalModels(marginal) {
         const ramReq = model.requirements?.ram || 1;
         const vramReq = model.requirements?.vram || 0;
 
-        // Truncate issue if too long
         const truncatedIssue = mainIssue.length > 30 ? mainIssue.substring(0, 27) + '...' : mainIssue;
 
         const row = [
@@ -291,14 +276,12 @@ function displayIncompatibleModels(incompatible) {
         ]
     ];
 
-
     incompatible.slice(0, 5).forEach(model => {
         const reason = model.issues?.[0] || 'Hardware insufficient';
         const required = `${model.requirements?.ram || '?'}GB`;
         const scoreColor = getScoreColor(model.score || 0);
         const scoreDisplay = scoreColor(`${model.score || 0}/100`);
 
-        // Truncate reason if too long
         const truncatedReason = reason.length > 50 ? reason.substring(0, 22) + '...' : reason;
 
         const row = [
@@ -314,10 +297,59 @@ function displayIncompatibleModels(incompatible) {
     console.log(table(data));
 }
 
-function displayEnhancedRecommendations(recommendations) {
+function displayStructuredRecommendations(recommendations) {
+    if (!recommendations) return;
+
+    if (Array.isArray(recommendations)) {
+        displayLegacyRecommendations(recommendations);
+        return;
+    }
+
+    console.log('\n' + chalk.bgCyan.white.bold(' 🎯 SMART RECOMMENDATIONS '));
+    console.log(chalk.cyan('╭' + '─'.repeat(50)));
+
+    if (recommendations.general && recommendations.general.length > 0) {
+        console.log(chalk.cyan('│') + ` ${chalk.bold.white('💡 General Recommendations:')}`);
+        recommendations.general.slice(0, 4).forEach((rec, index) => {
+            console.log(chalk.cyan('│') + `   ${index + 1}. ${chalk.white(rec)}`);
+        });
+        console.log(chalk.cyan('│'));
+    }
+
+    if (recommendations.installedModels && recommendations.installedModels.length > 0) {
+        console.log(chalk.cyan('│') + ` ${chalk.bold.green('📦 Your Installed Ollama Models:')}`);
+        recommendations.installedModels.forEach(rec => {
+            console.log(chalk.cyan('│') + `   ${chalk.green(rec)}`);
+        });
+        console.log(chalk.cyan('│'));
+    }
+
+    if (recommendations.cloudSuggestions && recommendations.cloudSuggestions.length > 0) {
+        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('☁️ Recommended from Ollama Cloud:')}`);
+        recommendations.cloudSuggestions.forEach(rec => {
+            if (rec.includes('ollama pull')) {
+                console.log(chalk.cyan('│') + `   🚀 ${chalk.cyan.bold(rec)}`);
+            } else {
+                console.log(chalk.cyan('│') + `   ${chalk.blue(rec)}`);
+            }
+        });
+        console.log(chalk.cyan('│'));
+    }
+
+    if (recommendations.quickCommands && recommendations.quickCommands.length > 0) {
+        console.log(chalk.cyan('│') + ` ${chalk.bold.yellow('⚡ Quick Commands:')}`);
+        const uniqueCommands = [...new Set(recommendations.quickCommands)];
+        uniqueCommands.slice(0, 3).forEach(cmd => {
+            console.log(chalk.cyan('│') + `   > ${chalk.yellow.bold(cmd)}`);
+        });
+    }
+
+    console.log(chalk.cyan('╰'));
+}
+
+function displayLegacyRecommendations(recommendations) {
     if (!recommendations || recommendations.length === 0) return;
 
-    // Filter different types of recommendations
     const generalRecs = [];
     const ollamaFoundRecs = [];
     const quickInstallRecs = [];
@@ -337,13 +369,11 @@ function displayEnhancedRecommendations(recommendations) {
     console.log('\n' + chalk.bgCyan.white.bold(' SMART RECOMMENDATIONS '));
     console.log(chalk.cyan('╭' + '─'.repeat(40)));
 
-    // Show general recommendations first
     generalRecs.slice(0, 8).forEach((rec, index) => {
         const number = chalk.green.bold(`${index + 1}.`);
         console.log(chalk.cyan('│') + ` ${number} ${chalk.white(rec)}`);
     });
 
-    // Show found Ollama models
     if (ollamaFoundRecs.length > 0) {
         console.log(chalk.cyan('│'));
         console.log(chalk.cyan('│') + ` ${chalk.bold.green('📦 Your Installed Ollama Models:')}`);
@@ -352,7 +382,6 @@ function displayEnhancedRecommendations(recommendations) {
         });
     }
 
-    // Show quick install/run commands
     if (quickInstallRecs.length > 0) {
         console.log(chalk.cyan('│'));
         console.log(chalk.cyan('│') + ` ${chalk.bold.blue('🚀 Quick Commands:')}`);
@@ -363,23 +392,6 @@ function displayEnhancedRecommendations(recommendations) {
 
     console.log(chalk.cyan('╰'));
 }
-
-
-
-function visibleLength(text) {
-    return text.replace(/\u001b\\[[0-9;]*m/g, '').length;
-}
-
-// function visualLength(text) {
-//     const clean = text.replace(/\x1b\\[[0-9;]*m/g, '').replace(/\u001b\[[0-9;]*m/g, '');
-//     let length = 0;
-//     for (const char of clean) {
-//         length += (char.codePointAt(0) > 0xFFFF || /[\u1100-\u115F\u2329\u232A\u2E80-\uA4CF\uAC00-\uD7A3\u{1F300}-\u{1FAFF}]/u.test(char)) ? 2 : 1;
-//     }
-//     return length;
-// }
-
-
 
 function displayNextSteps(analysis) {
     const stepsRaw = [];
@@ -396,25 +408,16 @@ function displayNextSteps(analysis) {
         stepsRaw.push(['🚀', chalk.yellow(`Try: ollama run <your-best-model>`)]);
     }
 
-    // ✅ Header bar with background color
-    console.log('\n' + chalk.bgMagenta.white.bold(' NEXT STEPS ') + '\n' + chalk.hex('#a259ff')('╭' + '─'.repeat(40)));
+    console.log('\n' + chalk.bgMagenta.white.bold(' 🎯 NEXT STEPS ') + '\n' + chalk.hex('#a259ff')('╭' + '─'.repeat(40)));
 
-    // ✅ List each step with left border only
     stepsRaw.forEach(([icon, text], index) => {
         const num = chalk.green.bold(`${index + 1}.`);
         console.log(chalk.hex('#a259ff')('│') + ` ${num} ${icon} ${text}`);
     });
 
-    // ✅ Bottom left corner only
     console.log(chalk.hex('#a259ff')('╰'));
 }
 
-
-
-
-
-
-// Commands remain the same...
 program
     .command('check')
     .description('Analyze your system and show compatible LLM models')
@@ -456,7 +459,7 @@ program
                 displayIncompatibleModels(analysis.incompatible);
             }
 
-            displayEnhancedRecommendations(analysis.recommendations);
+            displayStructuredRecommendations(analysis.recommendations);
             displayNextSteps(analysis);
 
         } catch (error) {

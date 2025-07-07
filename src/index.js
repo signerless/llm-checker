@@ -363,75 +363,109 @@ class LLMChecker {
     }
 
     async generateEnhancedRecommendations(hardware, results, ollamaIntegration, useCase) {
-        const recommendations = [];
+        const recommendations = {
+            general: [],
+            installedModels: [],
+            cloudSuggestions: [],
+            quickCommands: []
+        };
 
-        recommendations.push(...this.compatibilityAnalyzer.generateRecommendations(hardware, results));
+        const generalRecs = this.compatibilityAnalyzer.generateRecommendations(hardware, results);
+        recommendations.general.push(...generalRecs);
 
         if (ollamaIntegration.ollamaInfo.available) {
             if (ollamaIntegration.compatibleOllamaModels.length === 0) {
-                recommendations.push('🦙 No compatible models installed in Ollama - install recommended models below');
+                recommendations.general.push('🦙 No compatible models installed in Ollama');
             } else {
-                recommendations.push(`🦙 ${ollamaIntegration.compatibleOllamaModels.length} compatible models found in Ollama:`);
+                recommendations.installedModels.push(`🦙 ${ollamaIntegration.compatibleOllamaModels.length} compatible models found in Ollama:`);
 
                 ollamaIntegration.compatibleOllamaModels.forEach((model, index) => {
                     const runningStatus = model.isRunning ? ' 🚀 (running)' : '';
                     const score = model.compatibilityScore || 'N/A';
-                    recommendations.push(`  ${index + 1}. 📦 ${model.name} (Score: ${score}/100)${runningStatus}`);
+                    recommendations.installedModels.push(`${index + 1}. 📦 ${model.name} (Score: ${score}/100)${runningStatus}`);
                 });
 
                 const bestModel = ollamaIntegration.compatibleOllamaModels
                     .sort((a, b) => (b.compatibilityScore || 0) - (a.compatibilityScore || 0))[0];
 
                 if (bestModel) {
-                    recommendations.push(`🚀 Try your best model: ollama run ${bestModel.name}`);
+                    recommendations.quickCommands.push(`ollama run ${bestModel.name}`);
                 }
             }
 
+            this.logger.info('Searching for cloud recommendations...');
             try {
                 const cloudRecommendations = await this.searchOllamaCloudRecommendations(hardware, ollamaIntegration.compatibleOllamaModels);
 
                 if (cloudRecommendations.length > 0) {
-                    recommendations.push('💡 Recommended models from Ollama library for your hardware:');
+                    this.logger.info(`Found ${cloudRecommendations.length} cloud recommendations`);
+                    recommendations.cloudSuggestions.push('💡 Recommended models from Ollama library for your hardware:');
                     cloudRecommendations.forEach((model, index) => {
-                        recommendations.push(`${index + 1}. 🚀 ollama pull ${model.identifier} - ${model.reason} (${model.pulls.toLocaleString()} pulls)`);
+                        recommendations.cloudSuggestions.push(`${index + 1}. ollama pull ${model.identifier} - ${model.reason} (${model.pulls.toLocaleString()} pulls)`);
+                        recommendations.quickCommands.push(`ollama pull ${model.identifier}`);
                     });
+                } else {
+                    this.logger.warn('No cloud recommendations found, using fallback');
+                    this.addFallbackSuggestions(recommendations, ollamaIntegration.compatibleOllamaModels);
                 }
             } catch (error) {
-                this.logger.warn('Failed to get cloud recommendations:', error);
-                const installedNames = new Set(ollamaIntegration.compatibleOllamaModels.map(m => m.name.toLowerCase()));
-                const basicSuggestions = [
-                    { name: 'qwen:0.5b', reason: 'Ultra-fast small model' },
-                    { name: 'tinyllama:1.1b', reason: 'Great for testing' },
-                    { name: 'phi3:mini', reason: 'Excellent reasoning' }
-                ].filter(model => !installedNames.has(model.name));
-
-                if (basicSuggestions.length > 0) {
-                    recommendations.push('💡 Additional models you might want to try:');
-                    basicSuggestions.slice(0, 2).forEach((model, index) => {
-                        recommendations.push(`${index + 1}. 🚀 ollama pull ${model.name} - ${model.reason}`);
-                    });
-                }
+                this.logger.error('Failed to get cloud recommendations:', error);
+                this.addFallbackSuggestions(recommendations, ollamaIntegration.compatibleOllamaModels);
             }
 
         } else {
-            recommendations.push('🦙 Install Ollama for local LLM management: https://ollama.ai');
+            recommendations.general.push('🦙 Install Ollama for local LLM management: https://ollama.ai');
         }
 
         const useCaseRecs = this.getUseCaseRecommendations(results, useCase);
-        recommendations.push(...useCaseRecs);
+        recommendations.general.push(...useCaseRecs);
 
-        return [...new Set(recommendations)];
+        return recommendations;
+    }
+
+    addFallbackSuggestions(recommendations, installedModels) {
+        const installedNames = new Set(installedModels.map(m => m.name.toLowerCase()));
+
+        const allSuggestions = [
+            { name: 'qwen:0.5b', reason: 'Ultra-fast 0.5B model, runs on any hardware', minRAM: 1, tier: 'any' },
+            { name: 'tinyllama:1.1b', reason: 'Tiny but capable, perfect for testing', minRAM: 2, tier: 'any' },
+            { name: 'phi3:mini', reason: 'Microsoft\'s efficient 3.8B model with excellent reasoning', minRAM: 4, tier: 'low' },
+            { name: 'llama3.2:1b', reason: 'Meta\'s latest compact 1B model', minRAM: 2, tier: 'any' },
+            { name: 'llama3.2:3b', reason: 'Meta\'s balanced 3B model', minRAM: 4, tier: 'low' },
+            { name: 'gemma2:2b', reason: 'Google\'s optimized 2B model', minRAM: 3, tier: 'any' },
+            { name: 'mistral:7b', reason: 'High-quality European 7B model', minRAM: 8, tier: 'medium' },
+            { name: 'llama3.1:8b', reason: 'Meta\'s flagship 8B model', minRAM: 10, tier: 'medium' },
+            { name: 'qwen2.5:7b', reason: 'Advanced Chinese 7B model', minRAM: 8, tier: 'medium' },
+            { name: 'codellama:7b', reason: 'Specialized for coding tasks', minRAM: 8, tier: 'medium', specialty: 'code' },
+            { name: 'nomic-embed-text', reason: 'Best for text embeddings', minRAM: 2, tier: 'any', specialty: 'embeddings' }
+        ];
+
+        const availableSuggestions = allSuggestions.filter(model =>
+            !installedNames.has(model.name) && !installedNames.has(model.name.split(':')[0])
+        );
+
+        if (availableSuggestions.length > 0) {
+            recommendations.cloudSuggestions.push('💡 Curated model suggestions for your hardware:');
+            availableSuggestions.slice(0, 5).forEach((model, index) => {
+                recommendations.cloudSuggestions.push(`${index + 1}. ollama pull ${model.name} - ${model.reason}`);
+                recommendations.quickCommands.push(`ollama pull ${model.name}`);
+            });
+        }
     }
 
     async searchOllamaCloudRecommendations(hardware, installedModels) {
         try {
+            this.logger.info('Searching Ollama cloud for compatible models...');
             const { getOllamaModelsIntegration } = require('./ollama/native-scraper');
 
             const allModelsData = await getOllamaModelsIntegration([]);
 
             if (!allModelsData.recommendations || allModelsData.recommendations.length === 0) {
+                this.logger.warn('No recommendations found from cloud search');
                 return [];
             }
+
+            this.logger.info(`Found ${allModelsData.recommendations.length} total models from cloud`);
 
             const installedIdentifiers = new Set(
                 installedModels.map(m => {
@@ -440,18 +474,37 @@ class LLMChecker {
                 })
             );
 
+            this.logger.info(`Installed models identifiers: ${Array.from(installedIdentifiers).join(', ')}`);
+
+            const hardwareTier = this.getHardwareTier(hardware);
+            this.logger.info(`Hardware tier: ${hardwareTier}`);
+
             const compatibleModels = allModelsData.recommendations
                 .filter(model => {
                     const baseIdentifier = model.model_identifier.split(':')[0].toLowerCase();
-                    return !installedIdentifiers.has(baseIdentifier) &&
+                    const isNotInstalled = !installedIdentifiers.has(baseIdentifier) &&
                         !installedIdentifiers.has(model.model_identifier.toLowerCase());
+
+                    if (!isNotInstalled) {
+                        this.logger.debug(`Skipping already installed model: ${model.model_identifier}`);
+                    }
+                    return isNotInstalled;
                 })
-                .map(model => ({
-                    ...model,
-                    compatibilityScore: this.calculateCloudModelCompatibility(model, hardware),
-                    reason: this.getCloudModelReason(model, hardware)
-                }))
-                .filter(model => model.compatibilityScore >= 60)
+                .map(model => {
+                    const score = this.calculateCloudModelCompatibility(model, hardware);
+                    return {
+                        ...model,
+                        compatibilityScore: score,
+                        reason: this.getCloudModelReason(model, hardware)
+                    };
+                })
+                .filter(model => {
+                    const isCompatible = model.compatibilityScore >= 60;
+                    if (!isCompatible) {
+                        this.logger.debug(`Model ${model.model_identifier} has low compatibility score: ${model.compatibilityScore}`);
+                    }
+                    return isCompatible;
+                })
                 .sort((a, b) => {
                     if (b.compatibilityScore !== a.compatibilityScore) {
                         return b.compatibilityScore - a.compatibilityScore;
@@ -459,6 +512,11 @@ class LLMChecker {
                     return (b.pulls || 0) - (a.pulls || 0);
                 })
                 .slice(0, 5);
+
+            this.logger.info(`Final compatible models for recommendations: ${compatibleModels.length}`);
+            compatibleModels.forEach(model => {
+                this.logger.debug(`Recommending: ${model.model_identifier} (score: ${model.compatibilityScore}, pulls: ${model.pulls})`);
+            });
 
             return compatibleModels.map(model => ({
                 identifier: model.model_identifier,
@@ -476,6 +534,14 @@ class LLMChecker {
         }
     }
 
+    getHardwareTier(hardware) {
+        if (hardware.memory.total >= 64 && hardware.gpu.vram >= 32) return 'ultra_high';
+        if (hardware.memory.total >= 32 && hardware.gpu.vram >= 16) return 'high';
+        if (hardware.memory.total >= 16 && hardware.gpu.vram >= 8) return 'medium';
+        if (hardware.memory.total >= 8) return 'low';
+        return 'ultra_low';
+    }
+
     calculateCloudModelCompatibility(model, hardware) {
         let score = 50;
 
@@ -488,7 +554,7 @@ class LLMChecker {
             modelSizeB = unit === 'm' ? num / 1000 : num;
         }
 
-        const estimatedRAM = modelSizeB * 0.6;
+        const estimatedRAM = modelSizeB * 1.2;
         const ramRatio = hardware.memory.total / estimatedRAM;
 
         if (ramRatio >= 3) {
@@ -497,46 +563,85 @@ class LLMChecker {
             score += 30;
         } else if (ramRatio >= 1.5) {
             score += 20;
-        } else if (ramRatio >= 1) {
+        } else if (ramRatio >= 1.2) {
             score += 10;
         } else {
-            score -= 30;
+            score -= 20;
         }
 
-        if (modelSizeB <= 1) {
+        if (modelSizeB <= 0.5) {
+            score += 25;
+        } else if (modelSizeB <= 1) {
             score += 20;
         } else if (modelSizeB <= 3) {
             score += 15;
         } else if (modelSizeB <= 7) {
             score += 10;
-        } else if (modelSizeB > 13) {
-            score -= 20;
+        } else if (modelSizeB <= 13) {
+            score += 5;
+        } else {
+            score -= 15;
+        }
+
+        const hardwareTier = this.getHardwareTier(hardware);
+        switch (hardwareTier) {
+            case 'ultra_high':
+                score += 15;
+                break;
+            case 'high':
+                score += 10;
+                break;
+            case 'medium':
+                score += 5;
+                break;
+            case 'low':
+                if (modelSizeB <= 3) score += 5;
+                break;
+            case 'ultra_low':
+                if (modelSizeB <= 1) score += 10;
+                else score -= 10;
+                break;
         }
 
         if (hardware.cpu.cores >= 8) {
             score += 10;
         } else if (hardware.cpu.cores >= 4) {
             score += 5;
+        } else if (hardware.cpu.cores < 4) {
+            score -= 5;
         }
 
         const pulls = model.pulls || 0;
-        if (pulls > 1000000) {
+        if (pulls > 10000000) {
+            score += 15;
+        } else if (pulls > 1000000) {
             score += 10;
         } else if (pulls > 100000) {
             score += 5;
         }
 
         if (model.model_type === 'official') {
-            score += 5;
+            score += 8;
         }
 
         const identifier = model.model_identifier.toLowerCase();
+        if (identifier.includes('tinyllama') || identifier.includes('phi3') || identifier.includes('qwen')) {
+            score += 5;
+        }
+
         if (identifier.includes('code') && hardware.cpu.cores >= 6) {
             score += 5;
         }
+
         if (identifier.includes('mini') || identifier.includes('tiny')) {
-            score += 10;
+            score += 8;
         }
+
+        if (hardware.cpu.architecture === 'Apple Silicon') {
+            score += 5;
+        }
+
+        this.logger.debug(`Model ${model.model_identifier}: size=${modelSizeB}B, RAM ratio=${ramRatio.toFixed(2)}, score=${score}`);
 
         return Math.max(0, Math.min(100, Math.round(score)));
     }
@@ -716,14 +821,6 @@ class LLMChecker {
             hardwareTier: this.getHardwareTier(hardware),
             topPerformanceModel: this.getTopPerformanceModel(results)
         };
-    }
-
-    getHardwareTier(hardware) {
-        if (hardware.memory.total >= 64 && hardware.gpu.vram >= 32) return 'ultra_high';
-        if (hardware.memory.total >= 32 && hardware.gpu.vram >= 16) return 'high';
-        if (hardware.memory.total >= 16 && hardware.gpu.vram >= 8) return 'medium';
-        if (hardware.memory.total >= 8) return 'low';
-        return 'ultra_low';
     }
 
     getTopPerformanceModel(results) {
