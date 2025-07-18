@@ -67,6 +67,7 @@
   "files": [
     "bin/",
     "src/",
+    "analyzer/",
     "README.md",
     "LICENSE"
   ]
