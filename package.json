@@ -11,7 +11,12 @@
     "build": "echo 'No build needed'",
     "dev": "node bin/enhanced_cli.js",
     "start": "node bin/enhanced_cli.js",
-    "postinstall": "echo '🎉 LLM Checker installed! Try: llm-checker check'"
+    "check": "node bin/enhanced_cli.js check",
+    "recommend": "node bin/enhanced_cli.js recommend",
+    "update-db": "node bin/enhanced_cli.js update-db",
+    "ollama": "node bin/enhanced_cli.js ollama",
+    "list-models": "node bin/enhanced_cli.js list-models",
+    "postinstall": "echo '🎉 LLM Checker installed! Try: npm run check'"
   },
   "dependencies": {
     "chalk": "^4.1.2",

@@ -5,9 +5,11 @@ const path = require('path');
 class OllamaNativeScraper {
     constructor() {
         this.baseURL = 'https://ollama.com';
+        this.registryAPI = 'https://registry.ollama.ai';
         this.cacheDir = path.join(__dirname, '.cache');
         this.cacheFile = path.join(this.cacheDir, 'ollama-models.json');
-        this.cacheExpiry = 24 * 60 * 60 * 1000;
+        this.detailedCacheFile = path.join(this.cacheDir, 'ollama-detailed-models.json');
+        this.cacheExpiry = 6 * 60 * 60 * 1000; // 6 horas para actualizar más frecuentemente
 
         if (!fs.existsSync(this.cacheDir)) {
             fs.mkdirSync(this.cacheDir, { recursive: true });
@@ -169,26 +171,405 @@ class OllamaNativeScraper {
         }
     }
 
-    async scrapeAllModels(forceRefresh = false) {
+    isDetailedCacheValid() {
+        if (!fs.existsSync(this.detailedCacheFile)) return false;
+        const stats = fs.statSync(this.detailedCacheFile);
+        const age = Date.now() - stats.mtime.getTime();
+        return age < this.cacheExpiry;
+    }
+
+    readDetailedCache() {
         try {
-            if (!forceRefresh && this.isCacheValid()) {
-                return this.readCache();
-            }
+            const data = fs.readFileSync(this.detailedCacheFile, 'utf8');
+            return JSON.parse(data);
+        } catch {
+            return null;
+        }
+    }
 
-            const response = await this.httpRequest(`${this.baseURL}/library`);
-            if (response.statusCode !== 200) throw new Error(`Failed to fetch: ${response.statusCode}`);
-            const models = this.parseModelFromHTML(response.data);
-            if (models.length === 0) throw new Error('No models found');
-            this.writeCache(models);
-
-            return {
+    writeDetailedCache(models) {
+        try {
+            const data = {
                 models,
                 total_count: models.length,
                 cached_at: new Date().toISOString(),
                 expires_at: new Date(Date.now() + this.cacheExpiry).toISOString()
             };
+            fs.writeFileSync(this.detailedCacheFile, JSON.stringify(data, null, 2));
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    async getDetailedModelsInfo(basicModels) {
+        const detailedModels = [];
+        const batchSize = 5; // Procesar en lotes para no sobrecargar el servidor
+        
+        for (let i = 0; i < basicModels.length; i += batchSize) {
+            const batch = basicModels.slice(i, i + batchSize);
+            console.log(`📦 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(basicModels.length/batchSize)}`);
+            
+            const batchPromises = batch.map(model => this.getModelDetailedInfo(model));
+            const batchResults = await Promise.allSettled(batchPromises);
+            
+            batchResults.forEach((result, index) => {
+                if (result.status === 'fulfilled' && result.value) {
+                    detailedModels.push(result.value);
+                } else {
+                    // Si falla, al menos guardamos la información básica
+                    detailedModels.push(batch[index]);
+                }
+            });
+            
+            // Pequeña pausa entre lotes
+            if (i + batchSize < basicModels.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        return detailedModels;
+    }
+
+    async getModelDetailedInfo(basicModel) {
+        try {
+            const modelUrl = `${this.baseURL}/library/${basicModel.model_identifier}`;
+            const response = await this.httpRequest(modelUrl);
+            
+            if (response.statusCode !== 200) {
+                return basicModel; // Fallback a información básica
+            }
+            
+            const detailedInfo = this.parseModelDetailPage(response.data, basicModel);
+            
+            return {
+                ...basicModel,
+                ...detailedInfo,
+                // Usar datos mejorados si están disponibles
+                pulls: detailedInfo.actual_pulls || basicModel.pulls || 0,
+                main_size: detailedInfo.main_size || 'Unknown',
+                detailed_scraped_at: new Date().toISOString()
+            };
+            
         } catch (error) {
-            const cachedData = this.readCache();
+            console.warn(`⚠️ Failed to get details for ${basicModel.model_identifier}: ${error.message}`);
+            return basicModel; // Fallback a información básica
+        }
+    }
+
+    parseModelDetailPage(html, basicModel) {
+        const details = {
+            variants: [],
+            tags: [],
+            detailed_description: '',
+            parameters: {},
+            quantizations: [],
+            model_sizes: [],
+            category: 'general',
+            use_cases: [],
+            main_size: 'Unknown',
+            actual_pulls: 0,
+            context_length: 'Unknown',
+            input_types: []
+        };
+
+        try {
+            // MEJORAR: Extraer TODOS los tags incluyendo quantizaciones específicas
+            const allTagMatches = [];
+            
+            // Buscar en bloques de código
+            const codeBlocks = html.match(/<code[^>]*>([^<]+)<\/code>/g) || [];
+            codeBlocks.forEach(match => {
+                const content = match.replace(/<[^>]*>/g, '').trim();
+                const modelMatch = content.match(/ollama (?:run|pull) ([^\s]+)/);
+                if (modelMatch) {
+                    allTagMatches.push(modelMatch[1]);
+                }
+            });
+
+            // Buscar en texto plano (para tags que no están en código)
+            const plainTextTags = html.match(new RegExp(`${basicModel.model_identifier}:[\\w\\d\\.-]+`, 'g')) || [];
+            allTagMatches.push(...plainTextTags);
+
+            // Buscar patrones específicos de quantización
+            const quantPatterns = [
+                new RegExp(`${basicModel.model_identifier}:[\\w\\d\\.-]*q\\d+[_km\\d]*`, 'gi'),
+                new RegExp(`${basicModel.model_identifier}:[\\w\\d\\.-]*fp\\d+`, 'gi'),
+                new RegExp(`${basicModel.model_identifier}:[\\w\\d\\.-]*int\\d+`, 'gi')
+            ];
+            
+            quantPatterns.forEach(pattern => {
+                const matches = html.match(pattern) || [];
+                allTagMatches.push(...matches);
+            });
+
+            // Limpiar y deduplicar tags
+            details.tags = [...new Set(allTagMatches)]
+                .filter(tag => tag && tag.includes(':'))
+                .slice(0, 50); // Aumentar límite para capturar más variantes
+
+            // NUEVO: Extraer información de contexto
+            const contextMatches = html.match(/context\s*:?\s*(\d+[kmb]?)/gi) || 
+                                 html.match(/(\d+[kmb]?)\s*context/gi) ||
+                                 html.match(/context\s+length\s*:?\s*(\d+[kmb]?)/gi);
+            
+            if (contextMatches && contextMatches.length > 0) {
+                // Extraer el número más grande encontrado
+                const contextNumbers = contextMatches.map(match => {
+                    const num = match.match(/(\d+[kmb]?)/i);
+                    if (num) {
+                        const value = num[1].toLowerCase();
+                        if (value.includes('k')) return parseInt(value) * 1000;
+                        if (value.includes('m')) return parseInt(value) * 1000000;
+                        if (value.includes('b')) return parseInt(value) * 1000000000;
+                        return parseInt(value);
+                    }
+                    return 0;
+                }).filter(n => n > 0);
+                
+                if (contextNumbers.length > 0) {
+                    const maxContext = Math.max(...contextNumbers);
+                    details.context_length = maxContext > 1000000 ? 
+                        `${(maxContext/1000000).toFixed(1)}M` : 
+                        maxContext > 1000 ? `${(maxContext/1000).toFixed(0)}K` : 
+                        maxContext.toString();
+                }
+            }
+
+            // NUEVO: Detectar tipos de input soportados
+            const inputTypes = [];
+            if (html.toLowerCase().includes('text') || html.toLowerCase().includes('chat')) {
+                inputTypes.push('text');
+            }
+            if (html.toLowerCase().includes('image') || html.toLowerCase().includes('vision') || 
+                html.toLowerCase().includes('visual')) {
+                inputTypes.push('image');
+            }
+            if (html.toLowerCase().includes('code') || html.toLowerCase().includes('programming')) {
+                inputTypes.push('code');
+            }
+            if (html.toLowerCase().includes('audio') || html.toLowerCase().includes('speech')) {
+                inputTypes.push('audio');
+            }
+            
+            details.input_types = inputTypes.length > 0 ? inputTypes : ['text'];
+
+            // Mejor extracción de tamaños con regex más específico
+            const sizeMatches = html.match(/\b(\d+(?:\.\d+)?)\s*[BG]B?\b/gi);
+            if (sizeMatches) {
+                details.model_sizes = [...new Set(sizeMatches.map(size => size.toLowerCase()))];
+                // Determinar el tamaño principal (más común)
+                if (details.model_sizes.length > 0) {
+                    details.main_size = details.model_sizes[0];
+                }
+            }
+
+            // Extraer pulls reales del HTML
+            const pullsMatch = html.match(/(\d+(?:\.\d+)?[KMB]?)\s*pulls?/i);
+            if (pullsMatch) {
+                details.actual_pulls = this.parsePulls(pullsMatch[1]);
+            }
+
+            // Mejorar detección de quantizaciones
+            const quantMatches = html.match(/\b(Q\d+_[KM](?:_[MS])?|Q\d+|FP16|FP32|INT8|INT4)\b/gi);
+            if (quantMatches) {
+                details.quantizations = [...new Set(quantMatches.map(q => q.toUpperCase()))];
+            }
+
+            // Mejor categorización basada en múltiples indicadores
+            const htmlLower = html.toLowerCase();
+            const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.toLowerCase() || '';
+            const description = html.match(/<meta[^>]*name="description"[^>]*content="([^"]+)"/i)?.[1]?.toLowerCase() || '';
+            const fullText = `${htmlLower} ${title} ${description}`;
+
+            // Resetear categoría
+            details.category = 'general';
+            details.use_cases = [];
+
+            // Categorizar basado en el nombre del modelo de forma más robusta
+            const modelName = basicModel.model_identifier.toLowerCase();
+            const modelDisplayName = basicModel.model_name.toLowerCase();
+            const fullModelText = `${modelName} ${modelDisplayName}`;
+            
+            // Resetear categoría y casos de uso
+            details.category = 'general';
+            details.use_cases = [];
+            
+            // Sistema de categorización por prioridad (específico a general)
+            
+            // 1. CODING - Detectar modelos de programación
+            if (fullModelText.includes('coder') || 
+                fullModelText.includes('codellama') ||
+                fullModelText.includes('starcoder') || 
+                fullModelText.includes('codestral') ||
+                fullModelText.includes('code-') ||
+                modelName.startsWith('codellama') ||
+                modelName.startsWith('starcoder') ||
+                modelName.includes('deepseek-coder') ||
+                modelName.includes('qwen2.5-coder')) {
+                details.category = 'coding';
+                details.use_cases.push('coding', 'programming', 'development');
+            }
+            
+            // 2. EMBEDDINGS - Modelos de vectores/embeddings
+            else if (fullModelText.includes('embed') || 
+                     fullModelText.includes('nomic') ||
+                     fullModelText.includes('bge') || 
+                     fullModelText.includes('e5') ||
+                     modelName.includes('all-minilm') ||
+                     modelName.startsWith('nomic-embed')) {
+                details.category = 'embeddings';
+                details.use_cases.push('embeddings', 'search', 'similarity');
+            }
+            
+            // 3. MULTIMODAL - Modelos de visión/imagen
+            else if (fullModelText.includes('llava') || 
+                     fullModelText.includes('pixtral') ||
+                     fullModelText.includes('vision') || 
+                     fullModelText.includes('moondream') ||
+                     modelName.includes('qwen-vl') ||
+                     modelName.includes('qwen2.5vl') ||
+                     modelName.startsWith('llava')) {
+                details.category = 'multimodal';
+                details.use_cases.push('vision', 'multimodal', 'image');
+            }
+            
+            // 4. REASONING - Modelos especializados en razonamiento
+            else if (fullModelText.includes('deepseek-r1') || 
+                     fullModelText.includes('reasoning') ||
+                     fullModelText.includes('math') ||
+                     modelName.includes('deepseek-r1') ||
+                     modelName.includes('o1-')) {
+                details.category = 'reasoning';
+                details.use_cases.push('reasoning', 'mathematics', 'logic');
+            }
+            
+            // 5. TALKING - Modelos conversacionales/chat (mayoría de modelos)
+            else if (fullModelText.includes('llama') || 
+                     fullModelText.includes('mistral') ||
+                     fullModelText.includes('phi') || 
+                     fullModelText.includes('gemma') ||
+                     fullModelText.includes('qwen') ||
+                     fullModelText.includes('chat') ||
+                     fullModelText.includes('instruct') ||
+                     modelName.startsWith('llama') ||
+                     modelName.startsWith('mistral') ||
+                     modelName.startsWith('phi') ||
+                     modelName.startsWith('gemma') ||
+                     modelName.startsWith('qwen') && !modelName.includes('coder') && !modelName.includes('vl')) {
+                details.category = 'talking';
+                details.use_cases.push('chat', 'conversation', 'assistant');
+            }
+            
+            // 6. READING - Modelos para análisis de texto
+            else if (fullModelText.includes('solar') ||
+                     fullModelText.includes('openchat') ||
+                     fullModelText.includes('neural-chat') ||
+                     fullModelText.includes('vicuna')) {
+                details.category = 'reading';
+                details.use_cases.push('reading', 'analysis', 'comprehension');
+            }
+            
+            // 7. CREATIVE - Modelos creativos
+            else if (fullModelText.includes('dolphin') ||
+                     fullModelText.includes('wizard') ||
+                     fullModelText.includes('uncensored') ||
+                     fullModelText.includes('airoboros')) {
+                details.category = 'creative';
+                details.use_cases.push('creative', 'writing', 'storytelling');
+            }
+            
+            // 8. Por defecto: GENERAL
+            else {
+                details.category = 'general';
+                details.use_cases.push('general', 'assistant');
+            }
+
+            // Extraer descripción mejorada
+            const descPatterns = [
+                /<p[^>]*class="[^"]*description[^"]*"[^>]*>([^<]+)<\/p>/i,
+                /<meta[^>]*name="description"[^>]*content="([^"]+)"/i,
+                /<div[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/div>/i
+            ];
+            
+            for (const pattern of descPatterns) {
+                const match = html.match(pattern);
+                if (match) {
+                    details.detailed_description = this.cleanText(match[1]);
+                    break;
+                }
+            }
+
+            // Crear variantes mejoradas
+            details.variants = details.tags.map(tag => {
+                const size = this.extractSizeFromTag(tag);
+                const quantization = this.extractQuantizationFromTag(tag);
+                return {
+                    tag: tag,
+                    size: size,
+                    quantization: quantization,
+                    command: `ollama pull ${tag}`,
+                    estimated_size_gb: this.estimateModelSizeGB(tag)
+                };
+            });
+
+        } catch (error) {
+            console.warn(`Error parsing detailed page: ${error.message}`);
+        }
+
+        return details;
+    }
+
+    extractSizeFromTag(tag) {
+        const sizeMatch = tag.match(/(\d+\.?\d*)[bg]/i);
+        return sizeMatch ? sizeMatch[0].toLowerCase() : 'unknown';
+    }
+
+    extractQuantizationFromTag(tag) {
+        const quantMatch = tag.match(/\b(q\d+_[km]?_?[ms]?|fp16|fp32|int8|int4)\b/i);
+        return quantMatch ? quantMatch[0].toUpperCase() : 'Q4_0'; // Default assumption
+    }
+
+    estimateModelSizeGB(tag) {
+        const sizeMatch = tag.match(/(\d+\.?\d*)[bg]/i);
+        if (!sizeMatch) return 1;
+        
+        const num = parseFloat(sizeMatch[1]);
+        const unit = sizeMatch[0].slice(-1).toLowerCase();
+        
+        if (unit === 'b') return num;
+        if (unit === 'g') return num;
+        return num; // Default to GB
+    }
+
+    async scrapeAllModels(forceRefresh = false) {
+        try {
+            if (!forceRefresh && this.isDetailedCacheValid()) {
+                return this.readDetailedCache();
+            }
+
+            console.log('🔍 Scraping ALL Ollama models with detailed information...');
+            
+            // Primero obtenemos la lista básica de modelos
+            const response = await this.httpRequest(`${this.baseURL}/library`);
+            if (response.statusCode !== 200) throw new Error(`Failed to fetch: ${response.statusCode}`);
+            const basicModels = this.parseModelFromHTML(response.data);
+            
+            console.log(`📋 Found ${basicModels.length} models. Getting detailed information...`);
+            
+            // Ahora obtenemos información detallada de cada modelo
+            const detailedModels = await this.getDetailedModelsInfo(basicModels);
+            
+            this.writeDetailedCache(detailedModels);
+
+            return {
+                models: detailedModels,
+                total_count: detailedModels.length,
+                cached_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + this.cacheExpiry).toISOString()
+            };
+        } catch (error) {
+            const cachedData = this.readDetailedCache();
             if (cachedData) return cachedData;
             throw error;
         }

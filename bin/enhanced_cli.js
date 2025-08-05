@@ -393,6 +393,206 @@ function displayLegacyRecommendations(recommendations) {
     console.log(chalk.cyan('╰'));
 }
 
+function displayIntelligentRecommendations(intelligentData) {
+    if (!intelligentData || !intelligentData.summary) return;
+
+    const { summary, recommendations } = intelligentData;
+    const tier = summary.hardware_tier.replace('_', ' ').toUpperCase();
+    const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
+
+    console.log('\n' + chalk.bgRed.white.bold(' 🧠 INTELLIGENT RECOMMENDATIONS BY CATEGORY '));
+    console.log(chalk.red('╭' + '─'.repeat(65)));
+    console.log(chalk.red('│') + ` 🏆 Hardware Tier: ${tierColor.bold(tier)} | Models Analyzed: ${chalk.cyan.bold(intelligentData.totalModelsAnalyzed)}`);
+    console.log(chalk.red('│'));
+
+    // Mostrar mejor modelo general
+    if (summary.best_overall) {
+        const best = summary.best_overall;
+        console.log(chalk.red('│') + ` 🌟 ${chalk.bold.yellow('BEST OVERALL:')} ${chalk.green.bold(best.name)}`);
+        console.log(chalk.red('│') + `    📦 Command: ${chalk.cyan.bold(best.command)}`);
+        console.log(chalk.red('│') + `    📊 Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
+        console.log(chalk.red('│'));
+    }
+
+    // Mostrar por categorías
+    const categories = {
+        coding: '💻',
+        talking: '💬', 
+        reading: '📚',
+        reasoning: '🧮',
+        multimodal: '🖼️',
+        creative: '🎨',
+        general: '🤖'
+    };
+
+    Object.entries(summary.by_category).forEach(([category, model]) => {
+        const icon = categories[category] || '📋';
+        const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
+        const scoreColor = getScoreColor(model.score);
+        
+        console.log(chalk.red('│') + ` ${icon} ${chalk.bold.white(categoryName)}:`);
+        console.log(chalk.red('│') + `    🏆 ${chalk.green(model.name)} (${model.size})`);
+        console.log(chalk.red('│') + `    📊 Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
+        console.log(chalk.red('│') + `    📦 ${chalk.cyan.bold(model.command)}`);
+        console.log(chalk.red('│'));
+    });
+
+    console.log(chalk.red('╰'));
+}
+
+function displayModelsStats(originalCount, filteredCount, options) {
+    console.log('\n' + chalk.bgGreen.white.bold(' 📊 DATABASE STATS '));
+    console.log(chalk.green('╭' + '─'.repeat(60)));
+    console.log(chalk.green('│') + ` Total models in database: ${chalk.cyan.bold(originalCount)}`);
+    console.log(chalk.green('│') + ` After filters: ${chalk.yellow.bold(filteredCount)}`);
+    
+    if (options.category) {
+        console.log(chalk.green('│') + ` Category filter: ${chalk.magenta.bold(options.category)}`);
+    }
+    if (options.size) {
+        console.log(chalk.green('│') + ` Size filter: ${chalk.magenta.bold(options.size)}`);
+    }
+    if (options.popular) {
+        console.log(chalk.green('│') + ` Filter: ${chalk.magenta.bold('Popular models only (>100k pulls)')}`);
+    }
+    if (options.recent) {
+        console.log(chalk.green('│') + ` Filter: ${chalk.magenta.bold('Recent models only')}`);
+    }
+    
+    console.log(chalk.green('╰'));
+}
+
+function displayCompactModelsList(models) {
+    console.log('\n' + chalk.bgBlue.white.bold(' 📋 MODELS LIST '));
+    
+    const data = [
+        [
+            chalk.bgBlue.white.bold(' # '),
+            chalk.bgBlue.white.bold(' Model '),
+            chalk.bgBlue.white.bold(' Size '),
+            chalk.bgBlue.white.bold(' Context '),
+            chalk.bgBlue.white.bold(' Input '),
+            chalk.bgBlue.white.bold(' Category '),
+            chalk.bgBlue.white.bold(' Variants ')
+        ]
+    ];
+
+    models.forEach((model, index) => {
+        const category = model.category || 'general';
+        const categoryColor = getCategoryColor(category);
+        
+        // Obtener el tamaño más representativo
+        const mainSize = model.main_size || 
+                        (model.model_sizes && model.model_sizes[0]) || 
+                        extractSizeFromIdentifier(model.model_identifier) || 
+                        'Unknown';
+        
+        // Context length
+        const contextLength = model.context_length || 'Unknown';
+        
+        // Input types
+        const inputTypes = (model.input_types && model.input_types.length > 0) ? 
+            model.input_types.slice(0, 2).join(',') : 'text';
+        
+        // Number of variants
+        const variantCount = (model.tags && model.tags.length > 0) ? 
+            model.tags.length : 0;
+        
+        const row = [
+            chalk.gray(`${index + 1}`),
+            model.model_name || 'Unknown',
+            chalk.green(mainSize),
+            chalk.blue(contextLength),
+            chalk.magenta(inputTypes),
+            categoryColor(category),
+            chalk.yellow(`${variantCount} tags`)
+        ];
+        
+        data.push(row);
+    });
+
+    console.log(table(data));
+}
+
+function extractSizeFromIdentifier(identifier) {
+    const sizeMatch = identifier.match(/(\d+\.?\d*[bg])/i);
+    return sizeMatch ? sizeMatch[1].toLowerCase() : null;
+}
+
+function displayFullModelsList(models) {
+    console.log('\n' + chalk.bgBlue.white.bold(' 📋 DETAILED MODELS LIST '));
+    
+    models.forEach((model, index) => {
+        console.log(`\n${chalk.cyan.bold(`${index + 1}. ${model.model_name}`)}`);
+        console.log(`   ${chalk.gray('Identifier:')} ${chalk.yellow(model.model_identifier)}`);
+        console.log(`   ${chalk.gray('Size:')} ${chalk.green(model.main_size || 'Unknown')}`);
+        console.log(`   ${chalk.gray('Context:')} ${chalk.blue(model.context_length || 'Unknown')}`);
+        console.log(`   ${chalk.gray('Input types:')} ${chalk.magenta((model.input_types || ['text']).join(', '))}`);
+        console.log(`   ${chalk.gray('Category:')} ${getCategoryColor(model.category || 'general')(model.category || 'general')}`);
+        console.log(`   ${chalk.gray('Pulls:')} ${chalk.green((model.pulls || 0).toLocaleString())}`);
+        console.log(`   ${chalk.gray('Description:')} ${model.description || model.detailed_description || 'No description'}`);
+        
+        if (model.use_cases && model.use_cases.length > 0) {
+            console.log(`   ${chalk.gray('Use cases:')} ${model.use_cases.map(uc => chalk.magenta(uc)).join(', ')}`);
+        }
+        
+        if (model.tags && model.tags.length > 0) {
+            console.log(`   ${chalk.gray(`Available variants (${model.tags.length}):`)} `);
+            // Mostrar las primeras 10 variantes, agrupadas de 5 por línea
+            const tagsToShow = model.tags.slice(0, 15);
+            for (let i = 0; i < tagsToShow.length; i += 5) {
+                const batch = tagsToShow.slice(i, i + 5);
+                console.log(`     ${batch.map(tag => chalk.blue(tag)).join(', ')}`);
+            }
+            if (model.tags.length > 15) {
+                console.log(`     ${chalk.gray(`... and ${model.tags.length - 15} more variants`)}`);
+            }
+        }
+        
+        if (model.quantizations && model.quantizations.length > 0) {
+            console.log(`   ${chalk.gray('Quantizations found:')} ${model.quantizations.map(q => chalk.green(q)).join(', ')}`);
+        }
+        
+        console.log(`   ${chalk.gray('Base command:')} ${chalk.cyan.bold(`ollama pull ${model.model_identifier}`)}`);
+        console.log(`   ${chalk.gray('Example variant:')} ${chalk.cyan.bold(`ollama pull ${model.tags && model.tags.length > 0 ? model.tags[0] : model.model_identifier}`)}`);
+        console.log(`   ${chalk.gray('Updated:')} ${model.last_updated || 'Unknown'}`);
+    });
+}
+
+function getCategoryColor(category) {
+    const colors = {
+        coding: chalk.blue,
+        talking: chalk.green,
+        reading: chalk.yellow,
+        reasoning: chalk.red,
+        multimodal: chalk.magenta,
+        creative: chalk.cyan,
+        general: chalk.gray,
+        chat: chalk.green,
+        embeddings: chalk.blue
+    };
+    
+    return colors[category] || chalk.gray;
+}
+
+function displaySampleCommands(topModels) {
+    console.log('\n' + chalk.bgYellow.black.bold(' ⚡ SAMPLE COMMANDS '));
+    console.log(chalk.yellow('╭' + '─'.repeat(60)));
+    console.log(chalk.yellow('│') + ` ${chalk.bold.white('Try these popular models:')}`);
+    
+    topModels.forEach((model, index) => {
+        const command = `ollama pull ${model.model_identifier}`;
+        console.log(chalk.yellow('│') + `   ${index + 1}. ${chalk.cyan.bold(command)}`);
+    });
+    
+    console.log(chalk.yellow('│'));
+    console.log(chalk.yellow('│') + ` ${chalk.bold.white('More commands:')}`);
+    console.log(chalk.yellow('│') + `   🔍 ${chalk.gray('llm-checker list-models --category coding')}`);
+    console.log(chalk.yellow('│') + `   📊 ${chalk.gray('llm-checker list-models --popular --limit 10')}`);
+    console.log(chalk.yellow('│') + `   💾 ${chalk.gray('llm-checker list-models --json > models.json')}`);
+    console.log(chalk.yellow('╰'));
+}
+
 function displayNextSteps(analysis) {
     const stepsRaw = [];
 
@@ -460,6 +660,12 @@ program
             }
 
             displayStructuredRecommendations(analysis.recommendations);
+            
+            // Mostrar recomendaciones inteligentes por categoría
+            if (analysis.intelligentRecommendations) {
+                displayIntelligentRecommendations(analysis.intelligentRecommendations);
+            }
+            
             displayNextSteps(analysis);
 
         } catch (error) {
@@ -502,6 +708,176 @@ program
         } catch (error) {
             spinner.fail('Error with Ollama integration');
             console.error(chalk.red('Error:'), error.message);
+        }
+    });
+
+program
+    .command('update-db')
+    .description('Update Ollama models database')
+    .option('-f, --force', 'Force update, ignore cache')
+    .action(async (options) => {
+        const spinner = ora('Updating Ollama models database...').start();
+
+        try {
+            const checker = new LLMChecker();
+            
+            if (options.force) {
+                spinner.text = '🔄 Force updating database (this may take a while)...';
+                const data = await checker.forceUpdateOllamaDatabase();
+                spinner.succeed(`✅ Database force updated! Found ${data.total_count} models`);
+            } else {
+                spinner.text = '📡 Checking for database updates...';
+                const data = await checker.updateOllamaDatabase();
+                if (data) {
+                    spinner.succeed(`✅ Database updated! Found ${data.total_count} models`);
+                } else {
+                    spinner.succeed('📋 Database is up to date');
+                }
+            }
+
+            const stats = await checker.getOllamaModelStats();
+            if (stats) {
+                console.log('\n' + chalk.bgBlue.white.bold(' 📊 DATABASE STATS '));
+                console.log(chalk.blue('╭' + '─'.repeat(40)));
+                console.log(chalk.blue('│') + ` Total models: ${chalk.green.bold(stats.total_models || 'N/A')}`);
+                console.log(chalk.blue('│') + ` Last updated: ${chalk.yellow(stats.last_updated || 'Unknown')}`);
+                console.log(chalk.blue('╰'));
+            }
+
+        } catch (error) {
+            spinner.fail('Failed to update database');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
+
+program
+    .command('recommend')
+    .description('Get intelligent model recommendations for your hardware')
+    .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
+    .action(async (options) => {
+        const spinner = ora('🧠 Analyzing your hardware and generating recommendations...').start();
+
+        try {
+            const checker = new LLMChecker();
+            const hardware = await checker.getSystemInfo();
+            
+            spinner.text = '📊 Analyzing thousands of models...';
+            const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware);
+
+            if (!intelligentRecommendations) {
+                spinner.fail('Failed to generate recommendations');
+                return;
+            }
+
+            spinner.succeed('✅ Smart recommendations generated!');
+
+            // Mostrar información del sistema
+            displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
+            
+            // Mostrar recomendaciones
+            displayIntelligentRecommendations(intelligentRecommendations);
+
+        } catch (error) {
+            spinner.fail('Failed to generate recommendations');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
+
+program
+    .command('list-models')
+    .description('List all models from Ollama database')
+    .option('-c, --category <category>', 'Filter by category (coding, talking, reading, reasoning, multimodal, creative, general)')
+    .option('-s, --size <size>', 'Filter by size (small, medium, large, e.g., "7b", "13b")')
+    .option('-p, --popular', 'Show only popular models (>100k pulls)')
+    .option('-r, --recent', 'Show only recent models (updated in last 30 days)')
+    .option('--limit <number>', 'Limit number of results (default: 50)', '50')
+    .option('--full', 'Show full details including variants and tags')
+    .option('--json', 'Output in JSON format')
+    .action(async (options) => {
+        const spinner = ora('📋 Loading models database...').start();
+
+        try {
+            const checker = new LLMChecker();
+            const data = await checker.ollamaScraper.scrapeAllModels(false);
+            
+            if (!data || !data.models) {
+                spinner.fail('No models found in database');
+                return;
+            }
+
+            let models = data.models;
+            let originalCount = models.length;
+
+            // Aplicar filtros
+            if (options.category) {
+                models = models.filter(model => 
+                    model.category === options.category.toLowerCase() ||
+                    (model.use_cases && model.use_cases.includes(options.category.toLowerCase()))
+                );
+            }
+
+            if (options.size) {
+                const sizeFilter = options.size.toLowerCase();
+                models = models.filter(model => 
+                    model.model_identifier.toLowerCase().includes(sizeFilter) ||
+                    (model.model_sizes && model.model_sizes.some(size => size.includes(sizeFilter)))
+                );
+            }
+
+            if (options.popular) {
+                models = models.filter(model => (model.pulls || 0) > 100000);
+            }
+
+            if (options.recent) {
+                models = models.filter(model => 
+                    model.last_updated && model.last_updated.includes('day')
+                );
+            }
+
+            // Ordenar por popularidad
+            models.sort((a, b) => (b.pulls || 0) - (a.pulls || 0));
+
+            // Limitar resultados
+            const limit = parseInt(options.limit) || 50;
+            const displayModels = models.slice(0, limit);
+
+            spinner.succeed(`✅ Found ${models.length} models (showing ${displayModels.length})`);
+
+            if (options.json) {
+                console.log(JSON.stringify(displayModels, null, 2));
+                return;
+            }
+
+            // Mostrar estadísticas
+            displayModelsStats(originalCount, models.length, options);
+            
+            // Mostrar modelos
+            if (options.full) {
+                displayFullModelsList(displayModels);
+            } else {
+                displayCompactModelsList(displayModels);
+            }
+
+            // Mostrar comandos de ejemplo
+            if (displayModels.length > 0) {
+                displaySampleCommands(displayModels.slice(0, 3));
+            }
+
+        } catch (error) {
+            spinner.fail('Failed to load models');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
         }
     });
 

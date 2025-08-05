@@ -1,15 +1,18 @@
 const HardwareDetector = require('./hardware/detector');
 const ExpandedModelsDatabase = require('./models/expanded_database');
+const IntelligentModelRecommender = require('./models/intelligent-recommender');
 const CompatibilityAnalyzer = require('../analyzer/compatibility');
 const PerformanceAnalyzer = require('../analyzer/performance');
 const OllamaClient = require('./ollama/client');
 const { getLogger } = require('./utils/logger');
-const { getOllamaModelsIntegration } = require('./ollama/native-scraper');
+const { getOllamaModelsIntegration, OllamaNativeScraper } = require('./ollama/native-scraper');
 
 class LLMChecker {
     constructor() {
         this.hardwareDetector = new HardwareDetector();
         this.expandedModelsDatabase = new ExpandedModelsDatabase();
+        this.intelligentRecommender = new IntelligentModelRecommender();
+        this.ollamaScraper = new OllamaNativeScraper();
         this.compatibilityAnalyzer = new CompatibilityAnalyzer();
         this.performanceAnalyzer = new PerformanceAnalyzer();
         this.ollamaClient = new OllamaClient();
@@ -20,6 +23,9 @@ class LLMChecker {
         try {
             const hardware = await this.hardwareDetector.getSystemInfo();
             this.logger.info('Hardware detected', { hardware });
+
+            // Actualizar base de datos de Ollama al inicio
+            await this.updateOllamaDatabase();
 
             let models = this.expandedModelsDatabase.getAllModels();
 
@@ -73,12 +79,16 @@ class LLMChecker {
                 options.useCase || 'general'
             );
 
+            // Generar recomendaciones inteligentes por categoría
+            const intelligentRecommendations = await this.generateIntelligentRecommendations(hardware);
+
             return {
                 hardware,
                 compatible: enrichedResults.compatible,
                 marginal: enrichedResults.marginal,
                 incompatible: enrichedResults.incompatible,
                 recommendations,
+                intelligentRecommendations,
                 ollamaInfo: ollamaIntegration.ollamaInfo,
                 ollamaModels: ollamaIntegration.compatibleOllamaModels,
                 summary: this.generateEnhancedSummary(hardware, enrichedResults, ollamaIntegration),
@@ -984,6 +994,75 @@ class LLMChecker {
         return this.expandedModelsDatabase.findModel ?
             this.expandedModelsDatabase.findModel(name) :
             this.getAllModels().find(m => m.name.toLowerCase().includes(name.toLowerCase()));
+    }
+
+    async updateOllamaDatabase() {
+        try {
+            this.logger.info('Updating Ollama model database...');
+            const data = await this.ollamaScraper.scrapeAllModels(false); // false = usar cache si es válido
+            this.logger.info(`Database updated with ${data.total_count} models`);
+            return data;
+        } catch (error) {
+            this.logger.warn('Failed to update Ollama database', { error: error.message });
+            return null;
+        }
+    }
+
+    async forceUpdateOllamaDatabase() {
+        try {
+            this.logger.info('Force updating Ollama model database...');
+            const data = await this.ollamaScraper.scrapeAllModels(true); // true = forzar actualización
+            this.logger.info(`Database force updated with ${data.total_count} models`);
+            return data;
+        } catch (error) {
+            this.logger.error('Failed to force update Ollama database', { error: error.message });
+            throw error;
+        }
+    }
+
+    async generateIntelligentRecommendations(hardware) {
+        try {
+            this.logger.info('Generating intelligent recommendations...');
+            
+            // Obtener todos los modelos de Ollama
+            const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
+            const allModels = ollamaData.models || [];
+
+            if (allModels.length === 0) {
+                this.logger.warn('No Ollama models available for recommendations');
+                return null;
+            }
+
+            // Generar recomendaciones inteligentes
+            const recommendations = this.intelligentRecommender.getBestModelsForHardware(hardware, allModels);
+            const summary = this.intelligentRecommender.generateRecommendationSummary(recommendations, hardware);
+
+            this.logger.info(`Generated recommendations for ${Object.keys(recommendations).length} categories`);
+            
+            return {
+                recommendations,
+                summary,
+                totalModelsAnalyzed: allModels.length,
+                generatedAt: new Date().toISOString()
+            };
+
+        } catch (error) {
+            this.logger.error('Failed to generate intelligent recommendations', { error: error.message });
+            return null;
+        }
+    }
+
+    async getOllamaModelStats() {
+        try {
+            const data = await this.ollamaScraper.scrapeAllModels(false);
+            return this.ollamaScraper.getStats ? await this.ollamaScraper.getStats() : {
+                total_models: data.total_count,
+                last_updated: data.cached_at
+            };
+        } catch (error) {
+            this.logger.error('Failed to get Ollama stats', { error: error.message });
+            return null;
+        }
     }
 }
 
