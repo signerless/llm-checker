@@ -1,7 +1,7 @@
 {
   "name": "llm-checker",
-  "version": "2.0.5",
-  "description": "Advanced CLI tool to check which LLM models your computer can run locally, with Ollama integration and sLLM support",
+  "version": "2.1.0",
+  "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
     "llm-checker": "bin/enhanced_cli.js"
   },
@@ -38,6 +38,9 @@
   "keywords": [
     "llm",
     "ai",
+    "intelligent-selector",
+    "model-recommendation",
+    "hardware-analysis",
     "machine-learning",
     "hardware",
     "compatibility",
@@ -51,7 +54,9 @@
     "gpu",
     "vram",
     "performance",
-    "benchmark"
+    "benchmark",
+    "apple-silicon",
+    "memory-optimization"
   ],
   "author": "Your Name <your.email@example.com>",
   "license": "MIT",
@@ -79,6 +84,8 @@
     "analyzer/",
     "ml-model/",
     "README.md",
+    "USAGE_GUIDE.md",
+    "TECHNICAL_DOCS.md",
     "LICENSE"
   ]
 }
