@@ -58,7 +58,8 @@
     "apple-silicon",
     "memory-optimization"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "signerless",
+  "funding": "https://github.com/signerless/llm-checker",
   "license": "MIT",
   "repository": {
     "type": "git",
