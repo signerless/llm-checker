@@ -881,4 +881,223 @@ program
         }
     });
 
+program
+    .command('ai-check')
+    .description('AI-powered model selection and execution')
+    .option('-m, --models <models...>', 'Specific models to choose from')
+    .option('--prompt <prompt>', 'Prompt to run with selected model')
+    .option('--benchmark', 'Benchmark available models for training data')
+    .option('--train', 'Train the AI selector model')
+    .option('--status', 'Show AI model training status')
+    .action(async (options) => {
+        const AIModelSelector = require('../src/ai/model-selector');
+        const { spawn } = require('child_process');
+        
+        try {
+            const aiSelector = new AIModelSelector();
+            
+            if (options.status) {
+                const status = aiSelector.getTrainingStatus();
+                console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI MODEL STATUS '));
+                console.log(chalk.magenta('╭' + '─'.repeat(50)));
+                console.log(chalk.magenta('│') + ` Status: ${getStatusColor(status.status)(status.status.replace('_', ' ').toUpperCase())}`);
+                
+                if (status.status === 'trained') {
+                    console.log(chalk.magenta('│') + ` Model size: ${chalk.green.bold(status.modelSize + ' KB')}`);
+                    console.log(chalk.magenta('│') + ` Version: ${chalk.cyan(status.version)}`);
+                    console.log(chalk.magenta('│') + ` Features: ${chalk.yellow(status.features)}`);
+                    console.log(chalk.magenta('│') + ` Last updated: ${chalk.gray(new Date(status.lastUpdated).toLocaleDateString())}`);
+                    console.log(chalk.magenta('│') + ` Ready for use: ${chalk.green.bold('YES')}`);
+                } else if (status.status === 'not_trained') {
+                    console.log(chalk.magenta('│') + ` To get started:`);
+                    console.log(chalk.magenta('│') + `   1. ${chalk.cyan.bold('npm run benchmark')} - Collect performance data`);
+                    console.log(chalk.magenta('│') + `   2. ${chalk.cyan.bold('npm run train-ai')} - Train the AI model`);
+                    console.log(chalk.magenta('│') + `   3. ${chalk.cyan.bold('npm run ai-check')} - Use AI selection`);
+                } else {
+                    console.log(chalk.magenta('│') + ` Issue: ${chalk.red('Model files corrupted or incomplete')}`);
+                    console.log(chalk.magenta('│') + ` Solution: ${chalk.cyan.bold('npm run train-ai')}`);
+                }
+                
+                console.log(chalk.magenta('╰'));
+                return;
+            }
+            
+            if (options.benchmark) {
+                const spinner = ora('🔬 Collecting benchmark data...').start();
+                
+                try {
+                    const benchmarkProcess = spawn('python', [
+                        'ml-model/python/benchmark_collector.py'
+                    ], { stdio: 'inherit' });
+                    
+                    benchmarkProcess.on('close', (code) => {
+                        if (code === 0) {
+                            spinner.succeed('✅ Benchmark data collected!');
+                            console.log('\nNext steps:');
+                            console.log(`  1. ${chalk.cyan.bold('npm run train-ai')} - Train the AI model`);
+                            console.log(`  2. ${chalk.cyan.bold('npm run ai-check')} - Use AI selection`);
+                        } else {
+                            spinner.fail('❌ Benchmark collection failed');
+                        }
+                    });
+                    
+                    return;
+                } catch (error) {
+                    spinner.fail('❌ Failed to start benchmark collection');
+                    console.error(chalk.red('Error:'), error.message);
+                    return;
+                }
+            }
+            
+            if (options.train) {
+                const spinner = ora('🧠 Training AI model...').start();
+                
+                try {
+                    const trainProcess = spawn('python', [
+                        'ml-model/python/train_model.py'
+                    ], { stdio: 'inherit' });
+                    
+                    trainProcess.on('close', (code) => {
+                        if (code === 0) {
+                            spinner.succeed('✅ AI model trained successfully!');
+                            console.log('\nYou can now use AI-powered selection:');
+                            console.log(`  ${chalk.cyan.bold('npm run ai-check')}`);
+                        } else {
+                            spinner.fail('❌ AI model training failed');
+                        }
+                    });
+                    
+                    return;
+                } catch (error) {
+                    spinner.fail('❌ Failed to start training');
+                    console.error(chalk.red('Error:'), error.message);
+                    return;
+                }
+            }
+            
+            // Main AI selection logic
+            const spinner = ora('🧠 AI-powered model selection...').start();
+            
+            // Get system info
+            const checker = new LLMChecker();
+            const systemInfo = await checker.getSystemInfo();
+            
+            // Get available models or use provided ones
+            let candidateModels = options.models;
+            
+            if (!candidateModels) {
+                spinner.text = '📋 Getting available Ollama models...';
+                const OllamaClient = require('../src/ollama/client');
+                const client = new OllamaClient();
+                
+                try {
+                    const models = await client.listModels();
+                    candidateModels = models.map(m => m.name || m.model);
+                    
+                    if (candidateModels.length === 0) {
+                        spinner.fail('❌ No Ollama models found');
+                        console.log('\nInstall some models first:');
+                        console.log('  ollama pull llama2:7b');
+                        console.log('  ollama pull mistral:7b');
+                        console.log('  ollama pull phi3:mini');
+                        return;
+                    }
+                } catch (error) {
+                    spinner.fail('❌ Failed to get Ollama models');
+                    console.error(chalk.red('Error:'), error.message);
+                    return;
+                }
+            }
+            
+            spinner.text = '🤖 Analyzing optimal model selection...';
+            
+            // Use AI selector
+            const result = await aiSelector.selectBestModel(candidateModels, {
+                cpu_cores: systemInfo.cpu?.cores || 4,
+                cpu_freq_max: (systemInfo.cpu?.speed || 3000) / 1000,
+                total_ram_gb: (systemInfo.memory?.total || 8 * 1024 * 1024 * 1024) / (1024 ** 3),
+                gpu_vram_gb: (systemInfo.graphics?.vram || 0) / 1024,
+                gpu_model_normalized: systemInfo.graphics?.model || 'cpu_only'
+            });
+            
+            spinner.succeed('✅ AI selection completed!');
+            
+            // Display results
+            console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI MODEL SELECTION '));
+            console.log(chalk.magenta('╭' + '─'.repeat(60)));
+            console.log(chalk.magenta('│') + ` 🏆 Selected Model: ${chalk.green.bold(result.bestModel)}`);
+            console.log(chalk.magenta('│') + ` 🎯 Selection Method: ${chalk.cyan(result.method.toUpperCase())}`);
+            console.log(chalk.magenta('│') + ` 📊 Confidence: ${getConfidenceColor(result.confidence)(Math.round(result.confidence * 100) + '%')}`);
+            
+            if (result.reason) {
+                console.log(chalk.magenta('│') + ` 💡 Reason: ${chalk.yellow(result.reason)}`);
+            }
+            
+            if (result.allPredictions && result.allPredictions.length > 1) {
+                console.log(chalk.magenta('│'));
+                console.log(chalk.magenta('│') + ` ${chalk.bold.white('Top Candidates:')}`);
+                result.allPredictions.slice(0, 5).forEach((pred, i) => {
+                    const score = Math.round(pred.score * 100);
+                    const icon = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+                    console.log(chalk.magenta('│') + `   ${icon} ${pred.model}: ${getConfidenceColor(pred.score)(score + '%')}`);
+                });
+            }
+            
+            console.log(chalk.magenta('╰'));
+            
+            // Display system info
+            if (result.systemSpecs) {
+                const specs = result.systemSpecs;
+                console.log('\n' + chalk.bgBlue.white.bold(' 💻 SYSTEM ANALYSIS '));
+                console.log(chalk.blue('╭' + '─'.repeat(45)));
+                console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
+                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
+                console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+                console.log(chalk.blue('╰'));
+            }
+            
+            // Execute the model if requested
+            if (options.prompt || process.stdout.isTTY) {
+                console.log(chalk.magenta.bold('\n🚀 Launching selected model...'));
+                
+                const args = ['run', result.bestModel];
+                if (options.prompt) {
+                    args.push(options.prompt);
+                }
+                
+                const ollamaProcess = spawn('ollama', args, { 
+                    stdio: 'inherit'
+                });
+                
+                ollamaProcess.on('error', (error) => {
+                    console.error(chalk.red('Failed to launch Ollama:'), error.message);
+                });
+            } else {
+                console.log(chalk.gray('\nTo run the selected model:'));
+                console.log(chalk.cyan.bold(`ollama run ${result.bestModel}`));
+            }
+            
+        } catch (error) {
+            console.error(chalk.red('❌ AI selection failed:'), error.message);
+            process.exit(1);
+        }
+    });
+
+function getStatusColor(status) {
+    const colors = {
+        'TRAINED': chalk.green,
+        'NOT TRAINED': chalk.yellow,
+        'CORRUPTED': chalk.red
+    };
+    return colors[status] || chalk.gray;
+}
+
+function getConfidenceColor(confidence) {
+    if (confidence >= 0.8) return chalk.green.bold;
+    if (confidence >= 0.6) return chalk.yellow.bold;
+    if (confidence >= 0.4) return chalk.orange.bold;
+    return chalk.red.bold;
+}
+
 program.parse();

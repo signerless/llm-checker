@@ -16,6 +16,9 @@
     "update-db": "node bin/enhanced_cli.js update-db",
     "ollama": "node bin/enhanced_cli.js ollama",
     "list-models": "node bin/enhanced_cli.js list-models",
+    "ai-check": "node bin/enhanced_cli.js ai-check",
+    "benchmark": "cd ml-model && python python/benchmark_collector.py",
+    "train-ai": "cd ml-model && python python/train_model.py",
     "postinstall": "echo '🎉 LLM Checker installed! Try: npm run check'"
   },
   "dependencies": {
@@ -73,6 +76,7 @@
     "bin/",
     "src/",
     "analyzer/",
+    "ml-model/",
     "README.md",
     "LICENSE"
   ]
