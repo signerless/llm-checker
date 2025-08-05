@@ -991,7 +991,7 @@ program
                 const client = new OllamaClient();
                 
                 try {
-                    const models = await client.listModels();
+                    const models = await client.getLocalModels();
                     candidateModels = models.map(m => m.name || m.model);
                     
                     if (candidateModels.length === 0) {
@@ -1011,14 +1011,17 @@ program
             
             spinner.text = '🤖 Analyzing optimal model selection...';
             
-            // Use AI selector
-            const result = await aiSelector.selectBestModel(candidateModels, {
+            // Use AI selector - fix data extraction
+            const systemSpecs = {
                 cpu_cores: systemInfo.cpu?.cores || 4,
-                cpu_freq_max: (systemInfo.cpu?.speed || 3000) / 1000,
-                total_ram_gb: (systemInfo.memory?.total || 8 * 1024 * 1024 * 1024) / (1024 ** 3),
-                gpu_vram_gb: (systemInfo.graphics?.vram || 0) / 1024,
-                gpu_model_normalized: systemInfo.graphics?.model || 'cpu_only'
-            });
+                cpu_freq_max: systemInfo.cpu?.speed || 3.0,
+                total_ram_gb: systemInfo.memory?.total || 8,
+                gpu_vram_gb: systemInfo.graphics?.vram ? systemInfo.graphics.vram / 1024 : 0,
+                gpu_model_normalized: systemInfo.graphics?.model || 
+                    (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
+            };
+            
+            const result = await aiSelector.selectBestModel(candidateModels, systemSpecs);
             
             spinner.succeed('✅ AI selection completed!');
             
@@ -1046,16 +1049,14 @@ program
             console.log(chalk.magenta('╰'));
             
             // Display system info
-            if (result.systemSpecs) {
-                const specs = result.systemSpecs;
-                console.log('\n' + chalk.bgBlue.white.bold(' 💻 SYSTEM ANALYSIS '));
-                console.log(chalk.blue('╭' + '─'.repeat(45)));
-                console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
-                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
-                console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
-                console.log(chalk.blue('╰'));
-            }
+            const specs = result.systemSpecs || systemSpecs;
+            console.log('\n' + chalk.bgBlue.white.bold(' 💻 SYSTEM ANALYSIS '));
+            console.log(chalk.blue('╭' + '─'.repeat(45)));
+            console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
+            console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
+            console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
+            console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+            console.log(chalk.blue('╰'));
             
             // Execute the model if requested
             if (options.prompt || process.stdout.isTTY) {
@@ -1096,7 +1097,7 @@ function getStatusColor(status) {
 function getConfidenceColor(confidence) {
     if (confidence >= 0.8) return chalk.green.bold;
     if (confidence >= 0.6) return chalk.yellow.bold;
-    if (confidence >= 0.4) return chalk.orange.bold;
+    if (confidence >= 0.4) return chalk.red.bold; // orange doesn't exist, use red
     return chalk.red.bold;
 }
 
