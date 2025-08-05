@@ -883,9 +883,9 @@ program
 
 program
     .command('ai-check')
-    .description('AI-powered model selection and execution')
+    .description('AI-powered model selection for optimal hardware compatibility')
     .option('-m, --models <models...>', 'Specific models to choose from')
-    .option('--prompt <prompt>', 'Prompt to run with selected model')
+    .option('--prompt <prompt>', 'Show command to run selected model with this prompt')
     .option('--benchmark', 'Benchmark available models for training data')
     .option('--train', 'Train the AI selector model')
     .option('--status', 'Show AI model training status')
@@ -1058,26 +1058,30 @@ program
             console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
             console.log(chalk.blue('╰'));
             
-            // Execute the model if requested
-            if (options.prompt || process.stdout.isTTY) {
-                console.log(chalk.magenta.bold('\n🚀 Launching selected model...'));
-                
-                const args = ['run', result.bestModel];
-                if (options.prompt) {
-                    args.push(options.prompt);
-                }
-                
-                const ollamaProcess = spawn('ollama', args, { 
-                    stdio: 'inherit'
-                });
-                
-                ollamaProcess.on('error', (error) => {
-                    console.error(chalk.red('Failed to launch Ollama:'), error.message);
-                });
-            } else {
-                console.log(chalk.gray('\nTo run the selected model:'));
-                console.log(chalk.cyan.bold(`ollama run ${result.bestModel}`));
+            // Show recommended command
+            console.log('\n' + chalk.bgGreen.black.bold(' 🎯 RECOMMENDATION '));
+            console.log(chalk.green('╭' + '─'.repeat(50)));
+            console.log(chalk.green('│') + ` Best model for your hardware:`);
+            console.log(chalk.green('│') + `   ${chalk.cyan.bold(`ollama run ${result.bestModel}`)}`);
+            
+            if (options.prompt) {
+                console.log(chalk.green('│'));
+                console.log(chalk.green('│') + ` With your prompt:`);
+                console.log(chalk.green('│') + `   ${chalk.cyan.bold(`ollama run ${result.bestModel} "${options.prompt}"`)}`);
             }
+            
+            console.log(chalk.green('│'));
+            console.log(chalk.green('│') + ` Why this model?`);
+            console.log(chalk.green('│') + `   • ${result.reason || 'Optimized for your hardware configuration'}`);
+            console.log(chalk.green('│') + `   • Confidence: ${getConfidenceColor(result.confidence)(Math.round(result.confidence * 100) + '%')}`);
+            console.log(chalk.green('│') + `   • Selection method: ${result.method.toUpperCase()}`);
+            console.log(chalk.green('╰'));
+            
+            // Show additional useful commands
+            console.log('\n' + chalk.gray('💡 Tips:'));
+            console.log(chalk.gray(`  • To execute the recommended model directly:`));
+            console.log(chalk.gray(`    llm-checker ai-run${options.models ? ' -m ' + options.models.join(' ') : ''}`));
+            console.log(chalk.gray(`  • To exit from Ollama chat, type: ${chalk.cyan('/bye')}`));
             
         } catch (error) {
             console.error(chalk.red('❌ AI selection failed:'), error.message);
@@ -1100,5 +1104,85 @@ function getConfidenceColor(confidence) {
     if (confidence >= 0.4) return chalk.red.bold; // orange doesn't exist, use red
     return chalk.red.bold;
 }
+
+program
+    .command('ai-run')
+    .description('AI-powered model selection and execution')
+    .option('-m, --models <models...>', 'Specific models to choose from')
+    .option('--prompt <prompt>', 'Prompt to run with selected model')
+    .action(async (options) => {
+        const AIModelSelector = require('../src/ai/model-selector');
+        const { spawn } = require('child_process');
+        
+        try {
+            const spinner = ora('🧠 Selecting best model and launching...').start();
+            
+            const aiSelector = new AIModelSelector();
+            const checker = new LLMChecker();
+            const systemInfo = await checker.getSystemInfo();
+            
+            // Get available models or use provided ones
+            let candidateModels = options.models;
+            
+            if (!candidateModels) {
+                spinner.text = '📋 Getting available Ollama models...';
+                const OllamaClient = require('../src/ollama/client');
+                const client = new OllamaClient();
+                
+                try {
+                    const models = await client.getLocalModels();
+                    candidateModels = models.map(m => m.name || m.model);
+                    
+                    if (candidateModels.length === 0) {
+                        spinner.fail('❌ No Ollama models found');
+                        console.log('\nInstall some models first:');
+                        console.log('  ollama pull llama2:7b');
+                        console.log('  ollama pull mistral:7b');
+                        console.log('  ollama pull phi3:mini');
+                        return;
+                    }
+                } catch (error) {
+                    spinner.fail('❌ Failed to get Ollama models');
+                    console.error(chalk.red('Error:'), error.message);
+                    return;
+                }
+            }
+            
+            // AI selection
+            const systemSpecs = {
+                cpu_cores: systemInfo.cpu?.cores || 4,
+                cpu_freq_max: systemInfo.cpu?.speed || 3.0,
+                total_ram_gb: systemInfo.memory?.total || 8,
+                gpu_vram_gb: systemInfo.graphics?.vram ? systemInfo.graphics.vram / 1024 : 0,
+                gpu_model_normalized: systemInfo.graphics?.model || 
+                    (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
+            };
+            
+            const result = await aiSelector.selectBestModel(candidateModels, systemSpecs);
+            
+            spinner.succeed(`✅ Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
+            
+            // Execute the selected model
+            console.log(chalk.magenta.bold(`\n🚀 Launching ${result.bestModel}...`));
+            console.log(chalk.gray(`💡 Tip: Type ${chalk.cyan('/bye')} to exit the chat when finished\n`));
+            
+            const args = ['run', result.bestModel];
+            if (options.prompt) {
+                args.push(options.prompt);
+            }
+            
+            const ollamaProcess = spawn('ollama', args, { 
+                stdio: 'inherit'
+            });
+            
+            ollamaProcess.on('error', (error) => {
+                console.error(chalk.red('Failed to launch Ollama:'), error.message);
+            });
+            
+        } catch (error) {
+            console.error(chalk.red('❌ AI-powered execution failed:'), error.message);
+            process.exit(1);
+        }
+    });
 
 program.parse();
