@@ -1026,14 +1026,19 @@ program
             spinner.succeed('✅ AI selection completed!');
             
             // Display results
-            console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI MODEL SELECTION '));
-            console.log(chalk.magenta('╭' + '─'.repeat(60)));
+            console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 INTELLIGENT MODEL SELECTION '));
+            console.log(chalk.magenta('╭' + '─'.repeat(65)));
             console.log(chalk.magenta('│') + ` 🏆 Selected Model: ${chalk.green.bold(result.bestModel)}`);
-            console.log(chalk.magenta('│') + ` 🎯 Selection Method: ${chalk.cyan(result.method.toUpperCase())}`);
+            console.log(chalk.magenta('│') + ` 🎯 Selection Method: ${chalk.cyan(result.method.replace(/_/g, ' ').toUpperCase())}`);
             console.log(chalk.magenta('│') + ` 📊 Confidence: ${getConfidenceColor(result.confidence)(Math.round(result.confidence * 100) + '%')}`);
             
-            if (result.reason) {
-                console.log(chalk.magenta('│') + ` 💡 Reason: ${chalk.yellow(result.reason)}`);
+            if (result.score) {
+                console.log(chalk.magenta('│') + ` 🔢 Intelligence Score: ${getScoreColor(result.score)(Math.round(result.score))}/100`);
+            }
+            
+            if (result.reasoning || result.reason) {
+                const reasoning = result.reasoning || result.reason;
+                console.log(chalk.magenta('│') + ` 💡 AI Analysis: ${chalk.yellow(reasoning)}`);
             }
             
             if (result.allPredictions && result.allPredictions.length > 1) {
@@ -1050,12 +1055,23 @@ program
             
             // Display system info
             const specs = result.systemSpecs || systemSpecs;
-            console.log('\n' + chalk.bgBlue.white.bold(' 💻 SYSTEM ANALYSIS '));
-            console.log(chalk.blue('╭' + '─'.repeat(45)));
+            const hwAnalysis = result.hardware_analysis;
+            
+            console.log('\n' + chalk.bgBlue.white.bold(' 💻 INTELLIGENT HARDWARE ANALYSIS '));
+            console.log(chalk.blue('╭' + '─'.repeat(55)));
             console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
             console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
             console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
             console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+            
+            if (hwAnalysis) {
+                console.log(chalk.blue('│'));
+                console.log(chalk.blue('│') + ` ${chalk.bold.white('Hardware Classification:')}`);
+                console.log(chalk.blue('│') + `   Overall Tier: ${getTierColor(hwAnalysis.overall_tier)(hwAnalysis.overall_tier.replace('_', ' ').toUpperCase())}`);
+                console.log(chalk.blue('│') + `   Available Memory: ${chalk.green(hwAnalysis.available_memory?.total?.toFixed(1) + ' GB')}`);
+                console.log(chalk.blue('│') + `   Performance Index: ${chalk.cyan('×' + hwAnalysis.performance_multiplier?.toFixed(1))}`);
+            }
+            
             console.log(chalk.blue('╰'));
             
             // Show recommended command
@@ -1103,6 +1119,26 @@ function getConfidenceColor(confidence) {
     if (confidence >= 0.6) return chalk.yellow.bold;
     if (confidence >= 0.4) return chalk.red.bold; // orange doesn't exist, use red
     return chalk.red.bold;
+}
+
+function getScoreColor(score) {
+    if (score >= 85) return chalk.green.bold;
+    if (score >= 70) return chalk.cyan.bold;
+    if (score >= 55) return chalk.yellow.bold;
+    if (score >= 40) return chalk.red.bold;
+    return chalk.gray;
+}
+
+function getTierColor(tier) {
+    const colors = {
+        'extreme': chalk.magenta.bold,
+        'very_high': chalk.green.bold,
+        'high': chalk.cyan.bold,
+        'medium': chalk.yellow,
+        'low': chalk.red,
+        'ultra_low': chalk.gray
+    };
+    return colors[tier] || chalk.white;
 }
 
 program

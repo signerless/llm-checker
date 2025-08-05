@@ -1,10 +1,12 @@
 const path = require('path');
 const fs = require('fs');
+const IntelligentModelSelector = require('./intelligent-selector');
 
 class AIModelSelector {
     constructor() {
         this.aiSelectorPath = path.join(__dirname, '../../ml-model/js');
         this.isAvailable = this.checkAvailability();
+        this.intelligentSelector = new IntelligentModelSelector();
     }
 
     checkAvailability() {
@@ -31,30 +33,60 @@ class AIModelSelector {
         }
     }
 
-    async selectBestModel(candidateModels, systemSpecs = null) {
-        if (!this.isAvailable) {
-            return this.fallbackSelection(candidateModels, systemSpecs);
-        }
-
+    async selectBestModel(candidateModels, systemSpecs = null, userPreference = 'general') {
         try {
-            if (!this.selector) {
-                await this.initialize();
+            // Use the new intelligent mathematical selector first
+            const result = this.intelligentSelector.selectBestModels(
+                systemSpecs, 
+                candidateModels, 
+                userPreference, 
+                Math.min(5, candidateModels.length)
+            );
+
+            if (result.best_model) {
+                return {
+                    bestModel: result.best_model.modelId,
+                    confidence: result.best_model.confidence,
+                    score: result.best_model.score,
+                    reasoning: result.best_model.reasoning,
+                    allPredictions: result.recommendations.map(r => ({
+                        model: r.modelId,
+                        score: r.confidence,
+                        reasoning: r.reasoning
+                    })),
+                    method: 'intelligent_mathematical',
+                    systemSpecs: systemSpecs,
+                    hardware_analysis: result.hardware_analysis
+                };
             }
-
-            const result = await this.selector.predictBestModel(candidateModels, systemSpecs);
-            
-            return {
-                bestModel: result.bestModel,
-                confidence: result.allPredictions[0]?.score || 0,
-                allPredictions: result.allPredictions,
-                method: 'ai',
-                systemSpecs: result.systemSpecs
-            };
-
         } catch (error) {
-            console.warn(`AI selection failed: ${error.message}`);
-            return this.fallbackSelection(candidateModels, systemSpecs);
+            console.warn(`Intelligent selection failed: ${error.message}`);
         }
+
+        // Fallback to ONNX if available
+        if (this.isAvailable) {
+            try {
+                if (!this.selector) {
+                    await this.initialize();
+                }
+
+                const result = await this.selector.predictBestModel(candidateModels, systemSpecs);
+                
+                return {
+                    bestModel: result.bestModel,
+                    confidence: result.allPredictions[0]?.score || 0,
+                    allPredictions: result.allPredictions,
+                    method: 'onnx_ai',
+                    systemSpecs: result.systemSpecs
+                };
+
+            } catch (error) {
+                console.warn(`ONNX AI selection failed: ${error.message}`);
+            }
+        }
+
+        // Final fallback to simple heuristic
+        return this.fallbackSelection(candidateModels, systemSpecs);
     }
 
     fallbackSelection(candidateModels, systemSpecs = null) {
@@ -62,11 +94,38 @@ class AIModelSelector {
             systemSpecs = {
                 total_ram_gb: 8,
                 gpu_vram_gb: 0,
-                cpu_cores: 4
+                cpu_cores: 4,
+                gpu_model_normalized: 'cpu_only'
             };
         }
 
-        // Simple heuristic: pick largest model that fits in memory
+        console.log('🔄 Using fallback heuristic selection...');
+
+        // Use intelligent selector with basic heuristic mode
+        try {
+            const basicResult = this.intelligentSelector.selectBestModels(
+                systemSpecs, 
+                candidateModels, 
+                'general', 
+                1
+            );
+
+            if (basicResult.best_model) {
+                return {
+                    bestModel: basicResult.best_model.modelId,
+                    confidence: Math.min(0.8, basicResult.best_model.confidence),
+                    score: basicResult.best_model.score,
+                    method: 'heuristic_intelligent',
+                    reason: basicResult.best_model.reasoning,
+                    systemSpecs,
+                    hardware_analysis: basicResult.hardware_analysis
+                };
+            }
+        } catch (error) {
+            console.warn(`Intelligent fallback failed: ${error.message}`);
+        }
+
+        // Ultimate fallback: simple memory-based selection
         const availableMemory = systemSpecs.gpu_vram_gb > 0 ? 
             systemSpecs.gpu_vram_gb : 
             systemSpecs.total_ram_gb * 0.7;
@@ -87,8 +146,8 @@ class AIModelSelector {
 
         return {
             bestModel,
-            confidence: suitableModels.length > 0 ? 0.8 : 0.5,
-            method: 'heuristic',
+            confidence: suitableModels.length > 0 ? 0.7 : 0.4,
+            method: 'simple_heuristic',
             reason: suitableModels.length > 0 ? 
                 'Best fitting model for available memory' : 
                 'Smallest available model (safety fallback)',
