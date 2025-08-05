@@ -3,6 +3,8 @@ const { Command } = require('commander');
 const chalk = require('chalk');
 const ora = require('ora');
 const { table } = require('table');
+const os = require('os');
+const { spawn } = require('child_process');
 const LLMChecker = require('../src/index');
 const { getLogger } = require('../src/utils/logger');
 
@@ -14,6 +16,109 @@ program
     .version('2.1.0');
 
 const logger = getLogger({ console: false });
+
+// Ollama installation helper
+function getOllamaInstallInstructions() {
+    const platform = os.platform();
+    const arch = os.arch();
+    
+    const instructions = {
+        'darwin': {
+            name: 'macOS',
+            downloadUrl: 'https://ollama.com/download/mac',
+            instructions: [
+                '1. Download Ollama for macOS from the link above',
+                '2. Open the downloaded .pkg file and follow the installer',
+                '3. Once installed, open Terminal and run: ollama serve',
+                '4. In a new terminal window, test with: ollama run llama2:7b'
+            ],
+            alternativeInstall: 'brew install ollama'
+        },
+        'win32': {
+            name: 'Windows',
+            downloadUrl: 'https://ollama.com/download/windows',
+            instructions: [
+                '1. Download Ollama for Windows from the link above',
+                '2. Run the downloaded installer (.exe file)',
+                '3. Open Command Prompt or PowerShell',
+                '4. Test with: ollama run llama2:7b'
+            ],
+            alternativeInstall: 'winget install Ollama.Ollama'
+        },
+        'linux': {
+            name: 'Linux',
+            downloadUrl: 'https://ollama.com/download/linux',
+            instructions: [
+                '1. Run the installation script:',
+                '   curl -fsSL https://ollama.com/install.sh | sh',
+                '2. Start Ollama service:',
+                '   sudo systemctl start ollama',
+                '3. Test with: ollama run llama2:7b'
+            ],
+            alternativeInstall: 'Manual install: https://github.com/ollama/ollama/blob/main/docs/linux.md'
+        }
+    };
+    
+    return instructions[platform] || instructions['linux'];
+}
+
+function displayOllamaInstallHelp() {
+    const installInfo = getOllamaInstallInstructions();
+    
+    console.log(chalk.red.bold('\n❌ Ollama is not installed or not running!'));
+    console.log(chalk.yellow('\n🚀 LLM Checker requires Ollama to function properly.'));
+    console.log(chalk.cyan.bold(`\n📥 Install Ollama for ${installInfo.name}:`));
+    console.log(chalk.blue(`\n🔗 Download: ${installInfo.downloadUrl}`));
+    
+    console.log(chalk.green.bold('\n📋 Installation Steps:'));
+    installInfo.instructions.forEach(step => {
+        console.log(chalk.gray(`   ${step}`));
+    });
+    
+    if (installInfo.alternativeInstall) {
+        console.log(chalk.magenta.bold('\n⚡ Quick Install (if available):'));
+        console.log(chalk.white(`   ${installInfo.alternativeInstall}`));
+    }
+    
+    console.log(chalk.yellow.bold('\n✅ After installation:'));
+    console.log(chalk.gray('   1. Restart your terminal'));
+    console.log(chalk.gray('   2. Run: llm-checker check'));
+    console.log(chalk.gray('   3. Start using the AI model selector!'));
+    
+    console.log(chalk.cyan('\n💡 Need help? Visit: https://github.com/ollama/ollama'));
+}
+
+async function checkOllamaAndExit() {
+    const spinner = ora('Checking Ollama availability...').start();
+    
+    try {
+        // Quick check if ollama command exists
+        const checkCommand = os.platform() === 'win32' ? 'where' : 'which';
+        
+        return new Promise((resolve) => {
+            const proc = spawn(checkCommand, ['ollama'], { stdio: 'pipe' });
+            
+            proc.on('close', (code) => {
+                spinner.stop();
+                if (code !== 0) {
+                    displayOllamaInstallHelp();
+                    process.exit(1);
+                }
+                resolve(true);
+            });
+            
+            proc.on('error', () => {
+                spinner.stop();
+                displayOllamaInstallHelp();
+                process.exit(1);
+            });
+        });
+    } catch (error) {
+        spinner.stop();
+        displayOllamaInstallHelp();
+        process.exit(1);
+    }
+}
 
 function getStatusIcon(model, ollamaModels) {
     const ollamaModel = ollamaModels?.find(om => om.matchedModel?.name === model.name);
@@ -890,8 +995,10 @@ program
     .option('--train', 'Train the AI selector model')
     .option('--status', 'Show AI model training status')
     .action(async (options) => {
+        // Check if Ollama is installed first
+        await checkOllamaAndExit();
+        
         const AIModelSelector = require('../src/ai/model-selector');
-        const { spawn } = require('child_process');
         
         try {
             const aiSelector = new AIModelSelector();
@@ -1147,8 +1254,10 @@ program
     .option('-m, --models <models...>', 'Specific models to choose from')
     .option('--prompt <prompt>', 'Prompt to run with selected model')
     .action(async (options) => {
+        // Check if Ollama is installed first
+        await checkOllamaAndExit();
+        
         const AIModelSelector = require('../src/ai/model-selector');
-        const { spawn } = require('child_process');
         
         try {
             const spinner = ora('🧠 Selecting best model and launching...').start();
