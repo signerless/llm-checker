@@ -1167,9 +1167,16 @@ program
             console.log('\n' + chalk.bgBlue.white.bold(' 💻 INTELLIGENT HARDWARE ANALYSIS '));
             console.log(chalk.blue('╭' + '─'.repeat(55)));
             console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
-            console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
-            console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
-            console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+            
+            // Show appropriate memory info based on GPU type
+            if (specs.gpu_model_normalized === 'apple_silicon') {
+                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')} ${chalk.gray('(Unified Memory)')}`);
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow('Apple Silicon (Integrated)')}`);
+            } else {
+                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
+                console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+            }
             
             if (hwAnalysis) {
                 console.log(chalk.blue('│'));
