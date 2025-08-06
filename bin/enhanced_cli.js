@@ -1168,14 +1168,27 @@ program
             console.log(chalk.blue('╭' + '─'.repeat(55)));
             console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
             
-            // Show appropriate memory info based on GPU type
-            if (specs.gpu_model_normalized === 'apple_silicon') {
-                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')} ${chalk.gray('(Unified Memory)')}`);
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow('Apple Silicon (Integrated)')}`);
+            // Show appropriate memory info based on platform and GPU type
+            const platform = process.platform;
+            const isAppleSilicon = specs.gpu_model_normalized === 'apple_silicon' || 
+                                 (platform === 'darwin' && specs.gpu_model_normalized?.toLowerCase().includes('apple'));
+            const hasDedicatedGPU = specs.gpu_vram_gb > 0;
+            
+            console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
+            
+            if (isAppleSilicon) {
+                // macOS with Apple Silicon - Unified Memory
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow('Apple Silicon')} ${chalk.gray('(Unified Memory)')}`);
+            } else if (hasDedicatedGPU) {
+                // Windows/Linux with dedicated GPU - Show VRAM
+                const gpuName = specs.gpu_model_normalized || 'Dedicated GPU';
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(gpuName)}`);
+                console.log(chalk.blue('│') + ` VRAM: ${chalk.green(specs.gpu_vram_gb?.toFixed(1) + ' GB')} ${chalk.gray('(Dedicated)')}`);
             } else {
-                console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(specs.gpu_model_normalized || 'CPU Only')}`);
-                console.log(chalk.blue('│') + ` VRAM: ${chalk.green((specs.gpu_vram_gb || 0).toFixed(1) + ' GB')}`);
+                // Integrated GPU (Intel/AMD) or CPU-only
+                const gpuName = specs.gpu_model_normalized === 'cpu_only' ? 'CPU Only' : 
+                               specs.gpu_model_normalized || 'Integrated GPU';
+                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(gpuName)} ${chalk.gray('(Integrated)')}`);
             }
             
             if (hwAnalysis) {
