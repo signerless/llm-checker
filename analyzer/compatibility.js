@@ -427,6 +427,16 @@ class CompatibilityAnalyzer {
     }
 
     getHardwareTier(hardware) {
+        // Special handling for Apple Silicon with unified memory
+        if (hardware.cpu.architecture === 'Apple Silicon' && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple')) {
+            if (hardware.memory.total >= 64) return 'ultra_high';
+            if (hardware.memory.total >= 32) return 'high';
+            if (hardware.memory.total >= 16) return 'medium';
+            if (hardware.memory.total >= 8) return 'low';
+            return 'ultra_low';
+        }
+        
+        // Traditional dedicated VRAM-based classification
         if (hardware.memory.total >= 64 && hardware.gpu.vram >= 32) return 'ultra_high';
         if (hardware.memory.total >= 32 && hardware.gpu.vram >= 16) return 'high';
         if (hardware.memory.total >= 16 && hardware.gpu.vram >= 8) return 'medium';

@@ -18,7 +18,10 @@ class OutputFormatter {
         lines.push(this.info('Architecture', hardware.cpu.architecture));
         lines.push(this.info('RAM', `${hardware.memory.total}GB total (${hardware.memory.free}GB free, ${hardware.memory.usagePercent}% used)`));
         lines.push(this.info('GPU', hardware.gpu.model || 'Not detected'));
-        lines.push(this.info('VRAM', `${hardware.gpu.vram || 'N/A'}GB${hardware.gpu.dedicated ? ' (Dedicated)' : ' (Integrated)'}`));
+        const vramDisplay = hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple') 
+            ? 'Unified Memory' 
+            : `${hardware.gpu.vram || 'N/A'}GB`;
+        lines.push(this.info('VRAM', `${vramDisplay}${hardware.gpu.dedicated ? ' (Dedicated)' : ' (Integrated)'}`));
         lines.push(this.info('OS', `${hardware.os.distro} ${hardware.os.release} (${hardware.os.arch})`));
 
         return lines.join('\n');

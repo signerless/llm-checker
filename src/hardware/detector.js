@@ -84,9 +84,19 @@ class HardwareDetector {
         const displays = graphics.displays || [];
 
 
-        const dedicatedGPU = controllers.find(gpu =>
-            gpu.vram && gpu.vram > 0 && !this.isIntegratedGPU(gpu.model)
-        );
+        const dedicatedGPU = controllers.find(gpu => {
+            const model = (gpu.model || '').toLowerCase();
+            // Check for dedicated GPU indicators - improved detection for NVIDIA RTX cards
+            const isDedicated = !this.isIntegratedGPU(gpu.model) && (
+                gpu.vram > 0 || // Has dedicated VRAM
+                model.includes('rtx') || // NVIDIA RTX series
+                model.includes('gtx') || // NVIDIA GTX series  
+                model.includes('radeon rx') || // AMD RX series
+                model.includes('tesla') || // NVIDIA Tesla
+                model.includes('quadro') // NVIDIA Quadro
+            );
+            return isDedicated;
+        });
 
         const integratedGPU = controllers.find(gpu =>
             this.isIntegratedGPU(gpu.model)
@@ -104,17 +114,46 @@ class HardwareDetector {
             };
         }
 
+        // Enhanced VRAM detection
+        let vram = primaryGPU.vram || 0;
+        
+        // For Windows, sometimes VRAM is reported in bytes instead of MB
+        if (vram > 100000) {
+            vram = Math.round(vram / (1024 * 1024)); // Convert bytes to MB
+        }
+        
+        // Convert MB to GB
+        vram = Math.round(vram / 1024);
+        
+        // If VRAM is still 0, try to estimate based on model or handle unified memory
+        if (vram === 0 && primaryGPU.model) {
+            const modelLower = primaryGPU.model.toLowerCase();
+            if (modelLower.includes('apple') || modelLower.includes('unified')) {
+                // Apple Silicon uses unified memory - return 0 to indicate this
+                vram = 0;
+            } else {
+                vram = this.estimateVRAMFromModel(primaryGPU.model);
+            }
+        }
+
         return {
             model: primaryGPU.model || 'Unknown GPU',
             vendor: primaryGPU.vendor || 'Unknown',
-            vram: Math.round((primaryGPU.vram || 0) / 1024), // MB to GB
+            vram: vram,
             vramDynamic: primaryGPU.vramDynamic || false,
             dedicated: !this.isIntegratedGPU(primaryGPU.model),
             driverVersion: primaryGPU.driverVersion || 'Unknown',
-            all: controllers.map(gpu => ({
-                model: gpu.model,
-                vram: Math.round((gpu.vram || 0) / 1024)
-            })),
+            all: controllers.map(gpu => {
+                let gpuVram = gpu.vram || 0;
+                if (gpuVram > 100000) {
+                    gpuVram = Math.round(gpuVram / (1024 * 1024));
+                }
+                return {
+                    model: gpu.model,
+                    vram: Math.round(gpuVram / 1024),
+                    vendor: gpu.vendor
+                };
+            }),
             displays: displays.length,
             score: this.calculateGPUScore(primaryGPU)
         };
@@ -147,8 +186,9 @@ class HardwareDetector {
     detectArchitecture(cpu) {
         const brand = (cpu.brand || '').toLowerCase();
         const model = (cpu.model || '').toLowerCase();
+        const manufacturer = (cpu.manufacturer || '').toLowerCase();
 
-        if (brand.includes('apple') || model.includes('m1') || model.includes('m2') || model.includes('m3')) {
+        if (manufacturer.includes('apple') || brand.includes('apple') || brand.includes('m1') || brand.includes('m2') || brand.includes('m3') || brand.includes('m4')) {
             return 'Apple Silicon';
         } else if (brand.includes('intel')) {
             return 'x86_64';
@@ -164,12 +204,47 @@ class HardwareDetector {
     isIntegratedGPU(model) {
         if (!model) return false;
         const modelLower = model.toLowerCase();
-        return modelLower.includes('intel') ||
-            modelLower.includes('amd') ||
+        return modelLower.includes('intel') && !modelLower.includes('arc') ||
+            modelLower.includes('amd') && modelLower.includes('graphics') && !modelLower.includes(' rx ') ||
             modelLower.includes('radeon') && modelLower.includes('graphics') ||
             modelLower.includes('iris') ||
             modelLower.includes('uhd') ||
-            modelLower.includes('hd graphics');
+            modelLower.includes('hd graphics') ||
+            modelLower.includes('apple');
+    }
+
+    estimateVRAMFromModel(model) {
+        if (!model) return 0;
+        const modelLower = model.toLowerCase();
+        
+        // NVIDIA RTX 40 series
+        if (modelLower.includes('rtx 4090')) return 24;
+        if (modelLower.includes('rtx 4080')) return 16;
+        if (modelLower.includes('rtx 4070 ti')) return 12;
+        if (modelLower.includes('rtx 4070')) return 12;
+        if (modelLower.includes('rtx 4060 ti')) return 16;
+        if (modelLower.includes('rtx 4060')) return 8;
+        
+        // NVIDIA RTX 30 series
+        if (modelLower.includes('rtx 3090')) return 24;
+        if (modelLower.includes('rtx 3080 ti')) return 12;
+        if (modelLower.includes('rtx 3080')) return 10;
+        if (modelLower.includes('rtx 3070')) return 8;
+        if (modelLower.includes('rtx 3060 ti')) return 8;
+        if (modelLower.includes('rtx 3060')) return 12;
+        
+        // AMD RX 7000 series
+        if (modelLower.includes('rx 7900')) return 24;
+        if (modelLower.includes('rx 7800')) return 16;
+        if (modelLower.includes('rx 7700')) return 12;
+        if (modelLower.includes('rx 7600')) return 8;
+        
+        // Generic estimates
+        if (modelLower.includes('rtx')) return 8; // Default for RTX
+        if (modelLower.includes('gtx')) return 4; // Default for GTX
+        if (modelLower.includes('rx ')) return 8; // Default for AMD RX
+        
+        return 0; // Unknown or integrated
     }
 
     calculateCPUScore(cpu) {
