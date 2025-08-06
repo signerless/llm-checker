@@ -334,6 +334,27 @@ A: Yes, with automatic detection for NVIDIA RTX, AMD, Intel Arc, and Apple Silic
 
 ---
 
+## 📚 **Changelog**
+
+### **v2.1.2** - GPU Detection Fix
+- 🔧 **Fixed NVIDIA RTX card detection** - Properly detects RTX 4080, RTX 3060, RTX 3090 and other RTX/GTX models
+- 🖥️ **Improved VRAM detection** - Handles different unit formats (bytes vs MB) and provides accurate VRAM amounts
+- 🍎 **Enhanced Apple Silicon support** - Shows "Unified Memory" instead of "N/AGB" for Apple Silicon
+- ⚖️ **Fixed hardware tier classification** - Properly classifies unified memory systems based on total RAM
+- 📊 **Added comprehensive VRAM estimation** - Fallback estimates for popular GPU models when detection fails
+- 🐛 **Resolved "cpu_only" false positives** - Better dedicated GPU identification logic
+
+### **v2.1.1** - Ollama Detection Fix
+- 🔧 Enhanced Ollama installation detection and setup guidance
+
+### **v2.1.0** - Intelligent Model Selection
+- 🧠 Complete AI-powered model selection system
+- 📊 Advanced 5-factor mathematical scoring algorithm
+- 🎯 Hardware-aware recommendations with tier classification
+- 📚 Comprehensive documentation and usage guides
+
+---
+
 ## 📄 **License**
 
 MIT License - see [LICENSE](LICENSE) for details.
