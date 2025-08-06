@@ -336,6 +336,12 @@ A: Yes, with automatic detection for NVIDIA RTX, AMD, Intel Arc, and Apple Silic
 
 ## 📚 **Changelog**
 
+### **v2.1.3** - Ollama Connection & Apple Silicon Display Fix  
+- 🔧 **Fixed Ollama connection timeout issues** - Resolved "Failed to get Ollama models" error with node-fetch v2
+- 🍎 **Improved Apple Silicon display** - Shows "Unified Memory" instead of confusing "VRAM: 0.0 GB" 
+- 📺 **Better hardware info display** - More accurate and user-friendly hardware descriptions
+- 🔗 **Enhanced timeout handling** - Proper AbortController usage for API calls
+
 ### **v2.1.2** - GPU Detection Fix
 - 🔧 **Fixed NVIDIA RTX card detection** - Properly detects RTX 4080, RTX 3060, RTX 3090 and other RTX/GTX models
 - 🖥️ **Improved VRAM detection** - Handles different unit formats (bytes vs MB) and provides accurate VRAM amounts
