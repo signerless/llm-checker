@@ -1123,8 +1123,8 @@ program
                 cpu_cores: systemInfo.cpu?.cores || 4,
                 cpu_freq_max: systemInfo.cpu?.speed || 3.0,
                 total_ram_gb: systemInfo.memory?.total || 8,
-                gpu_vram_gb: systemInfo.graphics?.vram ? systemInfo.graphics.vram / 1024 : 0,
-                gpu_model_normalized: systemInfo.graphics?.model || 
+                gpu_vram_gb: systemInfo.gpu?.vram || 0,
+                gpu_model_normalized: systemInfo.gpu?.model || 
                     (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
             };
             
@@ -1305,8 +1305,8 @@ program
                 cpu_cores: systemInfo.cpu?.cores || 4,
                 cpu_freq_max: systemInfo.cpu?.speed || 3.0,
                 total_ram_gb: systemInfo.memory?.total || 8,
-                gpu_vram_gb: systemInfo.graphics?.vram ? systemInfo.graphics.vram / 1024 : 0,
-                gpu_model_normalized: systemInfo.graphics?.model || 
+                gpu_vram_gb: systemInfo.gpu?.vram || 0,
+                gpu_model_normalized: systemInfo.gpu?.model || 
                     (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
             };
             
