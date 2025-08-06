@@ -336,6 +336,14 @@ A: Yes, with automatic detection for NVIDIA RTX, AMD, Intel Arc, and Apple Silic
 
 ## 📚 **Changelog**
 
+### **v2.1.4** - Critical GPU Detection & Platform-Aware Display Fix
+- 🚨 **CRITICAL FIX: Resolved "cpu_only" false detection** - RTX cards now properly detected in check command
+- 🖥️ **Platform-aware hardware display** - Shows appropriate info for Windows/macOS/Linux
+- 🍎 **macOS**: Apple Silicon with Unified Memory (no confusing VRAM)
+- 🪟 **Windows/Linux**: Dedicated GPU with VRAM when available  
+- 🔧 **Integrated GPU**: Clear labeling without misleading info
+- 📊 **Fixes GitHub issues** from users with RTX 4080, RTX 3060, RTX 3090
+
 ### **v2.1.3** - Ollama Connection & Apple Silicon Display Fix  
 - 🔧 **Fixed Ollama connection timeout issues** - Resolved "Failed to get Ollama models" error with node-fetch v2
 - 🍎 **Improved Apple Silicon display** - Shows "Unified Memory" instead of confusing "VRAM: 0.0 GB" 
