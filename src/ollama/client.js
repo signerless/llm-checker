@@ -15,10 +15,15 @@ class OllamaClient {
         }
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
             const response = await fetch(`${this.baseURL}/api/version`, {
-                timeout: 5000,
+                signal: controller.signal,
                 headers: { 'Content-Type': 'application/json' }
             });
+            
+            clearTimeout(timeoutId);
 
             if (response.ok) {
                 const data = await response.json();
@@ -51,13 +56,18 @@ class OllamaClient {
         }
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+            
             const response = await fetch(`${this.baseURL}/api/tags`, {
-                timeout: 15000,
+                signal: controller.signal,
                 headers: { 
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 }
             });
+            
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errorText = await response.text();
