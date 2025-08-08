@@ -13,7 +13,7 @@ const program = new Command();
 program
     .name('llm-checker')
     .description('Check which LLM models your computer can run')
-    .version('2.1.0');
+    .version(require('../package.json').version);
 
 const logger = getLogger({ console: false });
 
