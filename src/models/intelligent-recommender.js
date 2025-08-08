@@ -3,7 +3,7 @@ class IntelligentModelRecommender {
         this.categories = {
             coding: {
                 weight: 1.0,
-                keywords: ['code', 'programming', 'development', 'coder', 'deepseek', 'codellama'],
+                keywords: ['code', 'programming', 'development', 'coder', 'deepseek-coder', 'codellama', 'qwen2.5-coder', 'starcoder'],
                 preferredSizes: ['1b', '3b', '7b', '13b'],
                 hardwareMinimums: { ram: 4, vram: 2, cpu_cores: 4 }
             },
@@ -74,23 +74,27 @@ class IntelligentModelRecommender {
     }
 
     calculateHardwareTier(hardware) {
-        const { memory, gpu, cpu } = hardware;
+        const { memory, cpu } = hardware;
         const ram = memory.total;
-        const vram = gpu.vram || 0;
         const cores = cpu.cores;
-
-        // Algoritmo matemático avanzado para determinar tier
-        const ramScore = Math.min(100, (ram / 64) * 100);
-        const vramScore = Math.min(100, (vram / 32) * 100);
-        const cpuScore = Math.min(100, (cores / 16) * 100);
-
-        // Peso basado en importancia para LLMs
-        const totalScore = (ramScore * 0.5) + (cpuScore * 0.3) + (vramScore * 0.2);
-
-        if (totalScore >= 80) return 'ultra_high';
-        if (totalScore >= 60) return 'high';
-        if (totalScore >= 40) return 'medium';
-        if (totalScore >= 20) return 'low';
+        
+        // Seguir exactamente la clasificación oficial documentada:
+        // EXTREME (64+ GB RAM, 16+ cores) - Can run 70B+ models
+        // VERY HIGH (32-64 GB RAM, 12+ cores) - Optimal for 13B-30B models  
+        // HIGH (16-32 GB RAM, 8-12 cores) - Perfect for 7B-13B models
+        // MEDIUM (8-16 GB RAM, 4-8 cores) - Suitable for 3B-7B models
+        // LOW (4-8 GB RAM, 2-4 cores) - Limited to 1B-3B models
+        
+        if (ram >= 64 && cores >= 16) return 'extreme';
+        if (ram >= 32 && cores >= 12) return 'very_high';
+        if (ram >= 16 && cores >= 8) return 'high';
+        if (ram >= 8 && cores >= 4) return 'medium';
+        if (ram >= 4 && cores >= 2) return 'low';
+        
+        // Casos especiales: cumplir uno de los dos criterios principales
+        if (ram >= 16 && ram < 32 && cores >= 12) return 'high';  // HIGH tier con cores altos
+        if (ram >= 32 && ram < 64 && cores >= 8) return 'very_high'; // VERY HIGH con cores medios
+        
         return 'ultra_low';
     }
 
@@ -99,14 +103,35 @@ class IntelligentModelRecommender {
         if (!categoryInfo) return [];
 
         return allModels.filter(model => {
-            // Filtrar por palabras clave en nombre, descripción o use_cases
+            // PRIORIDAD 1: Coincidencia exacta de categoría
+            if (model.category === category) {
+                return true;
+            }
+            
+            // PRIORIDAD 2: Evitar conflictos - no incluir modelos especializados en otras categorías
+            if (category === 'coding' && 
+                (model.model_identifier.includes('deepseek-r1') || 
+                 model.category === 'reasoning' ||
+                 model.category === 'multimodal')) {
+                return false;
+            }
+            
+            // También evitar que modelos de coding aparezcan en otras categorías especializadas
+            if (category === 'multimodal' && model.category === 'coding') {
+                return false;
+            }
+            
+            if (category === 'reasoning' && model.category === 'coding') {
+                return false;
+            }
+            
+            // PRIORIDAD 3: Filtrar por palabras clave en nombre, descripción o use_cases
             const searchText = [
                 model.model_name,
                 model.description,
                 model.detailed_description,
                 ...(model.use_cases || []),
-                model.model_identifier,
-                model.category
+                model.model_identifier
             ].join(' ').toLowerCase();
 
             const matchesKeywords = categoryInfo.keywords.some(keyword => 
@@ -127,21 +152,43 @@ class IntelligentModelRecommender {
         return models.map(model => {
             let score = 50; // Base score
             
-            // Factor 1: Compatibilidad con hardware (40%)
+            // Ajustar pesos según la categoría para priorizar eficiencia del tamaño de modelo
+            let hardwareWeight = 0.4;
+            let specializationWeight = 0.3;
+            let popularityWeight = 0.15;
+            let efficiencyWeight = 0.15;
+            
+            // Para categorías técnicas (coding, reasoning, multimodal), dar más peso a la eficiencia
+            if (['coding', 'reasoning', 'multimodal'].includes(category)) {
+                hardwareWeight = 0.35;
+                specializationWeight = 0.25;
+                popularityWeight = 0.1;
+                efficiencyWeight = 0.3; // Incrementar significativamente para categorías técnicas
+            }
+            
+            // Para categorías conversacionales, dar más peso a especialización y popularidad
+            else if (['talking', 'creative', 'general'].includes(category)) {
+                hardwareWeight = 0.3;
+                specializationWeight = 0.35;
+                popularityWeight = 0.2;
+                efficiencyWeight = 0.15; // Mantener peso normal para conversación
+            }
+
+            // Factor 1: Compatibilidad con hardware
             const hardwareScore = this.calculateHardwareCompatibility(model, hardware);
-            score += hardwareScore * 0.4;
+            score += hardwareScore * hardwareWeight;
 
-            // Factor 2: Especialización para la categoría (30%)
+            // Factor 2: Especialización para la categoría
             const specializationScore = this.calculateSpecializationScore(model, category);
-            score += specializationScore * 0.3;
+            score += specializationScore * specializationWeight;
 
-            // Factor 3: Popularidad y confiabilidad (20%)
+            // Factor 3: Popularidad y confiabilidad
             const popularityScore = this.calculatePopularityScore(model);
-            score += popularityScore * 0.2;
+            score += popularityScore * popularityWeight;
 
-            // Factor 4: Eficiencia (tamaño vs rendimiento) (10%)
+            // Factor 4: Eficiencia (tamaño vs rendimiento) - CRÍTICO para coding
             const efficiencyScore = this.calculateEfficiencyScore(model, hardware);
-            score += efficiencyScore * 0.1;
+            score += efficiencyScore * efficiencyWeight;
 
             // Penalizaciones
             score = this.applyPenalties(score, model, hardware);
@@ -232,26 +279,60 @@ class IntelligentModelRecommender {
         const modelSize = this.extractModelSizeGB(model);
         const hardwareTier = this.calculateHardwareTier(hardware);
         
-        // Modelos más pequeños son más eficientes para hardware limitado
+        // Seguir exactamente la clasificación de hardware documentada:
+        // EXTREME (64+ GB RAM, 16+ cores) - Can run 70B+ models
+        // VERY HIGH (32-64 GB RAM, 12+ cores) - Optimal for 13B-30B models  
+        // HIGH (16-32 GB RAM, 8-12 cores) - Perfect for 7B-13B models
+        // MEDIUM (8-16 GB RAM, 4-8 cores) - Suitable for 3B-7B models
+        // LOW (4-8 GB RAM, 2-4 cores) - Limited to 1B-3B models
+        
         if (hardwareTier === 'ultra_low' || hardwareTier === 'low') {
-            if (modelSize <= 1) return 100;
-            if (modelSize <= 3) return 80;
+            // LOW: 1B-3B models optimal
+            if (modelSize >= 1 && modelSize <= 3) return 100;
+            if (modelSize <= 1) return 90;
             if (modelSize <= 7) return 60;
             return 20;
         }
         
-        // Para hardware potente, balance entre tamaño y capacidad
-        if (hardwareTier === 'high' || hardwareTier === 'ultra_high') {
+        if (hardwareTier === 'medium') {
+            // MEDIUM: 3B-7B models optimal
+            if (modelSize >= 3 && modelSize <= 7) return 100;
+            if (modelSize <= 3) return 85;
+            if (modelSize <= 13) return 70;
+            return 40;
+        }
+        
+        if (hardwareTier === 'high') {
+            // HIGH: 7B-13B models PERFECT según documentación
+            if (modelSize >= 7 && modelSize <= 13) return 100;
+            if (modelSize >= 3 && modelSize <= 7) return 90;
+            if (modelSize >= 13 && modelSize <= 20) return 75;
+            if (modelSize <= 3) return 80;
+            // Penalización severa para modelos gigantes (>50B) en HIGH tier
+            if (modelSize > 50) return 20;
+            return 50; // Penalizar modelos >20B para HIGH tier
+        }
+        
+        if (hardwareTier === 'very_high') {
+            // VERY HIGH: 13B-30B models optimal
             if (modelSize >= 13 && modelSize <= 30) return 100;
             if (modelSize >= 7 && modelSize <= 13) return 90;
-            if (modelSize >= 3 && modelSize <= 7) return 80;
+            if (modelSize >= 30 && modelSize <= 50) return 80;
+            if (modelSize <= 7) return 75;
             return 60;
         }
         
-        // Hardware medio
-        if (modelSize >= 3 && modelSize <= 13) return 100;
-        if (modelSize <= 3) return 80;
-        return 40;
+        if (hardwareTier === 'extreme') {
+            // EXTREME: 70B+ models optimal
+            if (modelSize >= 70) return 100;
+            if (modelSize >= 30 && modelSize <= 70) return 90;
+            if (modelSize >= 13 && modelSize <= 30) return 85;
+            if (modelSize <= 13) return 70;
+            return 80;
+        }
+        
+        // Default fallback
+        return 60;
     }
 
     applyPenalties(score, model, hardware) {
@@ -389,7 +470,35 @@ class IntelligentModelRecommender {
 
                 summary.quick_commands.push(`ollama pull ${bestModel.model_identifier}`);
 
-                if (bestModel.categoryScore > bestOverallScore) {
+                // Para el "best overall", priorizar categorías versátiles en este orden:
+                // 1. General (más versátil)
+                // 2. Coding (muy útil)
+                // 3. Talking (conversacional)
+                // 4. Reading (análisis)
+                // Evitar categorías especializadas como multimodal, creative, reasoning
+                const generalCategories = ['general', 'coding', 'talking', 'reading'];
+                const isGeneralCategory = generalCategories.includes(category);
+                const categoryPriority = {
+                    'general': 4,
+                    'coding': 3,
+                    'talking': 2, 
+                    'reading': 1
+                };
+                
+                const currentPriority = categoryPriority[category] || 0;
+                const bestModelCategory = bestOverallModel ? 
+                    Object.keys(recommendations).find(cat => 
+                        recommendations[cat].bestModels.includes(bestOverallModel)
+                    ) : null;
+                const bestModelPriority = categoryPriority[bestModelCategory] || 0;
+
+                // Seleccionar como best overall si:
+                // 1. Es de categoría general/versátil Y (score mayor O (score igual Y mayor prioridad))
+                // 2. O si no tenemos best overall aún
+                if (isGeneralCategory && 
+                    (bestModel.categoryScore > bestOverallScore || 
+                     (bestModel.categoryScore === bestOverallScore && currentPriority > bestModelPriority) ||
+                     !bestOverallModel)) {
                     bestOverallScore = bestModel.categoryScore;
                     bestOverallModel = bestModel;
                 }

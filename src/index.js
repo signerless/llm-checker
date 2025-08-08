@@ -1,6 +1,6 @@
 const HardwareDetector = require('./hardware/detector');
 const ExpandedModelsDatabase = require('./models/expanded_database');
-const IntelligentModelRecommender = require('./models/intelligent-recommender');
+const EnhancedModelSelector = require('./models/enhanced-selector');
 const CompatibilityAnalyzer = require('../analyzer/compatibility');
 const PerformanceAnalyzer = require('../analyzer/performance');
 const OllamaClient = require('./ollama/client');
@@ -11,7 +11,7 @@ class LLMChecker {
     constructor() {
         this.hardwareDetector = new HardwareDetector();
         this.expandedModelsDatabase = new ExpandedModelsDatabase();
-        this.intelligentRecommender = new IntelligentModelRecommender();
+        this.intelligentRecommender = new EnhancedModelSelector();
         this.ollamaScraper = new OllamaNativeScraper();
         this.compatibilityAnalyzer = new CompatibilityAnalyzer();
         this.performanceAnalyzer = new PerformanceAnalyzer();
@@ -39,36 +39,8 @@ class LLMChecker {
                 models = models.filter(model => model.type === 'local');
             }
 
-            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, models);
-
-            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
-                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
-                    if (ollamaModel.matchedModel && ollamaModel.canRun) {
-                        const enhancedModel = {
-                            ...ollamaModel.matchedModel,
-                            score: ollamaModel.compatibilityScore,
-                            issues: ollamaModel.issues || [],
-                            notes: [...(ollamaModel.notes || []), '📦 Installed in Ollama'],
-                            performanceEstimate: ollamaModel.performanceEstimate,
-                            isOllamaInstalled: true,
-                            ollamaInfo: {
-                                localName: ollamaModel.name,
-                                isRunning: ollamaModel.isRunning,
-                                cloudInfo: ollamaModel.cloudInfo
-                            }
-                        };
-
-                        if (ollamaModel.compatibilityScore >= 75) {
-                            compatibility.compatible.push(enhancedModel);
-                        } else if (ollamaModel.compatibilityScore >= 60) {
-                            compatibility.marginal.push(enhancedModel);
-                        }
-                    }
-                }
-
-                compatibility.compatible.sort((a, b) => b.score - a.score);
-                compatibility.marginal.sort((a, b) => b.score - a.score);
-            }
+            // NUEVO: Usar heurística matemática para combinar base de datos + modelos locales
+            const compatibility = await this.analyzeWithMathematicalHeuristics(hardware, models, ollamaIntegration);
 
             const enrichedResults = await this.enrichWithPerformanceData(hardware, compatibility);
 
@@ -196,6 +168,285 @@ class LLMChecker {
         }
 
         return integration;
+    }
+
+    async analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration) {
+        this.logger.info('Using mathematical heuristics combining database + local models');
+        
+        try {
+            // 1. Obtener TODOS los modelos de la base de datos de Ollama
+            const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
+            const allOllamaModels = ollamaData.models || [];
+            this.logger.info(`Found ${allOllamaModels.length} models in Ollama database`);
+
+            // 2. Crear una lista combinada de todos los modelos únicos
+            const allModelsMap = new Map();
+            
+            // Agregar modelos estáticos
+            staticModels.forEach(model => {
+                allModelsMap.set(model.name, {
+                    ...model,
+                    source: 'static_database',
+                    isOllamaInstalled: false
+                });
+            });
+            
+            // Agregar modelos de Ollama (con prioridad si ya existen)
+            allOllamaModels.forEach(ollamaModel => {
+                const modelKey = this.findBestMatchingKey(ollamaModel, allModelsMap);
+                
+                if (modelKey) {
+                    // Mejorar modelo existente con datos de Ollama
+                    const existing = allModelsMap.get(modelKey);
+                    allModelsMap.set(modelKey, {
+                        ...existing,
+                        ...this.createEnhancedModelFromOllama(ollamaModel, existing),
+                        source: 'enhanced_with_ollama'
+                    });
+                } else {
+                    // Crear nuevo modelo desde datos de Ollama
+                    const newModel = this.createModelFromOllamaData(ollamaModel);
+                    allModelsMap.set(newModel.name, {
+                        ...newModel,
+                        source: 'ollama_database'
+                    });
+                }
+            });
+            
+            const allUniqueModels = Array.from(allModelsMap.values());
+            this.logger.info(`Combined total: ${allUniqueModels.length} unique models`);
+
+            // 3. Usar el selector inteligente con TODOS los modelos
+            const IntelligentModelSelector = require('./ai/intelligent-selector');
+            const intelligentSelector = new IntelligentModelSelector();
+            
+            // Convertir hardware al formato esperado
+            const hardwareSpec = {
+                total_ram_gb: hardware.memory.total,
+                cpu_cores: hardware.cpu.cores,
+                gpu_vram_gb: hardware.gpu.vram || 0,
+                cpu_freq_max: hardware.cpu.speed || 3.0,
+                gpu_model_normalized: hardware.gpu.model || 
+                    (hardware.cpu.architecture === 'Apple Silicon' ? 'apple_silicon' : 'cpu_only')
+            };
+            
+            // Crear lista de identificadores para el selector
+            const modelIdentifiers = allUniqueModels.map(m => m.ollamaId || m.name);
+            
+            // Ejecutar análisis inteligente
+            const intelligentResult = intelligentSelector.selectBestModels(
+                hardwareSpec,
+                modelIdentifiers,
+                'general',
+                Math.min(50, allUniqueModels.length) // Evaluar más modelos
+            );
+            
+            this.logger.info(`Intelligent analysis completed: ${intelligentResult.recommendations.length} recommendations`);
+
+            // 4. Clasificar resultados según puntuación
+            const compatibility = {
+                compatible: [],
+                marginal: [],
+                incompatible: []
+            };
+            
+            // Mapear resultados inteligentes a modelos completos
+            intelligentResult.recommendations.forEach(rec => {
+                const fullModel = allUniqueModels.find(m => 
+                    (m.ollamaId && m.ollamaId === rec.modelId) || 
+                    m.name === rec.modelId ||
+                    m.name.toLowerCase().includes(rec.modelId.toLowerCase())
+                );
+                
+                if (fullModel) {
+                    const enhancedModel = {
+                        ...fullModel,
+                        score: rec.score,
+                        confidence: rec.confidence,
+                        reasoning: rec.reasoning,
+                        mathAnalysis: {
+                            hardwareScore: rec.hardwareScore,
+                            specializationScore: rec.specializationScore,
+                            popularityScore: rec.popularityScore,
+                            efficiencyScore: rec.efficiencyScore
+                        },
+                        isOllamaInstalled: this.checkIfModelInstalled(fullModel, ollamaIntegration),
+                        ollamaInfo: this.getOllamaModelInfo(fullModel, ollamaIntegration)
+                    };
+                    
+                    if (rec.score >= 75) {
+                        compatibility.compatible.push(enhancedModel);
+                    } else if (rec.score >= 60) {
+                        compatibility.marginal.push(enhancedModel);
+                    } else {
+                        compatibility.incompatible.push(enhancedModel);
+                    }
+                }
+            });
+            
+            // Agregar modelos sin puntuación alta a incompatibles
+            allUniqueModels.forEach(model => {
+                const alreadyIncluded = [...compatibility.compatible, ...compatibility.marginal, ...compatibility.incompatible]
+                    .some(m => m.name === model.name);
+                    
+                if (!alreadyIncluded) {
+                    compatibility.incompatible.push({
+                        ...model,
+                        score: 0,
+                        issues: ['Low compatibility score with current hardware'],
+                        mathAnalysis: { reason: 'Below threshold in mathematical analysis' }
+                    });
+                }
+            });
+            
+            this.logger.info(`Mathematical heuristic results: ${compatibility.compatible.length} compatible, ${compatibility.marginal.length} marginal, ${compatibility.incompatible.length} incompatible`);
+            
+            return compatibility;
+            
+        } catch (error) {
+            this.logger.error('Mathematical heuristic analysis failed, using fallback', { error: error.message });
+            
+            // Fallback al método original
+            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, staticModels);
+
+            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
+                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
+                    if (ollamaModel.matchedModel && ollamaModel.canRun) {
+                        const enhancedModel = {
+                            ...ollamaModel.matchedModel,
+                            score: ollamaModel.compatibilityScore,
+                            issues: ollamaModel.issues || [],
+                            notes: [...(ollamaModel.notes || []), '📦 Installed in Ollama'],
+                            performanceEstimate: ollamaModel.performanceEstimate,
+                            isOllamaInstalled: true,
+                            ollamaInfo: {
+                                localName: ollamaModel.name,
+                                isRunning: ollamaModel.isRunning,
+                                cloudInfo: ollamaModel.cloudInfo
+                            }
+                        };
+
+                        if (ollamaModel.compatibilityScore >= 75) {
+                            compatibility.compatible.push(enhancedModel);
+                        } else if (ollamaModel.compatibilityScore >= 60) {
+                            compatibility.marginal.push(enhancedModel);
+                        }
+                    }
+                }
+
+                compatibility.compatible.sort((a, b) => b.score - a.score);
+                compatibility.marginal.sort((a, b) => b.score - a.score);
+            }
+            
+            return compatibility;
+        }
+    }
+
+    findBestMatchingKey(ollamaModel, modelsMap) {
+        const ollamaName = ollamaModel.model_name.toLowerCase();
+        const ollamaId = ollamaModel.model_identifier.toLowerCase();
+        
+        // Buscar coincidencia exacta por nombre
+        for (const [key, model] of modelsMap) {
+            if (key.toLowerCase() === ollamaName || 
+                model.name.toLowerCase() === ollamaName) {
+                return key;
+            }
+        }
+        
+        // Buscar por palabras clave del identificador
+        const keywords = ollamaId.split(/[:\-_]/);
+        for (const [key, model] of modelsMap) {
+            const modelName = model.name.toLowerCase();
+            if (keywords.some(keyword => 
+                keyword.length > 2 && modelName.includes(keyword)
+            )) {
+                return key;
+            }
+        }
+        
+        return null;
+    }
+    
+    createEnhancedModelFromOllama(ollamaModel, existingModel) {
+        return {
+            ...existingModel,
+            ollamaId: ollamaModel.model_identifier,
+            pulls: ollamaModel.pulls,
+            lastUpdated: ollamaModel.last_updated,
+            description: ollamaModel.description || existingModel.description,
+            ollamaAvailable: true,
+            installation: {
+                ...existingModel.installation,
+                ollama: `ollama pull ${ollamaModel.model_identifier}`
+            }
+        };
+    }
+    
+    createModelFromOllamaData(ollamaModel) {
+        const sizeMatch = ollamaModel.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+        const size = sizeMatch ? sizeMatch[1] + (sizeMatch[0].slice(-1).toUpperCase()) : 'Unknown';
+        const sizeNum = sizeMatch ? parseFloat(sizeMatch[1]) : 1;
+        
+        let category = 'medium';
+        if (sizeNum < 1) category = 'ultra_small';
+        else if (sizeNum <= 4) category = 'small';
+        else if (sizeNum <= 15) category = 'medium';
+        else category = 'large';
+        
+        let specialization = 'general';
+        const id = ollamaModel.model_identifier.toLowerCase();
+        if (id.includes('code')) specialization = 'code';
+        else if (id.includes('embed')) specialization = 'embeddings';
+        
+        return {
+            name: ollamaModel.model_name,
+            ollamaId: ollamaModel.model_identifier,
+            size: size,
+            type: 'local',
+            category: category,
+            specialization: specialization,
+            frameworks: ['ollama'],
+            requirements: {
+                ram: Math.ceil(sizeNum * 0.6) || 2,
+                vram: Math.ceil(sizeNum * 0.4) || 0,
+                cpu_cores: Math.min(8, Math.max(2, Math.ceil(sizeNum / 2))),
+                storage: Math.ceil(sizeNum * 0.7) || 1
+            },
+            installation: {
+                ollama: `ollama pull ${ollamaModel.model_identifier}`,
+                description: ollamaModel.description || 'Available in Ollama library'
+            },
+            description: ollamaModel.description || `${ollamaModel.model_name} from Ollama`,
+            pulls: ollamaModel.pulls,
+            lastUpdated: ollamaModel.last_updated,
+            year: 2024,
+            ollamaAvailable: true
+        };
+    }
+    
+    checkIfModelInstalled(model, ollamaIntegration) {
+        if (!ollamaIntegration.compatibleOllamaModels) return false;
+        
+        return ollamaIntegration.compatibleOllamaModels.some(installed => {
+            return installed.name.toLowerCase().includes(model.ollamaId?.toLowerCase() || model.name.toLowerCase()) ||
+                   (model.ollamaId?.toLowerCase() || model.name.toLowerCase()).includes(installed.name.toLowerCase());
+        });
+    }
+    
+    getOllamaModelInfo(model, ollamaIntegration) {
+        if (!ollamaIntegration.compatibleOllamaModels) return null;
+        
+        const installedModel = ollamaIntegration.compatibleOllamaModels.find(installed => {
+            return installed.name.toLowerCase().includes(model.ollamaId?.toLowerCase() || model.name.toLowerCase()) ||
+                   (model.ollamaId?.toLowerCase() || model.name.toLowerCase()).includes(installed.name.toLowerCase());
+        });
+        
+        return installedModel ? {
+            localName: installedModel.name,
+            isRunning: installedModel.isRunning,
+            cloudInfo: installedModel.cloudInfo
+        } : null;
     }
 
     async processFallbackModels(localModels, runningModels, availableModels, hardware, integration) {
@@ -545,10 +796,27 @@ class LLMChecker {
     }
 
     getHardwareTier(hardware) {
-        if (hardware.memory.total >= 64 && hardware.gpu.vram >= 32) return 'ultra_high';
-        if (hardware.memory.total >= 32 && hardware.gpu.vram >= 16) return 'high';
-        if (hardware.memory.total >= 16 && hardware.gpu.vram >= 8) return 'medium';
-        if (hardware.memory.total >= 8) return 'low';
+        const ram = hardware.memory.total;
+        const cores = hardware.cpu.cores;
+        
+        // Seguir exactamente la clasificación oficial documentada:
+        // EXTREME (64+ GB RAM, 16+ cores) - Can run 70B+ models
+        // VERY HIGH (32-64 GB RAM, 12+ cores) - Optimal for 13B-30B models  
+        // HIGH (16-32 GB RAM, 8-12 cores) - Perfect for 7B-13B models
+        // MEDIUM (8-16 GB RAM, 4-8 cores) - Suitable for 3B-7B models
+        // LOW (4-8 GB RAM, 2-4 cores) - Limited to 1B-3B models
+        
+        if (ram >= 64 && cores >= 16) return 'extreme';
+        if (ram >= 32 && cores >= 12) return 'very_high';    // Tu caso: 24GB < 32GB, pero 12 cores ≥ 12
+        if (ram >= 16 && cores >= 8) return 'high';          // Criteria: 16-32GB RAM, 8-12 cores
+        if (ram >= 8 && cores >= 4) return 'medium';         // Criteria: 8-16GB RAM, 4-8 cores
+        if (ram >= 4 && cores >= 2) return 'low';            // Criteria: 4-8GB RAM, 2-4 cores
+        
+        // Caso especial: cumplir uno de los dos criterios principales
+        // Tu M4 Pro: 24GB RAM (16-32 range) + 12 cores (≥12) = HIGH tier
+        if (ram >= 16 && ram < 32 && cores >= 12) return 'high';  // HIGH tier pero con cores altos
+        if (ram >= 32 && ram < 64 && cores >= 8) return 'very_high'; // VERY HIGH con cores medios
+        
         return 'ultra_low';
     }
 
@@ -1034,7 +1302,7 @@ class LLMChecker {
             }
 
             // Generar recomendaciones inteligentes
-            const recommendations = this.intelligentRecommender.getBestModelsForHardware(hardware, allModels);
+            const recommendations = await this.intelligentRecommender.getBestModelsForHardware(hardware, allModels);
             const summary = this.intelligentRecommender.generateRecommendationSummary(recommendations, hardware);
 
             this.logger.info(`Generated recommendations for ${Object.keys(recommendations).length} categories`);

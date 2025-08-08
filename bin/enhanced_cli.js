@@ -153,6 +153,85 @@ function formatSize(size) {
     return size;
 }
 
+// Helper function to calculate model compatibility score
+function calculateModelCompatibilityScore(model, hardware) {
+    let score = 50; // Base score
+    
+    // Estimar tamaño del modelo
+    const sizeMatch = model.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+    let modelSizeB = 1; // Default 1B
+    
+    if (sizeMatch) {
+        const num = parseFloat(sizeMatch[1]);
+        const unit = sizeMatch[0].slice(-1).toLowerCase();
+        modelSizeB = unit === 'm' ? num / 1000 : num;
+    }
+    
+    // Calcular requerimientos estimados
+    const estimatedRAM = modelSizeB * 1.2; // 1.2x el tamaño del modelo
+    const ramRatio = hardware.memory.total / estimatedRAM;
+    
+    // Puntuación por compatibilidad de RAM (40% del score)
+    if (ramRatio >= 3) score += 40;
+    else if (ramRatio >= 2) score += 30;
+    else if (ramRatio >= 1.5) score += 20;
+    else if (ramRatio >= 1.2) score += 10;
+    else if (ramRatio >= 1) score += 5;
+    else score -= 20; // Penalización por RAM insuficiente
+    
+    // Puntuación por tamaño del modelo (30% del score)
+    if (modelSizeB <= 1) score += 30; // Modelos pequeños funcionan en cualquier lado
+    else if (modelSizeB <= 3) score += 25;
+    else if (modelSizeB <= 7) score += 20;
+    else if (modelSizeB <= 13) score += 15;
+    else if (modelSizeB <= 30) score += 10;
+    else score -= 10; // Modelos muy grandes
+    
+    // Puntuación por CPU cores (20% del score)
+    if (hardware.cpu.cores >= 12) score += 20;
+    else if (hardware.cpu.cores >= 8) score += 15;
+    else if (hardware.cpu.cores >= 6) score += 10;
+    else if (hardware.cpu.cores >= 4) score += 5;
+    
+    // Bonus por popularidad (10% del score)
+    const pulls = model.pulls || 0;
+    if (pulls > 1000000) score += 10;
+    else if (pulls > 100000) score += 7;
+    else if (pulls > 10000) score += 5;
+    else if (pulls > 1000) score += 3;
+    
+    // Bonus especial para Apple Silicon
+    if (hardware.cpu.architecture === 'Apple Silicon') {
+        score += 5;
+        // Bonus extra para modelos optimizados
+        const modelName = model.model_identifier.toLowerCase();
+        if (modelName.includes('llama') || modelName.includes('mistral') || 
+            modelName.includes('phi') || modelName.includes('gemma')) {
+            score += 3;
+        }
+    }
+    
+    return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+// Helper function to get hardware tier for display
+function getHardwareTierForDisplay(hardware) {
+    const ram = hardware.memory.total;
+    const cores = hardware.cpu.cores;
+    
+    if (ram >= 64 && cores >= 16) return 'EXTREME';
+    if (ram >= 32 && cores >= 12) return 'VERY HIGH';
+    if (ram >= 16 && cores >= 8) return 'HIGH';
+    if (ram >= 8 && cores >= 4) return 'MEDIUM';
+    if (ram >= 4 && cores >= 2) return 'LOW';
+    
+    // Casos especiales
+    if (ram >= 16 && ram < 32 && cores >= 12) return 'HIGH';
+    if (ram >= 32 && ram < 64 && cores >= 8) return 'VERY HIGH';
+    
+    return 'ULTRA LOW';
+}
+
 function formatSpeed(speed) {
     const speedMap = {
         'very_fast': 'very_fast',
@@ -195,7 +274,7 @@ function displaySystemInfo(hardware, analysis) {
     const lines = [
         `${chalk.cyan('CPU:')} ${cpuColor(hardware.cpu.brand)} ${chalk.gray(`(${hardware.cpu.cores} cores, ${hardware.cpu.speed}GHz)`)}`,
         `${chalk.cyan('Architecture:')} ${hardware.cpu.architecture}`,
-        `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')} total ${chalk.gray(`(${hardware.memory.free}GB free)`)}`,
+        `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')}`,
         `${chalk.cyan('GPU:')} ${gpuColor(hardware.gpu.model || 'Not detected')}`,
         `${chalk.cyan('VRAM:')} ${hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple') ? 'Unified Memory' : `${hardware.gpu.vram || 'N/A'}GB`}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
     ];
@@ -366,41 +445,6 @@ function displayMarginalModels(marginal) {
     }
 }
 
-function displayIncompatibleModels(incompatible) {
-    if (incompatible.length === 0) return;
-
-    console.log('\n' + chalk.red.bold('❌ Incompatible Models (showing top 5)'));
-
-    const data = [
-        [
-            chalk.bgRed.white.bold(' Model '),
-            chalk.bgRed.white.bold(' Size '),
-            chalk.bgRed.white.bold(' Score '),
-            chalk.bgRed.white.bold(' Required RAM '),
-            chalk.bgRed.white.bold(' Reason ')
-        ]
-    ];
-
-    incompatible.slice(0, 5).forEach(model => {
-        const reason = model.issues?.[0] || 'Hardware insufficient';
-        const required = `${model.requirements?.ram || '?'}GB`;
-        const scoreColor = getScoreColor(model.score || 0);
-        const scoreDisplay = scoreColor(`${model.score || 0}/100`);
-
-        const truncatedReason = reason.length > 50 ? reason.substring(0, 22) + '...' : reason;
-
-        const row = [
-            model.name,
-            formatSize(model.size || 'Unknown'),
-            scoreDisplay,
-            required,
-            truncatedReason
-        ];
-        data.push(row);
-    });
-
-    console.log(table(data));
-}
 
 function displayStructuredRecommendations(recommendations) {
     if (!recommendations) return;
@@ -567,30 +611,134 @@ function displayModelsStats(originalCount, filteredCount, options) {
     console.log(chalk.green('╰'));
 }
 
-function displayCompactModelsList(models) {
+async function displayTopRecommended(models, categoryFilter) {
+    console.log('\n' + chalk.bgGreen.white.bold(' 🏆 TOP 3 RECOMMENDED FOR YOUR HARDWARE '));
+    
+    try {
+        // Usar la heurística matemática inteligente
+        const hardwareDetector = new (require('../src/hardware/detector.js'))();
+        const hardware = await hardwareDetector.getSystemInfo();
+        
+        const IntelligentModelRecommender = require('../src/models/intelligent-recommender.js');
+        const recommender = new IntelligentModelRecommender();
+        
+        // Filtrar modelos por la categoría específica usando el mismo criterio
+        const categoryModels = recommender.filterModelsByCategory(models, categoryFilter);
+        
+        // Aplicar scoring matemático inteligente
+        const scoredModels = recommender.scoreModelsForCategory(categoryModels, categoryFilter, hardware);
+        
+        // Ordenar por score de categoría
+        const sortedModels = scoredModels.sort((a, b) => b.categoryScore - a.categoryScore);
+        
+        // Expandir a variantes y calcular score individual para cada variante
+        const allVariants = [];
+        sortedModels.forEach(model => {
+            if (model.tags && model.tags.length > 0) {
+                model.tags.forEach(tag => {
+                    const tagSize = extractSizeFromIdentifier(tag) || 
+                                   model.main_size || 
+                                   (model.model_sizes && model.model_sizes[0]) || 
+                                   'Unknown';
+                    
+                    // Crear un modelo temporal para esta variante específica
+                    const variantModel = {
+                        ...model,
+                        model_identifier: tag,
+                        tags: [tag]
+                    };
+                    
+                    // Calcular score específico para esta variante
+                    const variantScored = recommender.scoreModelsForCategory([variantModel], categoryFilter, hardware)[0];
+                    
+                    allVariants.push({
+                        name: tag,
+                        size: tagSize,
+                        score: Math.round(variantScored.categoryScore),
+                        category: model.category || 'general',
+                        context: model.context_length || 'Unknown',
+                        input: (model.input_types && model.input_types.length > 0) ? 
+                               model.input_types.slice(0, 2).join(',') : 'text',
+                        reasoning: `Hardware: ${Math.round(variantScored.hardwareScore || 0)}/100, Specialization: ${Math.round(variantScored.specializationScore || 0)}/100, Popularity: ${Math.round(variantScored.popularityScore || 0)}/100`
+                    });
+                });
+            } else {
+                allVariants.push({
+                    name: model.model_name || model.model_identifier,
+                    size: model.main_size || 'Unknown',
+                    score: Math.round(model.categoryScore),
+                    category: model.category || 'general',
+                    context: model.context_length || 'Unknown',
+                    input: (model.input_types && model.input_types.length > 0) ? 
+                           model.input_types.slice(0, 2).join(',') : 'text',
+                    reasoning: `Hardware: ${Math.round(model.hardwareScore || 0)}/100, Specialization: ${Math.round(model.specializationScore || 0)}/100, Popularity: ${Math.round(model.popularityScore || 0)}/100`
+                });
+            }
+        });
+        
+        // Ordenar variantes por score individual y tomar los top 3
+        const sortedVariants = allVariants.sort((a, b) => b.score - a.score);
+        const top3 = sortedVariants.slice(0, 3);
+        
+        if (top3.length === 0) {
+            console.log(chalk.green('│') + chalk.yellow(' No models found for this category with current hardware'));
+            console.log(chalk.green('╰' + '─'.repeat(65)));
+            return;
+        }
+    
+        top3.forEach((variant, index) => {
+            const rankEmoji = ['🥇', '🥈', '🥉'][index];
+            const categoryColor = getCategoryColor(variant.category);
+            const scoreColor = variant.score >= 80 ? chalk.green.bold : 
+                              variant.score >= 60 ? chalk.yellow : chalk.red;
+            
+            console.log(chalk.green('│'));
+            console.log(chalk.green('│') + ` ${rankEmoji} ${chalk.cyan.bold(variant.name)}`);
+            console.log(chalk.green('│') + `    📏 Size: ${chalk.green(variant.size)} | 📊 Score: ${scoreColor(variant.score + '%')} | 🏷️ ${categoryColor(variant.category)}`);
+            console.log(chalk.green('│') + `    📦 Command: ${chalk.yellow.bold('ollama pull ' + variant.name)}`);
+            console.log(chalk.green('│') + `    💡 ${chalk.gray(variant.reasoning)}`);
+        });
+        
+        console.log(chalk.green('╰' + '─'.repeat(65)));
+        
+    } catch (error) {
+        console.log(chalk.green('│') + chalk.red(' Error calculating intelligent recommendations: ' + error.message));
+        console.log(chalk.green('╰' + '─'.repeat(65)));
+    }
+}
+
+async function displayCompactModelsList(models, categoryFilter = null) {
+    // Si hay modelos con compatibilityScore, mostrar top 3 recomendados primero
+    const showCompatibility = models.length > 0 && models[0].compatibilityScore !== undefined;
+    
+    if (showCompatibility && categoryFilter) {
+        await displayTopRecommended(models, categoryFilter);
+    }
+    
     console.log('\n' + chalk.bgBlue.white.bold(' 📋 MODELS LIST '));
     
-    const data = [
-        [
-            chalk.bgBlue.white.bold(' # '),
-            chalk.bgBlue.white.bold(' Model '),
-            chalk.bgBlue.white.bold(' Size '),
-            chalk.bgBlue.white.bold(' Context '),
-            chalk.bgBlue.white.bold(' Input '),
-            chalk.bgBlue.white.bold(' Category '),
-            chalk.bgBlue.white.bold(' Variants ')
-        ]
+    const headers = [
+        chalk.bgBlue.white.bold(' # '),
+        chalk.bgBlue.white.bold(' Model '),
+        chalk.bgBlue.white.bold(' Size ')
     ];
+    
+    if (showCompatibility) {
+        headers.push(chalk.bgBlue.white.bold(' Score '));
+    }
+    
+    headers.push(
+        chalk.bgBlue.white.bold(' Context '),
+        chalk.bgBlue.white.bold(' Input '),
+        chalk.bgBlue.white.bold(' Category ')
+    );
+    
+    const data = [headers];
 
-    models.forEach((model, index) => {
+    let rowIndex = 0;
+    models.forEach((model) => {
         const category = model.category || 'general';
         const categoryColor = getCategoryColor(category);
-        
-        // Obtener el tamaño más representativo
-        const mainSize = model.main_size || 
-                        (model.model_sizes && model.model_sizes[0]) || 
-                        extractSizeFromIdentifier(model.model_identifier) || 
-                        'Unknown';
         
         // Context length
         const contextLength = model.context_length || 'Unknown';
@@ -599,21 +747,70 @@ function displayCompactModelsList(models) {
         const inputTypes = (model.input_types && model.input_types.length > 0) ? 
             model.input_types.slice(0, 2).join(',') : 'text';
         
-        // Number of variants
-        const variantCount = (model.tags && model.tags.length > 0) ? 
-            model.tags.length : 0;
-        
-        const row = [
-            chalk.gray(`${index + 1}`),
-            model.model_name || 'Unknown',
-            chalk.green(mainSize),
-            chalk.blue(contextLength),
-            chalk.magenta(inputTypes),
-            categoryColor(category),
-            chalk.yellow(`${variantCount} tags`)
-        ];
-        
-        data.push(row);
+        // Si el modelo tiene tags/variantes, crear una fila por cada tag
+        if (model.tags && model.tags.length > 0) {
+            model.tags.forEach((tag) => {
+                rowIndex++;
+                
+                // Extraer el tamaño del tag si está presente
+                const tagSize = extractSizeFromIdentifier(tag) || 
+                               model.main_size || 
+                               (model.model_sizes && model.model_sizes[0]) || 
+                               'Unknown';
+                
+                const row = [
+                    chalk.gray(`${rowIndex}`),
+                    tag, // Mostrar el tag completo como nombre del modelo
+                    chalk.green(tagSize)
+                ];
+                
+                // Agregar score si está disponible
+                if (showCompatibility) {
+                    const score = model.compatibilityScore || 0;
+                    const scoreColor = score >= 80 ? chalk.green.bold : 
+                                    score >= 60 ? chalk.yellow : chalk.red;
+                    row.push(scoreColor(`${score}%`));
+                }
+                
+                row.push(
+                    chalk.blue(contextLength),
+                    chalk.magenta(inputTypes),
+                    categoryColor(category)
+                );
+                
+                data.push(row);
+            });
+        } else {
+            // Si no tiene tags, mostrar el modelo base
+            rowIndex++;
+            
+            const mainSize = model.main_size || 
+                            (model.model_sizes && model.model_sizes[0]) || 
+                            extractSizeFromIdentifier(model.model_identifier) || 
+                            'Unknown';
+            
+            const row = [
+                chalk.gray(`${rowIndex}`),
+                model.model_name || model.model_identifier || 'Unknown',
+                chalk.green(mainSize)
+            ];
+            
+            // Agregar score si está disponible
+            if (showCompatibility) {
+                const score = model.compatibilityScore || 0;
+                const scoreColor = score >= 80 ? chalk.green.bold : 
+                                score >= 60 ? chalk.yellow : chalk.red;
+                row.push(scoreColor(`${score}%`));
+            }
+            
+            row.push(
+                chalk.blue(contextLength),
+                chalk.magenta(inputTypes),
+                categoryColor(category)
+            );
+            
+            data.push(row);
+        }
     });
 
     console.log(table(data));
@@ -691,8 +888,20 @@ function displaySampleCommands(topModels) {
     });
     
     console.log(chalk.yellow('│'));
-    console.log(chalk.yellow('│') + ` ${chalk.bold.white('More commands:')}`);
-    console.log(chalk.yellow('│') + `   🔍 ${chalk.gray('llm-checker list-models --category coding')}`);
+    console.log(chalk.yellow('│') + ` ${chalk.bold.white('Browse models by category:')}`);
+    console.log(chalk.yellow('│') + `   💻 ${chalk.cyan('llm-checker list-models --category coding')} ${chalk.gray('(Programming & development)')}`);
+    console.log(chalk.yellow('│') + `   🧮 ${chalk.cyan('llm-checker list-models --category reasoning')} ${chalk.gray('(Logic & math problems)')}`);
+    console.log(chalk.yellow('│') + `   💬 ${chalk.cyan('llm-checker list-models --category talking')} ${chalk.gray('(Chat & conversations)')}`);
+    console.log(chalk.yellow('│') + `   📚 ${chalk.cyan('llm-checker list-models --category reading')} ${chalk.gray('(Text analysis & comprehension)')}`);
+    console.log(chalk.yellow('│') + `   🖼️  ${chalk.cyan('llm-checker list-models --category multimodal')} ${chalk.gray('(Image & vision tasks)')}`);
+    console.log(chalk.yellow('│') + `   🎨 ${chalk.cyan('llm-checker list-models --category creative')} ${chalk.gray('(Creative writing & stories)')}`);
+    console.log(chalk.yellow('│') + `   🤖 ${chalk.cyan('llm-checker list-models --category general')} ${chalk.gray('(General purpose tasks)')}`);
+    console.log(chalk.yellow('│'));
+    console.log(chalk.yellow('│') + ` ${chalk.bold.white('AI-powered selection:')}`);
+    console.log(chalk.yellow('│') + `   🧠 ${chalk.cyan('llm-checker ai-check --category coding --top 12')} ${chalk.gray('(AI meta-evaluation)')}`);
+    console.log(chalk.yellow('│') + `   🚀 ${chalk.cyan('llm-checker ai-run')} ${chalk.gray('(Smart model selection & launch)')}`);
+    console.log(chalk.yellow('│'));
+    console.log(chalk.yellow('│') + ` ${chalk.bold.white('Additional options:')}`);
     console.log(chalk.yellow('│') + `   📊 ${chalk.gray('llm-checker list-models --popular --limit 10')}`);
     console.log(chalk.yellow('│') + `   💾 ${chalk.gray('llm-checker list-models --json > models.json')}`);
     console.log(chalk.yellow('╰'));
@@ -758,10 +967,6 @@ program
 
             if (analysis.marginal.length > 0) {
                 displayMarginalModels(analysis.marginal);
-            }
-
-            if (analysis.incompatible.length > 0) {
-                displayIncompatibleModels(analysis.incompatible);
             }
 
             displayStructuredRecommendations(analysis.recommendations);
@@ -923,10 +1128,47 @@ program
 
             // Aplicar filtros
             if (options.category) {
-                models = models.filter(model => 
-                    model.category === options.category.toLowerCase() ||
-                    (model.use_cases && model.use_cases.includes(options.category.toLowerCase()))
-                );
+                const categoryFilter = options.category.toLowerCase();
+                models = models.filter(model => {
+                    // Buscar en categoría principal
+                    if (model.category === categoryFilter) return true;
+                    
+                    // Buscar en use_cases
+                    if (model.use_cases && model.use_cases.includes(categoryFilter)) return true;
+                    
+                    // Buscar por palabras clave en el nombre/identificador
+                    const modelText = `${model.model_name} ${model.model_identifier}`.toLowerCase();
+                    
+                    switch(categoryFilter) {
+                        case 'coding':
+                        case 'code':
+                            return modelText.includes('code') || modelText.includes('coder') || 
+                                   modelText.includes('programming') || modelText.includes('deepseek') ||
+                                   modelText.includes('starcoder');
+                        case 'talking':
+                        case 'chat':
+                            return modelText.includes('chat') || modelText.includes('llama') ||
+                                   modelText.includes('mistral') || modelText.includes('gemma') ||
+                                   modelText.includes('phi');
+                        case 'reasoning':
+                            return modelText.includes('reasoning') || modelText.includes('deepseek-r1') ||
+                                   modelText.includes('qwq') || modelText.includes('r1');
+                        case 'multimodal':
+                        case 'vision':
+                            return modelText.includes('vision') || modelText.includes('llava') ||
+                                   modelText.includes('minicpm-v');
+                        case 'creative':
+                        case 'writing':
+                            return modelText.includes('wizard') || modelText.includes('creative') ||
+                                   modelText.includes('uncensored');
+                        case 'embeddings':
+                        case 'embed':
+                            return modelText.includes('embed') || modelText.includes('bge') ||
+                                   modelText.includes('nomic');
+                        default:
+                            return false;
+                    }
+                });
             }
 
             if (options.size) {
@@ -947,8 +1189,37 @@ program
                 );
             }
 
-            // Ordenar por popularidad
-            models.sort((a, b) => (b.pulls || 0) - (a.pulls || 0));
+            // Si hay filtro de categoría, ordenar por compatibilidad con hardware
+            if (options.category) {
+                try {
+                    const LLMChecker = require('../src/index.js');
+                    const hardwareDetector = new (require('../src/hardware/detector.js'))();
+                    const hardware = await hardwareDetector.getSystemInfo();
+                    
+                    // Calcular puntuación de compatibilidad para cada modelo
+                    models = models.map(model => {
+                        const compatibilityScore = calculateModelCompatibilityScore(model, hardware);
+                        return { ...model, compatibilityScore };
+                    });
+                    
+                    // Ordenar por compatibilidad primero, luego por popularidad
+                    models.sort((a, b) => {
+                        if (b.compatibilityScore !== a.compatibilityScore) {
+                            return b.compatibilityScore - a.compatibilityScore;
+                        }
+                        return (b.pulls || 0) - (a.pulls || 0);
+                    });
+                    
+                    spinner.text = `🧠 Sorted by hardware compatibility (${getHardwareTierForDisplay(hardware)})`;
+                } catch (error) {
+                    console.warn('Could not sort by hardware compatibility:', error.message);
+                    // Fallback a ordenar por popularidad
+                    models.sort((a, b) => (b.pulls || 0) - (a.pulls || 0));
+                }
+            } else {
+                // Sin filtro de categoría, ordenar solo por popularidad
+                models.sort((a, b) => (b.pulls || 0) - (a.pulls || 0));
+            }
 
             // Limitar resultados
             const limit = parseInt(options.limit) || 50;
@@ -968,7 +1239,7 @@ program
             if (options.full) {
                 displayFullModelsList(displayModels);
             } else {
-                displayCompactModelsList(displayModels);
+                await displayCompactModelsList(displayModels, options.category);
             }
 
             // Mostrar comandos de ejemplo
@@ -986,251 +1257,6 @@ program
         }
     });
 
-program
-    .command('ai-check')
-    .description('AI-powered model selection for optimal hardware compatibility')
-    .option('-m, --models <models...>', 'Specific models to choose from')
-    .option('--prompt <prompt>', 'Show command to run selected model with this prompt')
-    .option('--benchmark', 'Benchmark available models for training data')
-    .option('--train', 'Train the AI selector model')
-    .option('--status', 'Show AI model training status')
-    .action(async (options) => {
-        // Check if Ollama is installed first
-        await checkOllamaAndExit();
-        
-        const AIModelSelector = require('../src/ai/model-selector');
-        
-        try {
-            const aiSelector = new AIModelSelector();
-            
-            if (options.status) {
-                const status = aiSelector.getTrainingStatus();
-                console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI MODEL STATUS '));
-                console.log(chalk.magenta('╭' + '─'.repeat(50)));
-                console.log(chalk.magenta('│') + ` Status: ${getStatusColor(status.status)(status.status.replace('_', ' ').toUpperCase())}`);
-                
-                if (status.status === 'trained') {
-                    console.log(chalk.magenta('│') + ` Model size: ${chalk.green.bold(status.modelSize + ' KB')}`);
-                    console.log(chalk.magenta('│') + ` Version: ${chalk.cyan(status.version)}`);
-                    console.log(chalk.magenta('│') + ` Features: ${chalk.yellow(status.features)}`);
-                    console.log(chalk.magenta('│') + ` Last updated: ${chalk.gray(new Date(status.lastUpdated).toLocaleDateString())}`);
-                    console.log(chalk.magenta('│') + ` Ready for use: ${chalk.green.bold('YES')}`);
-                } else if (status.status === 'not_trained') {
-                    console.log(chalk.magenta('│') + ` To get started:`);
-                    console.log(chalk.magenta('│') + `   1. ${chalk.cyan.bold('npm run benchmark')} - Collect performance data`);
-                    console.log(chalk.magenta('│') + `   2. ${chalk.cyan.bold('npm run train-ai')} - Train the AI model`);
-                    console.log(chalk.magenta('│') + `   3. ${chalk.cyan.bold('npm run ai-check')} - Use AI selection`);
-                } else {
-                    console.log(chalk.magenta('│') + ` Issue: ${chalk.red('Model files corrupted or incomplete')}`);
-                    console.log(chalk.magenta('│') + ` Solution: ${chalk.cyan.bold('npm run train-ai')}`);
-                }
-                
-                console.log(chalk.magenta('╰'));
-                return;
-            }
-            
-            if (options.benchmark) {
-                const spinner = ora('🔬 Collecting benchmark data...').start();
-                
-                try {
-                    const benchmarkProcess = spawn('python', [
-                        'ml-model/python/benchmark_collector.py'
-                    ], { stdio: 'inherit' });
-                    
-                    benchmarkProcess.on('close', (code) => {
-                        if (code === 0) {
-                            spinner.succeed('✅ Benchmark data collected!');
-                            console.log('\nNext steps:');
-                            console.log(`  1. ${chalk.cyan.bold('npm run train-ai')} - Train the AI model`);
-                            console.log(`  2. ${chalk.cyan.bold('npm run ai-check')} - Use AI selection`);
-                        } else {
-                            spinner.fail('❌ Benchmark collection failed');
-                        }
-                    });
-                    
-                    return;
-                } catch (error) {
-                    spinner.fail('❌ Failed to start benchmark collection');
-                    console.error(chalk.red('Error:'), error.message);
-                    return;
-                }
-            }
-            
-            if (options.train) {
-                const spinner = ora('🧠 Training AI model...').start();
-                
-                try {
-                    const trainProcess = spawn('python', [
-                        'ml-model/python/train_model.py'
-                    ], { stdio: 'inherit' });
-                    
-                    trainProcess.on('close', (code) => {
-                        if (code === 0) {
-                            spinner.succeed('✅ AI model trained successfully!');
-                            console.log('\nYou can now use AI-powered selection:');
-                            console.log(`  ${chalk.cyan.bold('npm run ai-check')}`);
-                        } else {
-                            spinner.fail('❌ AI model training failed');
-                        }
-                    });
-                    
-                    return;
-                } catch (error) {
-                    spinner.fail('❌ Failed to start training');
-                    console.error(chalk.red('Error:'), error.message);
-                    return;
-                }
-            }
-            
-            // Main AI selection logic
-            const spinner = ora('🧠 AI-powered model selection...').start();
-            
-            // Get system info
-            const checker = new LLMChecker();
-            const systemInfo = await checker.getSystemInfo();
-            
-            // Get available models or use provided ones
-            let candidateModels = options.models;
-            
-            if (!candidateModels) {
-                spinner.text = '📋 Getting available Ollama models...';
-                const OllamaClient = require('../src/ollama/client');
-                const client = new OllamaClient();
-                
-                try {
-                    const models = await client.getLocalModels();
-                    candidateModels = models.map(m => m.name || m.model);
-                    
-                    if (candidateModels.length === 0) {
-                        spinner.fail('❌ No Ollama models found');
-                        console.log('\nInstall some models first:');
-                        console.log('  ollama pull llama2:7b');
-                        console.log('  ollama pull mistral:7b');
-                        console.log('  ollama pull phi3:mini');
-                        return;
-                    }
-                } catch (error) {
-                    spinner.fail('❌ Failed to get Ollama models');
-                    console.error(chalk.red('Error:'), error.message);
-                    return;
-                }
-            }
-            
-            spinner.text = '🤖 Analyzing optimal model selection...';
-            
-            // Use AI selector - fix data extraction
-            const systemSpecs = {
-                cpu_cores: systemInfo.cpu?.cores || 4,
-                cpu_freq_max: systemInfo.cpu?.speed || 3.0,
-                total_ram_gb: systemInfo.memory?.total || 8,
-                gpu_vram_gb: systemInfo.gpu?.vram || 0,
-                gpu_model_normalized: systemInfo.gpu?.model || 
-                    (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
-            };
-            
-            const result = await aiSelector.selectBestModel(candidateModels, systemSpecs);
-            
-            spinner.succeed('✅ AI selection completed!');
-            
-            // Display results
-            console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 INTELLIGENT MODEL SELECTION '));
-            console.log(chalk.magenta('╭' + '─'.repeat(65)));
-            console.log(chalk.magenta('│') + ` 🏆 Selected Model: ${chalk.green.bold(result.bestModel)}`);
-            console.log(chalk.magenta('│') + ` 🎯 Selection Method: ${chalk.cyan(result.method.replace(/_/g, ' ').toUpperCase())}`);
-            console.log(chalk.magenta('│') + ` 📊 Confidence: ${getConfidenceColor(result.confidence)(Math.round(result.confidence * 100) + '%')}`);
-            
-            if (result.score) {
-                console.log(chalk.magenta('│') + ` 🔢 Intelligence Score: ${getScoreColor(result.score)(Math.round(result.score))}/100`);
-            }
-            
-            if (result.reasoning || result.reason) {
-                const reasoning = result.reasoning || result.reason;
-                console.log(chalk.magenta('│') + ` 💡 AI Analysis: ${chalk.yellow(reasoning)}`);
-            }
-            
-            if (result.allPredictions && result.allPredictions.length > 1) {
-                console.log(chalk.magenta('│'));
-                console.log(chalk.magenta('│') + ` ${chalk.bold.white('Top Candidates:')}`);
-                result.allPredictions.slice(0, 5).forEach((pred, i) => {
-                    const score = Math.round(pred.score * 100);
-                    const icon = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
-                    console.log(chalk.magenta('│') + `   ${icon} ${pred.model}: ${getConfidenceColor(pred.score)(score + '%')}`);
-                });
-            }
-            
-            console.log(chalk.magenta('╰'));
-            
-            // Display system info
-            const specs = result.systemSpecs || systemSpecs;
-            const hwAnalysis = result.hardware_analysis;
-            
-            console.log('\n' + chalk.bgBlue.white.bold(' 💻 INTELLIGENT HARDWARE ANALYSIS '));
-            console.log(chalk.blue('╭' + '─'.repeat(55)));
-            console.log(chalk.blue('│') + ` CPU: ${chalk.green(specs.cpu_cores + ' cores')} @ ${chalk.cyan(specs.cpu_freq_max?.toFixed(1) + ' GHz')}`);
-            
-            // Show appropriate memory info based on platform and GPU type
-            const platform = process.platform;
-            const isAppleSilicon = specs.gpu_model_normalized === 'apple_silicon' || 
-                                 (platform === 'darwin' && specs.gpu_model_normalized?.toLowerCase().includes('apple'));
-            const hasDedicatedGPU = specs.gpu_vram_gb > 0;
-            
-            console.log(chalk.blue('│') + ` RAM: ${chalk.green(specs.total_ram_gb?.toFixed(1) + ' GB')}`);
-            
-            if (isAppleSilicon) {
-                // macOS with Apple Silicon - Unified Memory
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow('Apple Silicon')} ${chalk.gray('(Unified Memory)')}`);
-            } else if (hasDedicatedGPU) {
-                // Windows/Linux with dedicated GPU - Show VRAM
-                const gpuName = specs.gpu_model_normalized || 'Dedicated GPU';
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(gpuName)}`);
-                console.log(chalk.blue('│') + ` VRAM: ${chalk.green(specs.gpu_vram_gb?.toFixed(1) + ' GB')} ${chalk.gray('(Dedicated)')}`);
-            } else {
-                // Integrated GPU (Intel/AMD) or CPU-only
-                const gpuName = specs.gpu_model_normalized === 'cpu_only' ? 'CPU Only' : 
-                               specs.gpu_model_normalized || 'Integrated GPU';
-                console.log(chalk.blue('│') + ` GPU: ${chalk.yellow(gpuName)} ${chalk.gray('(Integrated)')}`);
-            }
-            
-            if (hwAnalysis) {
-                console.log(chalk.blue('│'));
-                console.log(chalk.blue('│') + ` ${chalk.bold.white('Hardware Classification:')}`);
-                console.log(chalk.blue('│') + `   Overall Tier: ${getTierColor(hwAnalysis.overall_tier)(hwAnalysis.overall_tier.replace('_', ' ').toUpperCase())}`);
-                console.log(chalk.blue('│') + `   Available Memory: ${chalk.green(hwAnalysis.available_memory?.total?.toFixed(1) + ' GB')}`);
-                console.log(chalk.blue('│') + `   Performance Index: ${chalk.cyan('×' + hwAnalysis.performance_multiplier?.toFixed(1))}`);
-            }
-            
-            console.log(chalk.blue('╰'));
-            
-            // Show recommended command
-            console.log('\n' + chalk.bgGreen.black.bold(' 🎯 RECOMMENDATION '));
-            console.log(chalk.green('╭' + '─'.repeat(50)));
-            console.log(chalk.green('│') + ` Best model for your hardware:`);
-            console.log(chalk.green('│') + `   ${chalk.cyan.bold(`ollama run ${result.bestModel}`)}`);
-            
-            if (options.prompt) {
-                console.log(chalk.green('│'));
-                console.log(chalk.green('│') + ` With your prompt:`);
-                console.log(chalk.green('│') + `   ${chalk.cyan.bold(`ollama run ${result.bestModel} "${options.prompt}"`)}`);
-            }
-            
-            console.log(chalk.green('│'));
-            console.log(chalk.green('│') + ` Why this model?`);
-            console.log(chalk.green('│') + `   • ${result.reason || 'Optimized for your hardware configuration'}`);
-            console.log(chalk.green('│') + `   • Confidence: ${getConfidenceColor(result.confidence)(Math.round(result.confidence * 100) + '%')}`);
-            console.log(chalk.green('│') + `   • Selection method: ${result.method.toUpperCase()}`);
-            console.log(chalk.green('╰'));
-            
-            // Show additional useful commands
-            console.log('\n' + chalk.gray('💡 Tips:'));
-            console.log(chalk.gray(`  • To execute the recommended model directly:`));
-            console.log(chalk.gray(`    llm-checker ai-run${options.models ? ' -m ' + options.models.join(' ') : ''}`));
-            console.log(chalk.gray(`  • To exit from Ollama chat, type: ${chalk.cyan('/bye')}`));
-            
-        } catch (error) {
-            console.error(chalk.red('❌ AI selection failed:'), error.message);
-            process.exit(1);
-        }
-    });
 
 function getStatusColor(status) {
     const colors = {
@@ -1267,6 +1293,49 @@ function getTierColor(tier) {
     };
     return colors[tier] || chalk.white;
 }
+
+program
+    .command('ai-check')
+    .description('AI-powered model evaluation with meta-analysis')
+    .option('-c, --category <category>', 'Category: coding, reasoning, multimodal, general', 'general')
+    .option('-t, --top <number>', 'Number of top models to show', '12')
+    .option('--ctx <number>', 'Target context length', '8192')
+    .option('-e, --evaluator <model>', 'Evaluator model (auto for best available)', 'auto')
+    .option('-w, --weight <number>', 'AI weight (0.0-1.0, default 0.3)', '0.3')
+    .action(async (options) => {
+        // Check if Ollama is installed first
+        await checkOllamaAndExit();
+        
+        const AICheckSelector = require('../src/models/ai-check-selector');
+        
+        try {
+            const spinner = ora('🧠 AI-Check Mode: Meta-evaluation in progress...').start();
+            
+            const aiCheckSelector = new AICheckSelector();
+            
+            const checkOptions = {
+                category: options.category,
+                top: parseInt(options.top),
+                ctx: options.ctx ? parseInt(options.ctx) : undefined,
+                evaluator: options.evaluator,
+                weight: parseFloat(options.weight)
+            };
+            
+            spinner.stop();
+            
+            const result = await aiCheckSelector.aiCheck(checkOptions);
+            
+            // Format and display results
+            aiCheckSelector.formatResults(result);
+            
+        } catch (error) {
+            console.error(chalk.red('❌ AI-Check failed:'), error.message);
+            if (process.argv.includes('--verbose')) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
 
 program
     .command('ai-run')

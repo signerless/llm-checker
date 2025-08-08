@@ -1,6 +1,8 @@
-# 🧠 LLM Checker - Intelligent Model Selector
+# 🧠 LLM Checker - Intelligent Ollama Model Selector
 
-**Advanced CLI tool with AI-powered model selection that analyzes your hardware and intelligently recommends the optimal LLM models for your system.**
+**Advanced CLI tool with AI-powered model selection that analyzes your hardware and intelligently recommends the optimal Ollama LLM models for your system.**
+
+> **🦙 Designed specifically for Ollama** - Integrates with the complete Ollama model library to find the best models for your hardware configuration.
 
 [![npm version](https://badge.fury.io/js/llm-checker.svg)](https://www.npmjs.com/package/llm-checker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,18 +16,21 @@
 - **Advanced 5-factor scoring algorithm** with mathematical precision  
 - **100% JavaScript** - No Python dependencies or external ML frameworks
 - **Hardware-aware analysis** with tier classification and performance indexing
-- **15+ model database** with detailed characteristics and optimization profiles
+- **Complete Ollama model database** with real-time updates from Ollama registry
 
 ### 🎯 **Smart Recommendations**
 - **Memory efficiency scoring** - Ensures models fit perfectly in available RAM/VRAM
 - **Performance matching** - Aligns CPU/GPU capabilities with model requirements  
 - **Task optimization** - Recommends models based on use case (coding, chat, reasoning)
-- **Quality metrics** - Considers community adoption and model performance
+- **Popularity metrics** - Considers community adoption and download statistics from Ollama
 
-### 🚀 **Dual Command System**
-- **`ai-check`** - Get intelligent recommendations without execution
-- **`ai-run`** - Smart selection + automatic model launch
-- **Reasoning explanations** - Understand why each model was selected
+### 🚀 **Advanced AI-Check System**
+- **`ai-check`** - **NEW**: Meta-evaluation using installed models to analyze 177+ models from complete Ollama database
+- **AI-powered ranking** - Uses your locally installed models as evaluators to refine selections
+- **Comprehensive database integration** - Evaluates full Ollama registry (177+ models) instead of limited subset
+- **Deterministic + AI scoring** - Combines mathematical precision with AI intelligence for optimal results
+- **`ai-run`** - Smart selection from local models + automatic launch
+- **Professional output** - Clean, informative displays with detailed reasoning
 
 ### 💻 **Universal Hardware Support**
 - **Apple Silicon optimization** with unified memory calculation
@@ -42,15 +47,25 @@
 npm install -g llm-checker
 ```
 
+### Prerequisites
+- **Ollama** must be installed and running
+- Visit [ollama.com](https://ollama.com) for installation instructions
+
 ### Basic Usage
 ```bash
-# Get intelligent model recommendation
+# Analyze hardware and get best model recommendations from entire Ollama database
+llm-checker check
+
+# AI-powered meta-evaluation: Uses installed models to analyze 177+ models from complete Ollama database
 llm-checker ai-check
 
-# Select and run best model automatically  
+# AI-check with specific category (coding, reasoning, multimodal, etc.)
+llm-checker ai-check --category coding
+
+# Smart selection from local models + automatic launch  
 llm-checker ai-run
 
-# Compare specific models
+# Compare specific local models
 llm-checker ai-check --models llama2:7b mistral:7b phi3:mini
 ```
 
@@ -58,39 +73,54 @@ llm-checker ai-check --models llama2:7b mistral:7b phi3:mini
 
 ## 📊 **Example Output**
 
+### AI-Check Mode (NEW!)
+```bash
+# llm-checker ai-check --category coding
 ```
-🧠 INTELLIGENT MODEL SELECTION 
+
+```
+ 🧠 AI-CHECK MODE 
 ╭─────────────────────────────────────────────────────────────────
-│ 🏆 Selected Model: llama2:7b
-│ 🎯 Selection Method: INTELLIGENT MATHEMATICAL
-│ 📊 Confidence: 100%
-│ 🔢 Intelligence Score: 99/100
-│ 💡 AI Analysis: Excellent fit for your high hardware configuration. 
-│     Optimal memory utilization. CPU well-suited for this model.
+│ 🎯 Category: CODING
+│ ⚖️  AI Weight: 30% + Deterministic: 70%
+│ 📊 Candidates Found: 12
+│ 💻 Hardware: 12 cores, 24GB RAM, apple_silicon
 ╰
 
-💻 INTELLIGENT HARDWARE ANALYSIS 
-╭───────────────────────────────────────────────────────
-│ CPU: 12 cores @ 2.4 GHz
-│ RAM: 24.0 GB
-│ GPU: apple_silicon
-│ VRAM: 0.0 GB
-│
-│ Hardware Classification:
-│   Overall Tier: HIGH
-│   Available Memory: 14.4 GB
-│   Performance Index: ×1.1
-╰
-
-🎯 RECOMMENDATION 
+ 🤖 AI EVALUATOR STATUS 
 ╭──────────────────────────────────────────────────
-│ Best model for your hardware:
-│   ollama run llama2:7b
+│ 📦 Model: qwen2.5-coder:1.5b
+│ 🔬 Evaluating: 23 models (showing top 12)
+│ 📥 Status: Running AI evaluation...
+╰
+
+ 🧠 AI-CHECK RESULTS 
+╭─────────────────────────────────────────────────────────────────
+│ 🤖 Evaluator: qwen2.5-coder:1.5b
+│ 🎯 Category: CODING
+│ 📊 Models Evaluated: 12
+│ 📝 Note: AI-evaluated using qwen2.5-coder:1.5b
+╰
+┌─────────────────┬────────┬─────────────┬────────────┬─────────┬───────────┬─────────┬──────────────┐
+│ Model           │ Size   │ Det Score   │ AI Score   │ Final   │ RAM       │ Speed   │ Status       │
+├─────────────────┼────────┼─────────────┼────────────┼─────────┼───────────┼─────────┼──────────────┤
+│ qwen2.5-coder   │ 7B     │ 80/100      │ 85/100     │ 82/100  │ 12.2/19GB │ 60t/s   │ 🌐 Available │
+│ codegemma       │ 7B     │ 79/100      │ 80/100     │ 79/100  │ 12.2/19GB │ 60t/s   │ 🌐 Available │
+│ codellama       │ 7B     │ 76/100      │ 75/100     │ 76/100  │ 12.2/19GB │ 60t/s   │ 🌐 Available │
+└─────────────────┴────────┴─────────────┴────────────┴─────────┴───────────┴─────────┴──────────────┘
+
+ 🎯 AI-POWERED RECOMMENDATION 
+╭──────────────────────────────────────────────────
+│ 🏆 Best Model: qwen2.5-coder
+│ 📊 Final Score: 82/100
+│ ⚖️  Det: 80 + AI: 85
 │
-│ Why this model?
-│   • Optimized for your hardware configuration
-│   • Confidence: 100%
-│   • Selection method: INTELLIGENT_MATHEMATICAL
+│ 📥 Install command:
+│   ollama pull qwen2.5-coder
+│
+│ 🎯 Why this model?
+│   • fits in 12.2/19GB, Q8_0, coder-tuned, 7B is sweet spot, Metal backend
+│   • AI: Excellent for coding tasks with high performance and efficiency
 ╰
 ```
 
@@ -98,21 +128,23 @@ llm-checker ai-check --models llama2:7b mistral:7b phi3:mini
 
 ## 🎮 **Commands Reference**
 
-### 🧠 **AI-Powered Selection**
+### 🧠 **AI-Powered Selection** (NEW!)
 
 ```bash
-# Smart model recommendation (no execution)
+# Meta-evaluation: AI analyzes 177+ models from complete Ollama database
 llm-checker ai-check
 npm run ai-check
 
-# Compare specific models
-llm-checker ai-check --models llama2:7b codellama:7b phi3:mini
+# Category-specific AI analysis
+llm-checker ai-check --category coding
+llm-checker ai-check --category reasoning
+llm-checker ai-check --category multimodal
 
-# Show recommendation with prompt example
-llm-checker ai-check --prompt "Explain quantum computing"
+# Custom weighting (AI vs Deterministic scoring)
+llm-checker ai-check --weight 0.5  # 50% AI, 50% Deterministic
 
-# Check AI training status
-llm-checker ai-check --status
+# Analyze specific number of top candidates
+llm-checker ai-check --top 20
 ```
 
 ```bash
@@ -335,6 +367,16 @@ A: Yes, with automatic detection for NVIDIA RTX, AMD, Intel Arc, and Apple Silic
 ---
 
 ## 📚 **Changelog**
+
+### **v2.2.0** - Advanced AI-Check with Complete Database Integration (NEW!)
+- 🧠 **MAJOR NEW FEATURE: AI-Check Meta-Evaluation System** - Uses installed models as evaluators to analyze recommendations
+- 📊 **Complete Database Integration** - AI-check now evaluates **177+ models** from full Ollama registry (vs previous 5-model subset)
+- 🎯 **Category-Specific Analysis** - Supports coding, reasoning, multimodal, creative, talking, reading, general categories
+- ⚖️ **Hybrid Scoring System** - Combines deterministic mathematical scoring with AI-powered evaluation
+- 🎨 **Professional UI Design** - Beautiful, consistent output matching check command styling
+- 🚀 **Performance Optimized** - Intelligent caching and efficient model conversion from Ollama database
+- 🔧 **Clean Output** - Removed debug information for production-ready experience
+- 📈 **8x More Models** - Dramatically expanded model evaluation coverage for better recommendations
 
 ### **v2.1.4** - Critical GPU Detection & Platform-Aware Display Fix
 - 🚨 **CRITICAL FIX: Resolved "cpu_only" false detection** - RTX cards now properly detected in check command
