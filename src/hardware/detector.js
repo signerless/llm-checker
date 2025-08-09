@@ -82,6 +82,11 @@ class HardwareDetector {
     processGPUInfo(graphics) {
         const controllers = graphics.controllers || [];
         const displays = graphics.displays || [];
+        
+        // Debug logging to help diagnose GPU detection issues
+        if (process.env.DEBUG_GPU) {
+            console.log('GPU Detection Debug:', JSON.stringify(controllers, null, 2));
+        }
 
 
         const dedicatedGPU = controllers.find(gpu => {
@@ -113,6 +118,16 @@ class HardwareDetector {
                 score: 0
             };
         }
+        
+        // Enhance model detection using device ID when model is generic or missing
+        let enhancedModel = primaryGPU.model || 'Unknown GPU';
+        if (primaryGPU.deviceId && (
+            !primaryGPU.model || 
+            primaryGPU.model === 'Unknown' || 
+            primaryGPU.model.includes('NVIDIA Corporation Device')
+        )) {
+            enhancedModel = this.getGPUModelFromDeviceId(primaryGPU.deviceId) || enhancedModel;
+        }
 
         // Enhanced VRAM detection
         let vram = primaryGPU.vram || 0;
@@ -137,11 +152,11 @@ class HardwareDetector {
         }
 
         return {
-            model: primaryGPU.model || 'Unknown GPU',
+            model: enhancedModel,
             vendor: primaryGPU.vendor || 'Unknown',
             vram: vram,
             vramDynamic: primaryGPU.vramDynamic || false,
-            dedicated: !this.isIntegratedGPU(primaryGPU.model),
+            dedicated: !this.isIntegratedGPU(enhancedModel),
             driverVersion: primaryGPU.driverVersion || 'Unknown',
             all: controllers.map(gpu => {
                 let gpuVram = gpu.vram || 0;
@@ -213,9 +228,51 @@ class HardwareDetector {
             modelLower.includes('apple');
     }
 
+    getGPUModelFromDeviceId(deviceId) {
+        if (!deviceId) return null;
+        
+        // Normalize device ID (remove 0x prefix if present and convert to lowercase)
+        const normalizedId = deviceId.toLowerCase().replace('0x', '');
+        
+        // NVIDIA RTX 50 series device IDs
+        const deviceIdMap = {
+            '2d04': 'NVIDIA GeForce RTX 5060 Ti',
+            '2d05': 'NVIDIA GeForce RTX 5060',
+            '2d06': 'NVIDIA GeForce RTX 5070',
+            '2d07': 'NVIDIA GeForce RTX 5070 Ti',
+            '2d08': 'NVIDIA GeForce RTX 5080',
+            '2d09': 'NVIDIA GeForce RTX 5090',
+            
+            // NVIDIA RTX 40 series device IDs
+            '2684': 'NVIDIA GeForce RTX 4090',
+            '2685': 'NVIDIA GeForce RTX 4080',
+            '2786': 'NVIDIA GeForce RTX 4070 Ti',
+            '2787': 'NVIDIA GeForce RTX 4070',
+            '27a0': 'NVIDIA GeForce RTX 4060 Ti',
+            '27a1': 'NVIDIA GeForce RTX 4060',
+            
+            // NVIDIA RTX 30 series device IDs
+            '2204': 'NVIDIA GeForce RTX 3090',
+            '2206': 'NVIDIA GeForce RTX 3080',
+            '2484': 'NVIDIA GeForce RTX 3070',
+            '2487': 'NVIDIA GeForce RTX 3060 Ti',
+            '2504': 'NVIDIA GeForce RTX 3060'
+        };
+        
+        return deviceIdMap[normalizedId] || null;
+    }
+
     estimateVRAMFromModel(model) {
         if (!model) return 0;
         const modelLower = model.toLowerCase();
+        
+        // NVIDIA RTX 50 series
+        if (modelLower.includes('rtx 5090')) return 32;
+        if (modelLower.includes('rtx 5080')) return 16;
+        if (modelLower.includes('rtx 5070 ti')) return 16;
+        if (modelLower.includes('rtx 5070')) return 12;
+        if (modelLower.includes('rtx 5060 ti')) return 16;
+        if (modelLower.includes('rtx 5060')) return 8;
         
         // NVIDIA RTX 40 series
         if (modelLower.includes('rtx 4090')) return 24;
@@ -307,7 +364,11 @@ class HardwareDetector {
         }
 
         // Bonus por marcas/modelos específicos
-        if (model.includes('rtx 4090')) score += 25;
+        if (model.includes('rtx 5090')) score += 30;
+        else if (model.includes('rtx 5080')) score += 27;
+        else if (model.includes('rtx 5070')) score += 24;
+        else if (model.includes('rtx 5060')) score += 21;
+        else if (model.includes('rtx 4090')) score += 25;
         else if (model.includes('rtx 4080')) score += 22;
         else if (model.includes('rtx 4070')) score += 20;
         else if (model.includes('rtx 30')) score += 18;
