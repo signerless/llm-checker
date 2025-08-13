@@ -1,8 +1,9 @@
+const path = require('path');
 const HardwareDetector = require('./hardware/detector');
 const ExpandedModelsDatabase = require('./models/expanded_database');
 const EnhancedModelSelector = require('./models/enhanced-selector');
-const CompatibilityAnalyzer = require('../analyzer/compatibility');
-const PerformanceAnalyzer = require('../analyzer/performance');
+const CompatibilityAnalyzer = require(path.join(__dirname, '..', 'analyzer', 'compatibility'));
+const PerformanceAnalyzer = require(path.join(__dirname, '..', 'analyzer', 'performance'));
 const OllamaClient = require('./ollama/client');
 const { getLogger } = require('./utils/logger');
 const { getOllamaModelsIntegration, OllamaNativeScraper } = require('./ollama/native-scraper');
