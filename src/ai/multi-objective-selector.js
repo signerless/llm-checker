@@ -301,11 +301,70 @@ class MultiObjectiveSelector {
     }
 
     getHardwareTier(hardware) {
-        const ram = hardware.memory.total;
-        if (ram >= 64) return 'ultra_high';
-        if (ram >= 24) return 'high';        // M4 Pro 24GB falls here!
-        if (ram >= 8) return 'medium';
-        if (ram >= 4) return 'low';
+        // Use the same advanced scoring algorithm for consistency
+        const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+        
+        const ramGB = hardware.memory.total || 0;
+        const vramGB = hardware.gpu?.vram || 0;
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const architecture = hardware.cpu?.architecture || hardware.cpu?.brand || '';
+        const cpuCoresPhys = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        const cpuGHzBase = hardware.cpu?.speed || 2.0;
+        
+        const isAppleSilicon = architecture.toLowerCase().includes('apple') || 
+                              architecture.toLowerCase().includes('m1') || 
+                              architecture.toLowerCase().includes('m2') ||
+                              architecture.toLowerCase().includes('m3') ||
+                              architecture.toLowerCase().includes('m4');
+        const unified = isAppleSilicon;
+        
+        // 1) Effective memory for model weights (45%)
+        const effMem = vramGB > 0 
+            ? vramGB + Math.min(0.25 * ramGB, 8)
+            : unified ? 0.85 * ramGB    // More efficient for unified memory
+            : 0.6 * ramGB;
+        
+        const mem_cap = clamp(effMem / 32);  // More realistic normalization
+        
+        // 2) Memory bandwidth (20%) - simplified estimation
+        let memBandwidthGBs = 50; // fallback
+        const gpu = gpuModel.toLowerCase();
+        if (gpu.includes('m4 pro')) memBandwidthGBs = 273;
+        else if (gpu.includes('m4')) memBandwidthGBs = 120;
+        else if (gpu.includes('rtx 4090')) memBandwidthGBs = 1008;
+        else if (gpu.includes('rtx 4080')) memBandwidthGBs = 716;
+        else if (gpu.includes('rtx 4070')) memBandwidthGBs = 448;
+        else if (gpu.includes('iris xe')) memBandwidthGBs = 68;
+        
+        const mem_bw = clamp(memBandwidthGBs / 800);
+        
+        // 3) Compute (20%) - simplified estimation
+        let compute = 0;
+        if (gpu.includes('m4 pro')) compute = clamp(28 / 120);
+        else if (gpu.includes('m4')) compute = clamp(15 / 120);
+        else if (gpu.includes('rtx 4090')) compute = clamp(165 / 120);
+        else if (gpu.includes('rtx 4080')) compute = clamp(121 / 120);
+        else if (gpu.includes('iris xe')) compute = 0.02;
+        else {
+            // CPU fallback
+            compute = clamp((cpuCoresPhys * cpuGHzBase) / 60);
+        }
+        
+        // 4) System RAM for KV-cache (10%)
+        const sys_ram = clamp(ramGB / 64);
+        
+        // 5) Storage (5%) - assume NVMe
+        const storage = 1.0;
+        
+        // Final score
+        const score = 100 * (0.45 * mem_cap + 0.20 * mem_bw + 0.20 * compute + 0.10 * sys_ram + 0.05 * storage);
+        
+        // Map to tier (final adjusted thresholds)
+        if (score >= 75) return 'ultra_high';
+        if (score >= 55) return 'high';      // M4 Pro should land here
+        if (score >= 35) return 'medium';
+        if (score >= 20) return 'low';
         return 'ultra_low';
     }
 

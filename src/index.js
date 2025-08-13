@@ -1005,28 +1005,204 @@ class LLMChecker {
     }
 
     getHardwareTier(hardware) {
-        const ram = hardware.memory.total;
-        const cores = hardware.cpu.cores;
+        return this.calculateHardwareScore(hardware).tier;
+    }
+
+    calculateHardwareScore(hardware) {
+        const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
         
-        // Seguir exactamente la clasificación oficial documentada:
-        // EXTREME (64+ GB RAM, 16+ cores) - Can run 70B+ models
-        // VERY HIGH (32-64 GB RAM, 12+ cores) - Optimal for 13B-30B models  
-        // HIGH (16-32 GB RAM, 8-12 cores) - Perfect for 7B-13B models
-        // MEDIUM (8-16 GB RAM, 4-8 cores) - Suitable for 3B-7B models
-        // LOW (4-8 GB RAM, 2-4 cores) - Limited to 1B-3B models
+        // Extract hardware info
+        const ramGB = hardware.memory.total || 0;
+        const vramGB = hardware.gpu?.vram || 0;
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const architecture = hardware.cpu?.architecture || hardware.cpu?.brand || '';
+        const cpuCoresPhys = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        const cpuGHzBase = hardware.cpu?.speed || 2.0;
         
-        if (ram >= 64 && cores >= 16) return 'extreme';
-        if (ram >= 32 && cores >= 12) return 'very_high';    // Tu caso: 24GB < 32GB, pero 12 cores ≥ 12
-        if (ram >= 16 && cores >= 8) return 'high';          // Criteria: 16-32GB RAM, 8-12 cores
-        if (ram >= 8 && cores >= 4) return 'medium';         // Criteria: 8-16GB RAM, 4-8 cores
-        if (ram >= 4 && cores >= 2) return 'low';            // Criteria: 4-8GB RAM, 2-4 cores
+        // Detect system type
+        const isAppleSilicon = architecture.toLowerCase().includes('apple') || 
+                              architecture.toLowerCase().includes('m1') || 
+                              architecture.toLowerCase().includes('m2') ||
+                              architecture.toLowerCase().includes('m3') ||
+                              architecture.toLowerCase().includes('m4');
+        const unified = isAppleSilicon;
+        const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
+                         (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
+        const hasAVX2 = cpuModel.toLowerCase().includes('intel') || 
+                       cpuModel.toLowerCase().includes('amd');
         
-        // Caso especial: cumplir uno de los dos criterios principales
-        // Tu M4 Pro: 24GB RAM (16-32 range) + 12 cores (≥12) = HIGH tier
-        if (ram >= 16 && ram < 32 && cores >= 12) return 'high';  // HIGH tier pero con cores altos
-        if (ram >= 32 && ram < 64 && cores >= 8) return 'very_high'; // VERY HIGH con cores medios
+        // 1) Capacidad efectiva para pesos del modelo (45%)
+        const effMem = vramGB > 0 
+            ? vramGB + Math.min(0.25 * ramGB, 8)  // GPU dedicada + offload pequeño
+            : unified ? 0.85 * ramGB               // Memoria unificada (menos reserva, más eficiente)
+            : 0.6 * ramGB;                         // Solo CPU (más reserva)
         
-        return 'ultra_low';
+        const mem_cap = clamp(effMem / 32);  // Normalizado contra 32GB para Q4-Q6 (más realista)
+        
+        // 2) Ancho de banda de memoria (20%)
+        let memBandwidthGBs = this.estimateMemoryBandwidth(hardware);
+        const mem_bw = clamp(memBandwidthGBs / 500);  // Normalizado contra 500 GB/s (más realista)
+        
+        // 3) Cómputo (20%)
+        let compute;
+        const tflopsFP16 = this.estimateComputeTFLOPs(hardware);
+        
+        if (tflopsFP16 > 0) {
+            compute = clamp(tflopsFP16 / 80);  // GPU: normalizado contra 80 TFLOPs (más realista)
+            
+            // Cap iGPU compute
+            if (/iris xe|uhd|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+                compute = Math.min(compute, 0.15);
+            }
+        } else {
+            // CPU path
+            compute = clamp((cpuCoresPhys * cpuGHzBase) / 60);
+            if (hasAVX512) compute = Math.min(1, compute + 0.1);
+            else if (hasAVX2) compute = Math.min(1, compute + 0.05);
+        }
+        
+        // 4) RAM del sistema para KV-cache (10%)
+        const sys_ram = clamp(ramGB / 64);
+        
+        // 5) Almacenamiento (5%)
+        const storageClass = this.detectStorageClass(hardware);
+        const storage = storageClass === 'NVME' ? 1.0 : 
+                       storageClass === 'SSD' ? 0.4 : 0.1;
+        
+        // Score final (0-100)
+        let score = 100 * (
+            0.45 * mem_cap + 
+            0.20 * mem_bw + 
+            0.20 * compute + 
+            0.10 * sys_ram + 
+            0.05 * storage
+        );
+        
+        // Mapear score → tier (final adjusted thresholds)
+        let tier = score >= 75 ? 'ultra_high' :    // 75+ for highest-end systems (RTX 4090, etc)
+                  score >= 55 ? 'high' :           // 55-74 for high-end systems like M4 Pro
+                  score >= 35 ? 'medium' :         // 35-54 for mid-range systems
+                  score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
+        
+        // Reglas de ajuste
+        if (vramGB >= 24 && memBandwidthGBs >= 400) {
+            tier = this.bumpTier(tier, +1);
+        }
+        
+        if ((!vramGB && !unified) || 
+            /iris xe|uhd|vega.*integrated/i.test(gpuModel) || 
+            memBandwidthGBs < 150) {
+            tier = this.bumpTier(tier, -1);
+        }
+        
+        return {
+            score: Math.round(score),
+            tier: tier,
+            breakdown: {
+                memory_capacity: Math.round(mem_cap * 45),
+                memory_bandwidth: Math.round(mem_bw * 20),
+                compute: Math.round(compute * 20),
+                system_ram: Math.round(sys_ram * 10),
+                storage: Math.round(storage * 5),
+                effective_memory_gb: Math.round(effMem * 10) / 10,
+                bandwidth_gbs: Math.round(memBandwidthGBs),
+                tflops_fp16: tflopsFP16 > 0 ? Math.round(tflopsFP16 * 10) / 10 : 0
+            }
+        };
+    }
+    
+    bumpTier(tier, direction) {
+        const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+        const tiers = ['ultra_low', 'low', 'medium', 'high', 'ultra_high'];
+        const index = tiers.indexOf(tier);
+        const newIndex = clamp(index + direction, 0, tiers.length - 1);
+        return tiers[newIndex];
+    }
+    
+    estimateMemoryBandwidth(hardware) {
+        const gpuModel = hardware.gpu?.model || '';
+        const ramType = hardware.memory?.type || 'DDR4';
+        const ramSpeed = hardware.memory?.clockSpeed || 3200;
+        
+        // GPU bandwidth (known values)
+        const gpu = gpuModel.toLowerCase();
+        if (gpu.includes('rtx 4090')) return 1008;
+        if (gpu.includes('rtx 4080')) return 716;
+        if (gpu.includes('rtx 4070 ti')) return 504;
+        if (gpu.includes('rtx 4070')) return 448;
+        if (gpu.includes('rtx 4060 ti')) return 288;
+        if (gpu.includes('rtx 4060')) return 272;
+        if (gpu.includes('rtx 3090')) return 936;
+        if (gpu.includes('rtx 3080')) return 760;
+        if (gpu.includes('rtx 3070')) return 448;
+        if (gpu.includes('rx 7900 xtx')) return 960;
+        if (gpu.includes('rx 7900 xt')) return 800;
+        if (gpu.includes('rx 6800 xt')) return 512;
+        if (gpu.includes('m4 pro')) return 273;  // Apple M4 Pro
+        if (gpu.includes('m4')) return 120;      // Apple M4
+        if (gpu.includes('m3 max')) return 400;
+        if (gpu.includes('m3 pro')) return 150;
+        if (gpu.includes('m3')) return 100;
+        
+        // Intel iGPU bandwidth (limited)
+        if (gpu.includes('iris xe')) return 68;
+        if (gpu.includes('uhd')) return 47;
+        
+        // Fallback to system RAM bandwidth
+        const channels = 2; // Most common
+        if (ramType.includes('DDR5')) {
+            return (ramSpeed * channels * 8) / 1000; // MT/s to GB/s
+        } else if (ramType.includes('DDR4')) {
+            return (ramSpeed * channels * 8) / 1000;
+        }
+        
+        return 50; // Conservative fallback
+    }
+    
+    estimateComputeTFLOPs(hardware) {
+        const gpuModel = hardware.gpu?.model || '';
+        const gpu = gpuModel.toLowerCase();
+        
+        // Known GPU TFLOPs FP16
+        if (gpu.includes('rtx 4090')) return 165;
+        if (gpu.includes('rtx 4080')) return 121;
+        if (gpu.includes('rtx 4070 ti')) return 83;
+        if (gpu.includes('rtx 4070')) return 64;
+        if (gpu.includes('rtx 4060 ti')) return 44;
+        if (gpu.includes('rtx 4060')) return 32;
+        if (gpu.includes('rtx 3090')) return 142;
+        if (gpu.includes('rtx 3080')) return 116;
+        if (gpu.includes('rtx 3070')) return 82;
+        if (gpu.includes('rx 7900 xtx')) return 123;
+        if (gpu.includes('rx 7900 xt')) return 103;
+        if (gpu.includes('rx 6800 xt')) return 65;
+        if (gpu.includes('m4 pro')) return 28;   // Apple M4 Pro GPU
+        if (gpu.includes('m4')) return 15;       // Apple M4 GPU
+        if (gpu.includes('m3 max')) return 40;
+        if (gpu.includes('m3 pro')) return 20;
+        if (gpu.includes('m3')) return 10;
+        
+        // Intel iGPU (very limited)
+        if (gpu.includes('iris xe')) return 2;
+        if (gpu.includes('uhd')) return 0.5;
+        
+        return 0; // Use CPU path
+    }
+    
+    detectStorageClass(hardware) {
+        // This would need to be enhanced with actual storage detection
+        // For now, assume NVMe for modern systems
+        const architecture = hardware.cpu?.architecture || hardware.cpu?.brand || '';
+        if (architecture.toLowerCase().includes('apple') || 
+            architecture.toLowerCase().includes('m1') || 
+            architecture.toLowerCase().includes('m2') ||
+            architecture.toLowerCase().includes('m3') ||
+            architecture.toLowerCase().includes('m4')) {
+            return 'NVME'; // Apple Silicon typically has fast storage
+        }
+        
+        return 'NVME'; // Conservative assumption for modern systems
     }
 
     calculateCloudModelCompatibility(model, hardware) {
