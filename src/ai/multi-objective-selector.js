@@ -699,8 +699,56 @@ class MultiObjectiveSelector {
 
     estimateTokensPerSecond(hardware, model) {
         const params = this.estimateModelParams(model);
-        const baseTPS = hardware.gpu && hardware.gpu.type !== 'Integrated' ? 40 : 20;
-        return baseTPS / Math.max(1, params / 7); // 7B as reference
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        const baseSpeed = hardware.cpu?.speed || 2.0;
+        const vramGB = hardware.gpu?.vram || 0;
+        
+        // More realistic TPS calculation based on actual hardware capabilities
+        let baseTPS = 10; // Conservative default
+        
+        // GPU-based calculation (dedicated GPU)
+        if (vramGB > 0 && !gpuModel.toLowerCase().includes('iris') && !gpuModel.toLowerCase().includes('integrated')) {
+            if (gpuModel.toLowerCase().includes('rtx 50')) {
+                baseTPS = 80; // RTX 50 series
+            } else if (gpuModel.toLowerCase().includes('rtx 40')) {
+                baseTPS = 60; // RTX 40 series  
+            } else if (gpuModel.toLowerCase().includes('rtx 30')) {
+                baseTPS = 45; // RTX 30 series
+            } else if (gpuModel.toLowerCase().includes('rtx 20')) {
+                baseTPS = 35; // RTX 20 series
+            } else if (vramGB >= 8) {
+                baseTPS = 40; // Other high-end GPUs
+            } else if (vramGB >= 4) {
+                baseTPS = 25; // Mid-range GPUs
+            }
+        }
+        // CPU-based calculation (no dedicated GPU or integrated GPU)
+        else {
+            const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
+                             (cpuModel.includes('13th') || cpuModel.includes('14th') || cpuModel.includes('12th'));
+            const hasAVX2 = cpuModel.toLowerCase().includes('intel') || cpuModel.toLowerCase().includes('amd');
+            
+            // CPU coefficient based on instruction sets and architecture
+            const cpuCoeff = hasAVX512 ? 4.0 : hasAVX2 ? 2.8 : 2.0;
+            
+            // Calculate based on cores, speed and instruction set
+            baseTPS = Math.min(35, cpuCoeff * Math.min(cores, 8) * (baseSpeed / 3.0));
+            
+            // Intel iGPU boost
+            if (gpuModel.toLowerCase().includes('iris xe')) {
+                baseTPS *= 1.3; // 30% boost for Iris Xe
+            } else if (gpuModel.toLowerCase().includes('uhd')) {
+                baseTPS *= 1.1; // 10% boost for basic iGPU
+            }
+        }
+        
+        // Scale by model size (larger models are slower)
+        const scaledTPS = baseTPS / Math.max(1, Math.pow(params / 7, 0.8)); // 7B as reference, sublinear scaling
+        
+        // Apply minimum realistic bounds
+        return Math.max(2, Math.round(scaledTPS * 100) / 100);
     }
 
     estimateTTFB(hardware, model) {

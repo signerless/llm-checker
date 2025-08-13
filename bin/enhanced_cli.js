@@ -151,6 +151,62 @@ function calculateBasicCompatibilityScore(modelSizeGB, hardware) {
 }
 
 // Function to get real size directly from Ollama cache
+function estimateModelSize(model) {
+    // Extract parameter count from model name (e.g., "3B", "7B", "13B")
+    const nameMatch = model.name.match(/(\d+\.?\d*)[bB]\b/i);
+    if (nameMatch) {
+        const paramCount = parseFloat(nameMatch[1]);
+        // Estimate size using Q4_K_M quantization (~0.5 bytes per parameter + overhead)
+        const estimatedGB = Math.round((paramCount * 0.5 + 0.5) * 10) / 10;
+        return `~${estimatedGB}GB (Q4_K_M)`;
+    }
+    
+    // Try to extract from model identifier or fallback patterns
+    if (model.model_identifier) {
+        const idMatch = model.model_identifier.match(/(\d+\.?\d*)b/i);
+        if (idMatch) {
+            const paramCount = parseFloat(idMatch[1]);
+            const estimatedGB = Math.round((paramCount * 0.5 + 0.5) * 10) / 10;
+            return `~${estimatedGB}GB (Q4_K_M)`;
+        }
+    }
+    
+    // Known model size patterns
+    const sizeMappings = {
+        'tinyllama': '~1.1GB (Q4_K_M)',
+        'mobilellama': '~1.4GB (Q4_K_M)',
+        'phi': '~2.7GB (Q4_K_M)',
+        'gemma': '~5.3GB (Q4_K_M)',
+        'llama.*3b': '~2.0GB (Q4_K_M)',
+        'llama.*7b': '~4.4GB (Q4_K_M)',
+        'llama.*13b': '~7.8GB (Q4_K_M)',
+        'dolphincoder': '~4.2GB (Q4_K_M)',
+        'deepseek-coder': '~4.0GB (Q4_K_M)',
+        'starcoder': '~8.4GB (Q4_K_M)'
+    };
+    
+    const modelNameLower = (model.name || '').toLowerCase();
+    for (const [pattern, size] of Object.entries(sizeMappings)) {
+        if (new RegExp(pattern, 'i').test(modelNameLower)) {
+            return size;
+        }
+    }
+    
+    // If we have size field but it's not formatted well
+    if (model.size && typeof model.size === 'string') {
+        const sizeMatch = model.size.match(/(\d+\.?\d*)\s*(GB|MB|B)/i);
+        if (sizeMatch) {
+            const num = parseFloat(sizeMatch[1]);
+            const unit = sizeMatch[2].toUpperCase();
+            if (unit === 'GB') return `${num}GB`;
+            if (unit === 'MB') return `${Math.round(num / 1024 * 10) / 10}GB`;
+        }
+    }
+    
+    // Final fallback
+    return '~4.5GB (estimated)';
+}
+
 function getRealSizeFromOllamaCache(model) {
     try {
         const cacheFile = path.join(__dirname, '../src/ollama/.cache/ollama-detailed-models.json');
@@ -1461,9 +1517,9 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
                 console.log(`Model: ${chalk.cyan.bold(model.name)}`);
             }
             
-            // Get real size from Ollama cache
-            const realSize = getRealSizeFromOllamaCache(model);
-            console.log(`Size: ${chalk.white(realSize || 'Unknown')}`);
+            // Get real size from Ollama cache or estimate
+            const realSize = getRealSizeFromOllamaCache(model) || estimateModelSize(model);
+            console.log(`Size: ${chalk.white(realSize)}`);
             console.log(`Compatibility Score: ${chalk.green.bold(model.adjustedScore || model.score || 'N/A')}/100`);
             
             if (index === 0) {
@@ -1480,12 +1536,18 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
                 const isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
                 if (isInstalled) {
                     console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
+                } else if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
+                    console.log(`Status: ${chalk.gray('Available via Ollama')}`);
                 } else {
-                    console.log(`Status: ${chalk.gray('Available for installation')}`);
+                    console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
                 }
             } catch (installCheckError) {
-                // If checking installation status fails, just show as available
-                console.log(`Status: ${chalk.gray('Available for installation')}`);
+                // If checking installation status fails, show based on Ollama availability
+                if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
+                    console.log(`Status: ${chalk.gray('Available via Ollama')}`);
+                } else {
+                    console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+                }
             }
         }
     } else {
@@ -1698,7 +1760,8 @@ program
                 filter: options.filter,
                 useCase: options.useCase,
                 includeCloud: options.includeCloud,
-                performanceTest: options.performanceTest
+                performanceTest: options.performanceTest,
+                limit: parseInt(options.limit) || 10
             });
 
             if (!verboseEnabled) {

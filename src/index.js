@@ -45,7 +45,9 @@ class LLMChecker {
             if (this.progress) {
                 this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
                 await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for demo
-                this.progress.substep(`Memory detected: ${hardware.memory.total}GB unified memory`, true);
+                const isApple = process.platform === 'darwin';
+                const memLabel = isApple ? 'unified memory' : 'RAM';
+                this.progress.substep(`Memory detected: ${hardware.memory.total}GB ${memLabel}`, true);
                 const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
                 this.progress.stepComplete(summary);
             }
@@ -158,11 +160,21 @@ class LLMChecker {
             ]);
             
             if (this.progress) {
-                const recCount = Object.values(recommendations).flat().length;
+                // Calculate actual number of recommendations that will be shown (respecting limit)
+                const limit = options.limit || 10;
+                const totalRecs = Object.values(recommendations).flat().length;
+                const actualRecsShown = Math.min(totalRecs, limit);
+                
                 this.progress.substep(`Analyzing use case: ${options.useCase || 'general'}`);
                 await new Promise(resolve => setTimeout(resolve, 100)); // Small delay for demo
-                this.progress.substep('Generating Ollama commands...', true);
-                this.progress.stepComplete(`${recCount} recommendations generated`);
+                
+                // Adjust message based on Ollama availability
+                if (ollamaIntegration.ollamaInfo.available) {
+                    this.progress.substep('Generating Ollama commands...', true);
+                } else {
+                    this.progress.substep('Generating installation recommendations...', true);
+                }
+                this.progress.stepComplete(`${actualRecsShown} recommendations generated`);
                 
                 // Complete the entire operation
                 const totalModels = enrichedResults.compatible.length + enrichedResults.marginal.length;
@@ -1128,6 +1140,22 @@ class LLMChecker {
                   score >= 35 ? 'medium' :         // 35-54 for mid-range systems
                   score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
         
+        // Detect if system has dedicated GPU (not integrated)
+        const hasIntegratedGPU = /iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics|integrated/i.test(gpuModel);
+        const hasDedicatedGPU = vramGB > 0 && !hasIntegratedGPU && !unified;
+        
+        // Cap tier for systems without dedicated GPU to avoid overselling capabilities
+        if (!hasDedicatedGPU && !unified) {
+            // Cap iGPU and CPU-only systems at 'high' tier maximum
+            const maxTier = 'high';
+            const tierValues = { 'ultra_low': 0, 'low': 1, 'medium': 2, 'high': 3, 'ultra_high': 4 };
+            const currentTierValue = tierValues[tier] || 0;
+            const maxTierValue = tierValues[maxTier];
+            if (currentTierValue > maxTierValue) {
+                tier = maxTier;
+            }
+        }
+        
         // Ajustes realistas basados en capacidades reales de LLM inference
         if (vramGB >= 24 && memBandwidthGBs >= 400) {
             // High-end dedicated GPU boost (RTX 4090, etc.)
@@ -1135,7 +1163,7 @@ class LLMChecker {
         } else if (!vramGB && !unified) {
             // Windows/Linux CPU-only - significativa limitación pero no extrema
             tier = this.bumpTier(tier, -1);
-        } else if (/iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+        } else if (hasIntegratedGPU) {
             // iGPU - limitada pero algo mejor que CPU puro
             tier = this.bumpTier(tier, -1);
         } else if (vramGB > 0 && vramGB < 6) {
