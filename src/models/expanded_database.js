@@ -862,9 +862,24 @@ class ExpandedModelsDatabase {
     getHardwareTier(hardware) {
         const { memory, gpu, cpu } = hardware;
         const ram = memory.total;
-        const vram = gpu.vram;
+        const vram = gpu.vram || 0;
         const cores = cpu.cores;
+        
+        // Check if it's Apple Silicon (unified memory architecture)
+        const isAppleSilicon = cpu?.architecture === 'Apple Silicon' || 
+                              (gpu?.model && gpu.model.toLowerCase().includes('apple')) ||
+                              (cpu?.brand && cpu.brand.toLowerCase().includes('apple'));
 
+        // Apple Silicon uses unified memory, so evaluate differently
+        if (isAppleSilicon) {
+            if (ram >= 64) return 'ultra_high';
+            if (ram >= 24) return 'high';  // M4 Pro with 24GB should be high tier
+            if (ram >= 16) return 'medium';
+            if (ram >= 8) return 'low';
+            return 'ultra_low';
+        }
+
+        // Traditional discrete GPU systems  
         if (ram >= 64 && vram >= 32 && cores >= 12) return 'ultra_high';
         if (ram >= 32 && vram >= 16 && cores >= 8) return 'high';
         if (ram >= 16 && vram >= 8 && cores >= 6) return 'medium';
@@ -929,18 +944,8 @@ class ExpandedModelsDatabase {
     }
 
     estimatePerformance(model, hardware) {
-        const tier = this.getHardwareTier(hardware);
-        const baseTokens = parseInt(model.performance.tokens_per_second_estimate?.split('-')[0] || '10');
-
-        const tierMultipliers = {
-            ultra_low: 0.3,
-            low: 0.6,
-            medium: 0.8,
-            high: 1.0,
-            ultra_high: 1.2
-        };
-
-        const estimatedTokensPerSecond = Math.round(baseTokens * (tierMultipliers[tier] || 0.5));
+        // Use realistic performance estimation instead of optimistic predefined values
+        const estimatedTokensPerSecond = this.calculateRealisticTokensPerSecond(model, hardware);
 
         return {
             tokensPerSecond: estimatedTokensPerSecond,
@@ -950,6 +955,103 @@ class ExpandedModelsDatabase {
             memoryUsage: this.estimateMemoryUsage(model),
             powerConsumption: this.estimatePowerConsumption(model, hardware)
         };
+    }
+
+    calculateRealisticTokensPerSecond(model, hardware) {
+        // Extract model parameters from name or size
+        const modelParams = this.extractModelParams(model);
+        
+        // Get hardware specifics
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        const baseSpeed = hardware.cpu?.speed || 2.4;
+        const vramGB = hardware.gpu?.vram || 0;
+        
+        // Check hardware type
+        const isAppleSilicon = process.platform === 'darwin' && (
+            gpuModel.toLowerCase().includes('apple') || 
+            gpuModel.toLowerCase().includes('m1') || 
+            gpuModel.toLowerCase().includes('m2') || 
+            gpuModel.toLowerCase().includes('m3') || 
+            gpuModel.toLowerCase().includes('m4')
+        );
+        const isIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel);
+        const hasDedicatedGPU = vramGB > 0 && !isIntegratedGPU && !isAppleSilicon;
+        
+        let tokensPerSecond;
+        
+        if (isAppleSilicon) {
+            // Apple Silicon unified memory - more optimistic but realistic
+            let baseTPS = 25;
+            if (gpuModel.toLowerCase().includes('m4 pro')) baseTPS = 35;
+            else if (gpuModel.toLowerCase().includes('m4')) baseTPS = 30;
+            else if (gpuModel.toLowerCase().includes('m3 pro')) baseTPS = 30;
+            else if (gpuModel.toLowerCase().includes('m3')) baseTPS = 25;
+            else if (gpuModel.toLowerCase().includes('m2 pro')) baseTPS = 28;
+            else if (gpuModel.toLowerCase().includes('m2')) baseTPS = 22;
+            else if (gpuModel.toLowerCase().includes('m1 pro')) baseTPS = 25;
+            else if (gpuModel.toLowerCase().includes('m1')) baseTPS = 20;
+            
+            // Scale by model size (Apple Silicon handles larger models better)
+            tokensPerSecond = Math.max(8, Math.round(baseTPS / Math.max(0.8, modelParams)));
+            
+        } else if (hasDedicatedGPU) {
+            // Dedicated GPU - much better performance
+            let gpuTPS = 30;
+            if (gpuModel.toLowerCase().includes('rtx 50')) gpuTPS = 65;
+            else if (gpuModel.toLowerCase().includes('rtx 40')) gpuTPS = 50;
+            else if (gpuModel.toLowerCase().includes('rtx 30')) gpuTPS = 40;
+            else if (gpuModel.toLowerCase().includes('rtx 20')) gpuTPS = 30;
+            else if (vramGB >= 16) gpuTPS = 45;
+            else if (vramGB >= 8) gpuTPS = 35;
+            else if (vramGB >= 4) gpuTPS = 25;
+            
+            // Scale by model size for GPU
+            tokensPerSecond = Math.max(10, Math.round(gpuTPS / Math.max(0.5, modelParams)));
+            
+        } else {
+            // CPU-only or integrated GPU - most realistic and conservative
+            const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
+                             (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
+            const hasAVX2 = cpuModel.toLowerCase().includes('intel') || cpuModel.toLowerCase().includes('amd');
+            
+            // Base CPU coefficient - much more conservative
+            let cpuK = 1.8; // Conservative baseline
+            if (hasAVX512) cpuK = 2.6;
+            else if (hasAVX2) cpuK = 2.2;
+            
+            // iGPU boost (small)
+            const iGpuMultiplier = isIntegratedGPU ? 1.3 : 1.0;
+            
+            // Calculate with realistic threading limits
+            const effectiveThreads = Math.min(cores, 8); // Diminishing returns after 8 threads
+            const baseTPS = (cpuK * baseSpeed * effectiveThreads * iGpuMultiplier) / Math.max(1.5, modelParams);
+            
+            // Apply realistic CPU limits
+            const maxCPUTPS = hasAVX512 ? 25 : (isIntegratedGPU ? 20 : 15);
+            tokensPerSecond = Math.max(2, Math.min(maxCPUTPS, Math.round(baseTPS)));
+        }
+        
+        return tokensPerSecond;
+    }
+
+    extractModelParams(model) {
+        // Try to extract parameter count from model name
+        const name = model.name.toLowerCase();
+        
+        // Look for patterns like "7b", "3.8b", "0.5b", etc.
+        const paramMatch = name.match(/(\d+\.?\d*)[bm](?:\s|$)/);
+        if (paramMatch) {
+            const value = parseFloat(paramMatch[1]);
+            // Convert millions to billions if needed
+            return paramMatch[1].includes('m') ? value / 1000 : value;
+        }
+        
+        // Fallback to size-based estimation
+        const sizeGB = model.size ? parseFloat(model.size.toString()) : 4;
+        // Rough estimate: 1B params ≈ 2GB in Q4 quantization
+        return Math.max(0.5, sizeGB / 2);
     }
 
     getBestQuantization(model, hardware) {

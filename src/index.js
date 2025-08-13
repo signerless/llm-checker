@@ -42,10 +42,27 @@ class LLMChecker {
             const hardware = await this.hardwareDetector.getSystemInfo();
             this.logger.info('Hardware detected', { hardware });
             
+            // Detect platform and route to appropriate logic (use hardware OS for simulation support)
+            const detectedPlatform = hardware.os?.platform || process.platform;
+            const isAppleSilicon = detectedPlatform === 'darwin';
+            const isWindows = detectedPlatform === 'win32';
+            const isLinux = detectedPlatform === 'linux';
+            
+            if (isAppleSilicon) {
+                return await this.analyzeForAppleSilicon(hardware, options);
+            } else if (isWindows) {
+                return await this.analyzeForWindows(hardware, options);
+            } else if (isLinux) {
+                return await this.analyzeForLinux(hardware, options);
+            } else {
+                // Fallback to Windows logic for unknown platforms
+                return await this.analyzeForWindows(hardware, options);
+            }
+            
             if (this.progress) {
                 this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
                 await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for demo
-                const isApple = process.platform === 'darwin';
+                const isApple = detectedPlatform === 'darwin';
                 const memLabel = isApple ? 'unified memory' : 'RAM';
                 this.progress.substep(`Memory detected: ${hardware.memory.total}GB ${memLabel}`, true);
                 const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
@@ -87,7 +104,7 @@ class LLMChecker {
             if (this.progress) {
                 if (ollamaIntegration.ollamaInfo.available) {
                     const installed = ollamaIntegration.compatibleOllamaModels.length;
-                    this.progress.found(`Ollama connected with ${installed} compatible models`);
+                    this.progress.found(`Ollama connected with ${installed} locally installed models`);
                 } else {
                     this.progress.warn('Ollama not available - continuing with database analysis only');
                 }
@@ -176,9 +193,17 @@ class LLMChecker {
                 }
                 this.progress.stepComplete(`${actualRecsShown} recommendations generated`);
                 
-                // Complete the entire operation
-                const totalModels = enrichedResults.compatible.length + enrichedResults.marginal.length;
-                this.progress.complete(`Found ${totalModels} compatible models for your hardware`);
+                // Complete the entire operation with accurate counts
+                const compatibleCount = enrichedResults.compatible.length;
+                const marginalCount = enrichedResults.marginal.length;
+                
+                if (compatibleCount > 0) {
+                    this.progress.complete(`Found ${compatibleCount} compatible models for your hardware`);
+                } else if (marginalCount > 0) {
+                    this.progress.complete(`Found ${compatibleCount} compatible (${marginalCount} marginal) models for your hardware`);
+                } else {
+                    this.progress.complete(`No compatible models found for your hardware`);
+                }
             }
 
             return {
@@ -201,6 +226,273 @@ class LLMChecker {
             this.logger.error('Analysis failed', { error: error.message, component: 'LLMChecker', method: 'analyze' });
             throw new Error(`Analysis failed: ${error.message}`);
         }
+    }
+
+    // ============================================================================
+    // PLATFORM-SPECIFIC ANALYSIS METHODS
+    // ============================================================================
+
+    async analyzeForAppleSilicon(hardware, options = {}) {
+        // Apple Silicon optimized analysis with unified memory consideration
+        if (this.progress) {
+            this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            this.progress.substep(`Memory detected: ${hardware.memory.total}GB unified memory`, true);
+            const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Apple Silicon GPU'}`;
+            this.progress.stepComplete(summary);
+        }
+
+        // Continue with original analysis flow but with Apple Silicon specific optimizations
+        return await this.runAnalysisFlow(hardware, options, 'apple_silicon');
+    }
+
+    async analyzeForWindows(hardware, options = {}) {
+        // Windows-specific analysis with discrete GPU / iGPU handling
+        if (this.progress) {
+            this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            this.progress.substep(`Memory detected: ${hardware.memory.total}GB RAM`, true);
+            const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
+            this.progress.stepComplete(summary);
+        }
+
+        // Continue with original analysis flow but with Windows specific optimizations
+        return await this.runAnalysisFlow(hardware, options, 'windows');
+    }
+
+    async analyzeForLinux(hardware, options = {}) {
+        // Linux-specific analysis (similar to Windows but with Linux considerations)
+        if (this.progress) {
+            this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            this.progress.substep(`Memory detected: ${hardware.memory.total}GB RAM`, true);
+            const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'GPU'}`;
+            this.progress.stepComplete(summary);
+        }
+
+        // Continue with original analysis flow but with Linux specific optimizations
+        return await this.runAnalysisFlow(hardware, options, 'linux');
+    }
+
+    async runAnalysisFlow(hardware, options, platform) {
+        // Step 2: Database Sync (using static database)
+        if (this.progress) {
+            this.progress.step('Database Sync', 'Loading model database...');
+        }
+        
+        // Using static pre-loaded model database with classifications
+        const modelCount = 177; // Static count from pre-loaded database
+        
+        if (this.progress) {
+            this.progress.found(`${modelCount} models in database`);
+            this.progress.stepComplete('Database synchronized');
+        }
+
+        // Step 3: Load Base Models
+        if (this.progress) {
+            this.progress.step('Model Analysis', 'Loading base model definitions...');
+        }
+        
+        let models = this.expandedModelsDatabase.getAllModels();
+        
+        if (this.progress) {
+            this.progress.found(`Loaded ${models.length} base models`);
+            this.progress.stepComplete('Base models loaded');
+        }
+
+        // Step 4: Ollama Integration
+        if (this.progress) {
+            this.progress.step('Ollama Integration', 'Connecting to Ollama and checking installed models...');
+        }
+        
+        const ollamaIntegration = await this.integrateOllamaModels(hardware, models);
+        
+        if (this.progress) {
+            if (ollamaIntegration.ollamaInfo.available) {
+                const installed = ollamaIntegration.compatibleOllamaModels.length;
+                this.progress.found(`Ollama connected with ${installed} locally installed models`);
+            } else {
+                this.progress.warn('Ollama not available - continuing with database analysis only');
+            }
+            this.progress.stepComplete('Ollama integration complete');
+        }
+
+        // Step 5: Filter Models (skip step if no filtering needed)
+        if (options.filter || !options.includeCloud) {
+            if (this.progress) {
+                this.progress.step('Model Filtering', 'Applying user-specified filters...');
+            }
+
+            const originalCount = models.length;
+            if (options.filter) {
+                models = this.filterModels(models, options.filter);
+                if (this.progress) {
+                    this.progress.substep(`Filter applied: ${options.filter}`);
+                }
+            }
+
+            if (!options.includeCloud) {
+                models = models.filter(model => model.type === 'local');
+                if (this.progress) {
+                    this.progress.substep('Cloud models excluded', true);
+                }
+            }
+            
+            if (this.progress) {
+                this.progress.stepComplete(`${models.length}/${originalCount} models selected`);
+            }
+        }
+
+        // Step 6: Platform-specific Mathematical Analysis
+        if (this.progress) {
+            this.progress.step('Compatibility Analysis', 'Running mathematical heuristics and hardware matching...');
+        }
+        
+        const compatibility = await this.analyzeWithPlatformSpecificHeuristics(hardware, models, ollamaIntegration, platform, options);
+        
+        if (this.progress) {
+            const stats = `${compatibility.compatible.length} compatible, ${compatibility.marginal.length} marginal`;
+            this.progress.stepComplete(stats);
+        }
+
+        // Step 7: Performance Estimation
+        if (this.progress) {
+            this.progress.step('Performance Analysis', 'Estimating model performance and speeds...');
+        }
+        
+        const enrichedResults = await this.enrichWithPerformanceData(hardware, compatibility, platform);
+        
+        if (this.progress) {
+            const perfCount = Object.keys(enrichedResults.performanceEstimates || {}).length;
+            this.progress.stepComplete(`Performance data for ${perfCount} models`);
+        }
+
+        // Step 8: Generate Platform-specific Recommendations
+        if (this.progress) {
+            this.progress.step('Smart Recommendations', 'Generating personalized model suggestions...');
+        }
+
+        const recommendations = await this.generateIntelligentRecommendations(hardware);
+        const intelligentRecommendations = recommendations;
+
+        if (this.progress) {
+            const compatibleCount = enrichedResults.compatible.length;
+            const marginalCount = enrichedResults.marginal.length;
+            const recCount = Object.keys(intelligentRecommendations || {}).length;
+            this.progress.substep(`Generating ${platform} recommendations...`, true);
+            this.progress.stepComplete(`${recCount} recommendations generated`);
+            
+            if (compatibleCount > 0 && marginalCount === 0) {
+                this.progress.complete(`Found ${compatibleCount} compatible models for your hardware`);
+            } else if (marginalCount > 0) {
+                this.progress.complete(`Found ${compatibleCount} compatible (${marginalCount} marginal) models for your hardware`);
+            } else {
+                this.progress.complete(`No compatible models found for your hardware`);
+            }
+        }
+
+        return {
+            hardware,
+            compatible: enrichedResults.compatible,
+            marginal: enrichedResults.marginal,
+            incompatible: enrichedResults.incompatible,
+            recommendations,
+            intelligentRecommendations,
+            ollamaInfo: ollamaIntegration.ollamaInfo,
+            ollamaModels: ollamaIntegration.compatibleOllamaModels,
+            summary: this.generateEnhancedSummary(hardware, enrichedResults, ollamaIntegration),
+            performanceEstimates: enrichedResults.performanceEstimates,
+            platform
+        };
+    }
+
+    async analyzeWithPlatformSpecificHeuristics(hardware, staticModels, ollamaIntegration, platform, options = {}) {
+        // Use different analysis approaches based on platform
+        if (platform === 'apple_silicon') {
+            return await this.analyzeWithAppleSiliconHeuristics(hardware, staticModels, ollamaIntegration, options);
+        } else {
+            return await this.analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration);
+        }
+    }
+
+    async analyzeWithAppleSiliconHeuristics(hardware, staticModels, ollamaIntegration, options = {}) {
+        // Apple Silicon specific analysis - more optimistic for unified memory
+        this.logger.info('Using Apple Silicon specific heuristics');
+        
+        // For Apple Silicon, we use more optimistic thresholds
+        const MultiObjectiveSelector = require('./ai/multi-objective-selector');
+        const selector = new MultiObjectiveSelector();
+        
+        // Use the specified use case, default to 'general'
+        const useCase = options.useCase || 'general';
+        const results = await selector.selectBestModels(hardware, staticModels, useCase, 100);
+        
+        // Apple Silicon specific post-processing - make more models compatible
+        // Lower threshold for Apple Silicon due to unified memory efficiency
+        const appleSiliconThreshold = hardware.memory_gb >= 16 ? 45 : 55;
+        const appleSiliconResults = {
+            compatible: [...results.compatible, ...results.marginal.filter(m => m.totalScore >= appleSiliconThreshold)],
+            marginal: results.marginal.filter(m => m.totalScore < appleSiliconThreshold && m.totalScore >= 35),
+            incompatible: [...results.incompatible, ...results.marginal.filter(m => m.totalScore < 35)]
+        };
+        
+        this.logger.info('Apple Silicon heuristic results', {
+            compatible: appleSiliconResults.compatible.length,
+            marginal: appleSiliconResults.marginal.length,
+            incompatible: appleSiliconResults.incompatible.length
+        });
+        
+        
+        // Convert totalScore to score for consistency with other analysis paths
+        const mappedResults = {
+            compatible: appleSiliconResults.compatible.map(model => ({
+                ...model,
+                score: model.totalScore,
+                confidence: model.totalScore / 100,
+                reasoning: model.reasoning,
+                mathAnalysis: {
+                    qualityScore: model.components?.quality,
+                    speedScore: model.components?.speed,
+                    ttfbScore: model.components?.ttfb,
+                    contextScore: model.components?.context,
+                    hardwareMatchScore: model.components?.hardwareMatch
+                },
+                isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
+                ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+            })),
+            marginal: appleSiliconResults.marginal.map(model => ({
+                ...model,
+                score: model.totalScore,
+                confidence: model.totalScore / 100,
+                reasoning: model.reasoning,
+                mathAnalysis: {
+                    qualityScore: model.components?.quality,
+                    speedScore: model.components?.speed,
+                    ttfbScore: model.components?.ttfb,
+                    contextScore: model.components?.context,
+                    hardwareMatchScore: model.components?.hardwareMatch
+                },
+                isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
+                ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+            })),
+            incompatible: appleSiliconResults.incompatible.map(model => ({
+                ...model,
+                score: model.totalScore,
+                confidence: model.totalScore / 100,
+                reasoning: model.reasoning,
+                mathAnalysis: {
+                    qualityScore: model.components?.quality,
+                    speedScore: model.components?.speed,
+                    ttfbScore: model.components?.ttfb,
+                    contextScore: model.components?.context,
+                    hardwareMatchScore: model.components?.hardwareMatch
+                },
+                isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
+                ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+            }))
+        };
+        
+        return mappedResults;
     }
 
     async integrateOllamaModels(hardware, availableModels) {
@@ -366,14 +658,14 @@ class LLMChecker {
                     ...model,
                     score: model.totalScore,
                     confidence: model.totalScore / 100,
-                    reasoning: model.reasoning,
-                    mathAnalysis: {
-                        qualityScore: model.components.quality,
-                        speedScore: model.components.speed,
-                        ttfbScore: model.components.ttfb,
-                        contextScore: model.components.context,
-                        hardwareMatchScore: model.components.hardwareMatch
-                    },
+                        reasoning: model.reasoning,
+                        mathAnalysis: {
+                            qualityScore: model.components.quality,
+                            speedScore: model.components.speed,
+                            ttfbScore: model.components.ttfb,
+                            contextScore: model.components.context,
+                            hardwareMatchScore: model.components.hardwareMatch
+                        },
                     isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
                     ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
                 })),
@@ -1140,9 +1432,19 @@ class LLMChecker {
                   score >= 35 ? 'medium' :         // 35-54 for mid-range systems
                   score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
         
-        // Detect if system has dedicated GPU (not integrated)
-        const hasIntegratedGPU = /iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics|integrated/i.test(gpuModel);
+        // Detect if system has dedicated GPU (not integrated) - improved detection
+        const hasIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(gpuModel);
         const hasDedicatedGPU = vramGB > 0 && !hasIntegratedGPU && !unified;
+        
+        // Debug logging for tier calculation
+        if (process.env.DEBUG_TIER) {
+            console.log(`GPU Model: "${gpuModel}"`);
+            console.log(`Has Integrated GPU: ${hasIntegratedGPU}`);
+            console.log(`Has Dedicated GPU: ${hasDedicatedGPU}`);
+            console.log(`VRAM: ${vramGB}GB`);
+            console.log(`Unified: ${unified}`);
+            console.log(`Initial Tier: ${tier}`);
+        }
         
         // Cap tier for systems without dedicated GPU to avoid overselling capabilities
         if (!hasDedicatedGPU && !unified) {

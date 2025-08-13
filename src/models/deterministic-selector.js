@@ -554,7 +554,12 @@ class DeterministicModelSelector {
                            
                 case 'embeddings':
                     return model.tags.includes('embedding') ||
-                           model.name.toLowerCase().includes('embed');
+                           model.tags.includes('embeddings') ||
+                           model.name.toLowerCase().includes('embed') ||
+                           model.name.toLowerCase().includes('bge-') ||
+                           model.name.toLowerCase().includes('nomic-embed') ||
+                           model.name.toLowerCase().includes('all-minilm') ||
+                           model.specialization === 'embeddings';
                            
                 case 'reasoning':
                     return model.tags.includes('instruct') || 

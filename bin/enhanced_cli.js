@@ -230,6 +230,11 @@ function getRealSizeFromOllamaCache(model) {
                      model.name.toLowerCase().includes('deepseek') && 
                      model.name.toLowerCase().includes('coder')) {
                 targetModel = models.find(m => m.model_identifier === 'deepseek-coder');
+            } 
+            // Special case: TinyLlama incorrectly mapped to llama-pro
+            else if (model.ollamaId === 'llama-pro' && 
+                     model.name && model.name.toLowerCase().includes('tinyllama')) {
+                targetModel = models.find(m => m.model_identifier === 'tinyllama');
             } else {
                 targetModel = models.find(m => m.model_identifier === model.ollamaId);
             }
@@ -512,18 +517,38 @@ function calculateModelCompatibilityScore(model, hardware) {
 function getHardwareTierForDisplay(hardware) {
     const ram = hardware.memory.total;
     const cores = hardware.cpu.cores;
+    const gpuModel = hardware.gpu?.model || '';
+    const vramGB = hardware.gpu?.vram || 0;
     
-    if (ram >= 64 && cores >= 16) return 'EXTREME';
-    if (ram >= 32 && cores >= 12) return 'VERY HIGH';
-    if (ram >= 16 && cores >= 8) return 'HIGH';
-    if (ram >= 8 && cores >= 4) return 'MEDIUM';
-    if (ram >= 4 && cores >= 2) return 'LOW';
+    // Check if it's integrated GPU (should cap tier)
+    const isIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(gpuModel);
+    const hasDedicatedGPU = vramGB > 0 && !isIntegratedGPU;
+    const isAppleSilicon = process.platform === 'darwin' && (gpuModel.toLowerCase().includes('apple') || gpuModel.toLowerCase().includes('m1') || gpuModel.toLowerCase().includes('m2') || gpuModel.toLowerCase().includes('m3') || gpuModel.toLowerCase().includes('m4'));
     
-    // Casos especiales
-    if (ram >= 16 && ram < 32 && cores >= 12) return 'HIGH';
-    if (ram >= 32 && ram < 64 && cores >= 8) return 'VERY HIGH';
+    // Base tier calculation
+    let tier;
+    if (ram >= 64 && cores >= 16) tier = 'EXTREME';
+    else if (ram >= 32 && cores >= 12) tier = 'VERY HIGH';
+    else if (ram >= 16 && cores >= 8) tier = 'HIGH';
+    else if (ram >= 8 && cores >= 4) tier = 'MEDIUM';
+    else if (ram >= 4 && cores >= 2) tier = 'LOW';
+    else tier = 'ULTRA LOW';
     
-    return 'ULTRA LOW';
+    // Special cases for edge configurations
+    if (ram >= 16 && ram < 32 && cores >= 12) tier = 'HIGH';
+    if (ram >= 32 && ram < 64 && cores >= 8 && tier === 'ULTRA LOW') tier = 'VERY HIGH';
+    
+    // Cap tier for integrated GPU systems (most important fix)
+    if (isIntegratedGPU && !isAppleSilicon) {
+        // Cap iGPU systems at HIGH maximum (Iris Xe, Intel UHD, AMD integrated, etc.)
+        const tierPriority = { 'ULTRA LOW': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3, 'VERY HIGH': 4, 'EXTREME': 5 };
+        const currentPriority = tierPriority[tier] || 0;
+        if (currentPriority > 3) { // HIGH = 3
+            tier = 'HIGH';
+        }
+    }
+    
+    return tier;
 }
 
 function formatSpeed(speed) {
@@ -1307,6 +1332,7 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
         // First, try to find models that match the use case
         let candidateModels = analysis.compatible;
         
+        
         // Apply intelligent filtering based on use case
         if (useCase && useCase !== 'general') {
             // Specific use case filtering
@@ -1337,18 +1363,20 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
                     case 'conversation':
                     case 'talking':
                         // Prefer chat models, exclude coding models
+                        // First, hard exclude coding models
                         if (model.primary_category === 'coding' || 
                             specialization === 'code' || 
                             model.name.toLowerCase().includes('code') ||
                             model.name.toLowerCase().includes('coder')) {
                             return false;
                         }
+                        // Then include chat models (coding exclusion above takes precedence)
                         return model.primary_category === 'chat' ||
                                model.categories?.includes('chat') ||
                                category === 'talking' || specialization === 'chat' ||
-                               model.name.toLowerCase().includes('llama') ||
-                               model.name.toLowerCase().includes('mistral') ||
-                               model.name.toLowerCase().includes('qwen') ||
+                               (model.name.toLowerCase().includes('llama') && !model.name.toLowerCase().includes('code')) ||
+                               (model.name.toLowerCase().includes('mistral') && !model.name.toLowerCase().includes('code')) ||
+                               (model.name.toLowerCase().includes('qwen') && !model.name.toLowerCase().includes('code')) ||
                                (!model.name.toLowerCase().includes('llava') &&
                                 (specialization === 'general' || category === 'medium'));
                     
@@ -1500,9 +1528,124 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
             reason = 'Highest compatibility score for your hardware';
         }
     } else if (analysis.marginal && analysis.marginal.length > 0) {
-        const sortedMarginal = analysis.marginal.sort((a, b) => (b.score || 0) - (a.score || 0));
+        let marginalCandidates = analysis.marginal;
+        
+        // Apply same use case filtering to marginal models
+        if (useCase && useCase !== 'general') {
+            const useCaseMarginal = marginalCandidates.filter(model => {
+                const specialization = model.specialization?.toLowerCase();
+                const category = model.category?.toLowerCase();
+                
+                const lowerUseCase = useCase.toLowerCase();
+                switch (lowerUseCase) {
+                    case 'coding':
+                    case 'code':
+                        return model.primary_category === 'coding' ||
+                               model.categories?.includes('coding') ||
+                               specialization === 'code' || category === 'coding' || 
+                               model.name.toLowerCase().includes('code') ||
+                               model.name.toLowerCase().includes('coder');
+                    
+                    case 'creative':
+                    case 'writing':
+                        return model.primary_category === 'creative' ||
+                               model.categories?.includes('creative') ||
+                               category === 'creative' || specialization === 'creative' ||
+                               model.name.toLowerCase().includes('dolphin') ||
+                               model.name.toLowerCase().includes('wizard') ||
+                               model.name.toLowerCase().includes('uncensored');
+                    
+                    case 'chat':
+                    case 'conversation':
+                    case 'talking':
+                        // First, hard exclude coding models
+                        if (model.primary_category === 'coding' || 
+                            specialization === 'code' || 
+                            model.name.toLowerCase().includes('code') ||
+                            model.name.toLowerCase().includes('coder')) {
+                            return false;
+                        }
+                        // Then include chat models
+                        return model.primary_category === 'chat' ||
+                               model.categories?.includes('chat') ||
+                               category === 'talking' || specialization === 'chat' ||
+                               (model.name.toLowerCase().includes('llama') && !model.name.toLowerCase().includes('code')) ||
+                               (model.name.toLowerCase().includes('mistral') && !model.name.toLowerCase().includes('code')) ||
+                               (model.name.toLowerCase().includes('qwen') && !model.name.toLowerCase().includes('code')) ||
+                               (!model.name.toLowerCase().includes('llava') &&
+                                (specialization === 'general' || category === 'medium'));
+                    
+                    case 'multimodal':
+                    case 'vision':
+                        return model.primary_category === 'multimodal' ||
+                               model.categories?.includes('multimodal') ||
+                               category === 'multimodal' || 
+                               model.name.toLowerCase().includes('llava') ||
+                               model.name.toLowerCase().includes('vision');
+                    
+                    case 'embeddings':
+                    case 'embedings': // typo tolerance
+                    case 'embedding':
+                    case 'embeding': // typo tolerance
+                        return model.primary_category === 'embeddings' ||
+                               model.categories?.includes('embeddings') ||
+                               category === 'embeddings' ||
+                               model.name.toLowerCase().includes('embed') ||
+                               model.name.toLowerCase().includes('bge');
+                    
+                    case 'reasoning':
+                    case 'reason':
+                        return model.primary_category === 'reasoning' ||
+                               model.categories?.includes('reasoning') ||
+                               category === 'reasoning' ||
+                               model.name.toLowerCase().includes('deepseek-r1') ||
+                               model.name.toLowerCase().includes('reasoning');
+                    
+                    default:
+                        // Check for partial matches with typo tolerance
+                        if (lowerUseCase.includes('embed')) {
+                            return model.primary_category === 'embeddings' ||
+                                   model.categories?.includes('embeddings') ||
+                                   category === 'embeddings' ||
+                                   model.name.toLowerCase().includes('embed');
+                        }
+                        if (lowerUseCase.includes('code')) {
+                            return model.primary_category === 'coding' ||
+                                   model.categories?.includes('coding') ||
+                                   category === 'coding' ||
+                                   model.name.toLowerCase().includes('code');
+                        }
+                        if (lowerUseCase.includes('creat')) {
+                            return model.primary_category === 'creative' ||
+                                   model.categories?.includes('creative') ||
+                                   category === 'creative';
+                        }
+                        if (lowerUseCase.includes('chat') || lowerUseCase.includes('talk')) {
+                            return model.primary_category === 'chat' ||
+                                   model.categories?.includes('chat') ||
+                                   category === 'chat';
+                        }
+                        if (lowerUseCase.includes('vision') || lowerUseCase.includes('image')) {
+                            return model.primary_category === 'multimodal' ||
+                                   model.categories?.includes('multimodal') ||
+                                   model.name.toLowerCase().includes('llava');
+                        }
+                        return true; // Include if no specific pattern matches
+                }
+            });
+            
+            if (useCaseMarginal.length > 0) {
+                marginalCandidates = useCaseMarginal;
+                reason = `Best ${useCase} model for your hardware`;
+            } else {
+                reason = 'Best available option (marginal performance)';
+            }
+        } else {
+            reason = 'Best available option (marginal performance)';
+        }
+        
+        const sortedMarginal = marginalCandidates.sort((a, b) => (b.score || 0) - (a.score || 0));
         selectedModels = sortedMarginal.slice(0, limit);
-        reason = 'Best available option (marginal performance)';
     }
     
     if (selectedModels && selectedModels.length > 0) {
@@ -1756,9 +1899,27 @@ program
             }
 
             const hardware = await checker.getSystemInfo();
+            
+            // Normalize and fix use-case typos
+            const normalizeUseCase = (useCase = '') => {
+                const alias = useCase.toLowerCase().trim();
+                const useCaseMap = {
+                    'embed': 'embeddings',
+                    'embedding': 'embeddings', 
+                    'embeddings': 'embeddings',
+                    'embedings': 'embeddings', // common typo
+                    'talk': 'chat',
+                    'chat': 'chat',
+                    'talking': 'chat'
+                };
+                return useCaseMap[alias] || alias || 'general';
+            };
+            
+            const normalizedUseCase = normalizeUseCase(options.useCase);
+            
             const analysis = await checker.analyze({
                 filter: options.filter,
-                useCase: options.useCase,
+                useCase: normalizedUseCase,
                 includeCloud: options.includeCloud,
                 performanceTest: options.performanceTest,
                 limit: parseInt(options.limit) || 10
@@ -1770,7 +1931,7 @@ program
 
             // Simplified output - show only essential information
             displaySimplifiedSystemInfo(hardware);
-            const recommendedModels = await displayModelRecommendations(analysis, hardware, options.useCase, parseInt(options.limit) || 1);
+            const recommendedModels = await displayModelRecommendations(analysis, hardware, normalizedUseCase, parseInt(options.limit) || 1);
             await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels);
 
         } catch (error) {

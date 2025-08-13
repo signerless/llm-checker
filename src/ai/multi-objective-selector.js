@@ -10,22 +10,23 @@
 
 class MultiObjectiveSelector {
     constructor() {
-        // Performance weights by category
+        // Performance weights by category - prioritize hardware match and quality over raw speed
         this.categoryWeights = {
-            'general': { quality: 0.55, speed: 0.25, ttfb: 0.10, context: 0.05, hardwareMatch: 0.05 },
-            'coding': { quality: 0.55, speed: 0.20, ttfb: 0.10, context: 0.10, hardwareMatch: 0.05 },
-            'reasoning': { quality: 0.60, speed: 0.15, ttfb: 0.05, context: 0.15, hardwareMatch: 0.05 },
-            'multimodal': { quality: 0.50, speed: 0.15, ttfb: 0.10, context: 0.10, hardwareMatch: 0.15 },
-            'longctx': { quality: 0.35, speed: 0.15, ttfb: 0.05, context: 0.40, hardwareMatch: 0.05 }
+            'general': { quality: 0.45, speed: 0.15, ttfb: 0.05, context: 0.05, hardwareMatch: 0.30 },
+            'coding': { quality: 0.45, speed: 0.15, ttfb: 0.05, context: 0.10, hardwareMatch: 0.25 },
+            'reasoning': { quality: 0.50, speed: 0.10, ttfb: 0.05, context: 0.15, hardwareMatch: 0.20 },
+            'multimodal': { quality: 0.40, speed: 0.10, ttfb: 0.05, context: 0.10, hardwareMatch: 0.35 },
+            'longctx': { quality: 0.30, speed: 0.10, ttfb: 0.05, context: 0.35, hardwareMatch: 0.20 }
         };
 
         // Optimal model sizes by hardware tier (in billions of parameters)
         this.optimalSizes = {
-            'ultra_high': { min: 13, max: 70, sweet: 20 },    // 64+ GB: 13B-70B models
-            'high': { min: 7, max: 30, sweet: 13 },           // 24-64 GB: 7B-30B models  
-            'medium': { min: 3, max: 13, sweet: 7 },          // 8-16 GB: 3B-13B models
-            'low': { min: 1, max: 7, sweet: 3 },              // 4-8 GB: 1B-7B models
-            'ultra_low': { min: 0.1, max: 3, sweet: 1 }      // <4 GB: <3B models
+            'flagship': { min: 30, max: 175, sweet: 70 },    // RTX 5090 tier: 30B-175B models
+            'ultra_high': { min: 20, max: 105, sweet: 35 },  // RTX 4090 tier: 20B-105B models  
+            'high': { min: 8, max: 50, sweet: 20 },          // RTX 4080, Apple 32GB: 8B-50B models
+            'medium': { min: 3, max: 20, sweet: 8 },         // RTX 4070, Apple 16GB: 3B-20B models
+            'low': { min: 1, max: 8, sweet: 3 },             // Budget systems: 1B-8B models
+            'ultra_low': { min: 0.1, max: 3, sweet: 1 }     // Very limited: <3B models
         };
 
         // Benchmark-based quality priors (normalized 0-1)
@@ -56,6 +57,7 @@ class MultiObjectiveSelector {
         const scoredModels = compatibleModels.map(model => 
             this.calculateMultiObjectiveScore(hardware, model, category)
         ).filter(Boolean);
+        
 
         // Step 3: Sort and classify
         scoredModels.sort((a, b) => b.totalScore - a.totalScore);
@@ -97,10 +99,11 @@ class MultiObjectiveSelector {
         
         // Tier-based realistic limits (not just memory, but practical performance)
         const tierLimits = {
-            'ultra_high': { maxModelSize: 70, availableMemoryRatio: 0.8 },  // High-end GPUs
-            'high': { maxModelSize: 30, availableMemoryRatio: 0.75 },       // Good GPUs, Apple Silicon
-            'medium': { maxModelSize: 13, availableMemoryRatio: 0.7 },      // Mid-range systems
-            'low': { maxModelSize: 7, availableMemoryRatio: 0.6 },          // Budget systems, iGPU
+            'flagship': { maxModelSize: 180, availableMemoryRatio: 0.85 },  // RTX 5090 tier, massive VRAM
+            'ultra_high': { maxModelSize: 105, availableMemoryRatio: 0.8 }, // RTX 4090, H100 tier
+            'high': { maxModelSize: 50, availableMemoryRatio: 0.75 },       // RTX 4080, Apple Silicon 32GB+
+            'medium': { maxModelSize: 20, availableMemoryRatio: 0.7 },      // RTX 4070, Apple Silicon 16GB
+            'low': { maxModelSize: 8, availableMemoryRatio: 0.6 },          // Budget systems, iGPU
             'ultra_low': { maxModelSize: 3, availableMemoryRatio: 0.5 }     // Very limited systems
         };
         
@@ -235,11 +238,12 @@ class MultiObjectiveSelector {
 
     /**
      * Classify results into compatible/marginal/incompatible
+     * Lower thresholds for more realistic classification
      */
     classifyResults(scoredModels, topK) {
-        const compatible = scoredModels.filter(m => m.totalScore >= 75);
-        const marginal = scoredModels.filter(m => m.totalScore >= 60 && m.totalScore < 75);
-        const incompatible = scoredModels.filter(m => m.totalScore < 60);
+        const compatible = scoredModels.filter(m => m.totalScore >= 65);
+        const marginal = scoredModels.filter(m => m.totalScore >= 45 && m.totalScore < 65);
+        const incompatible = scoredModels.filter(m => m.totalScore < 45);
 
         return {
             compatible: compatible.slice(0, topK),
@@ -266,18 +270,22 @@ class MultiObjectiveSelector {
         if (unit === 'MB') return num / 1024; // Convert MB to GB
         if (unit === 'GB') return num; // Already in GB
         
-        // If unit is 'B', it could be bytes (very small) or parameter count indicator
-        // If the number is very small (< 1000), treat it as GB (like "4.7B" file size)
-        // If the number is large (>= 1000), treat it as bytes and convert
+        // If unit is 'B', determine if it's bytes or billion parameters
         if (unit === 'B') {
-            if (num >= 1000) {
+            if (num >= 1000000) {
+                // Large numbers (>= 1M) are likely bytes
                 return num / (1024 ** 3); // Convert bytes to GB
+            } else if (num >= 0.1 && num <= 100) {
+                // Small numbers (0.1-100) are likely billion parameters - convert to file size
+                // Rough estimate: 1B params ≈ 2GB in Q4 quantization
+                return Math.max(0.5, num * 2);
             } else {
-                return num; // Treat as GB (common for model file sizes like "4.7B" = 4.7GB)
+                // Fallback for edge cases
+                return Math.max(0.5, num);
             }
         }
         
-        return num; // Default to GB
+        return num; // Default fallback
     }
 
     estimateModelParams(model) {
@@ -413,22 +421,26 @@ class MultiObjectiveSelector {
         // Final score
         const score = 100 * (0.45 * mem_cap + 0.20 * mem_bw + 0.20 * compute + 0.10 * sys_ram + 0.05 * storage);
         
-        // Map to tier (final adjusted thresholds)
-        let tier = score >= 75 ? 'ultra_high' :
+        // Map to tier (expanded for flagship hardware)
+        let tier = score >= 85 ? 'flagship' :     // New flagship tier for extreme hardware
+                  score >= 75 ? 'ultra_high' :
                   score >= 55 ? 'high' :
                   score >= 35 ? 'medium' :
                   score >= 20 ? 'low' : 'ultra_low';
         
         // Apply same reality-based adjustments as main algorithm
         const bumpTier = (t, direction) => {
-            const tiers = ['ultra_low', 'low', 'medium', 'high', 'ultra_high'];
+            const tiers = ['ultra_low', 'low', 'medium', 'high', 'ultra_high', 'flagship'];
             const index = tiers.indexOf(t);
             const newIndex = Math.max(0, Math.min(tiers.length - 1, index + direction));
             return tiers[newIndex];
         };
         
-        // Realistic adjustments for LLM inference capabilities
-        if (vramGB >= 24) {
+        // Enhanced tier adjustments for flagship hardware
+        if (vramGB >= 32) {
+            // RTX 5090 tier - automatic flagship promotion
+            tier = 'flagship';
+        } else if (vramGB >= 24) {
             tier = bumpTier(tier, +1);  // High-end GPU boost
         } else if (!vramGB && !unified) {
             tier = bumpTier(tier, -1);  // CPU-only penalty (moderate)
@@ -436,6 +448,13 @@ class MultiObjectiveSelector {
             tier = bumpTier(tier, -1);  // iGPU penalty
         } else if (vramGB > 0 && vramGB < 6) {
             tier = bumpTier(tier, -1);  // Low VRAM penalty
+        }
+        
+        // Special flagship GPU detection by model name
+        if (gpuModel.toLowerCase().includes('rtx 50') || 
+            gpuModel.toLowerCase().includes('h100') || 
+            gpuModel.toLowerCase().includes('a100')) {
+            tier = 'flagship';
         }
         
         return tier;
@@ -585,11 +604,14 @@ class MultiObjectiveSelector {
         // NVIDIA GPU optimizations
         if (gpu.includes('nvidia') || gpu.includes('geforce') || gpu.includes('rtx') || gpu.includes('gtx')) {
             if (gpu.includes('rtx 50')) {
-                specs.offloadCapacity = Math.min(ramGB * 0.3, 12);
+                // RTX 50xx series - flagship tier with massive VRAM + excellent offload
+                specs.offloadCapacity = Math.min(ramGB * 0.5, 24);
+                specs.memoryEfficiency = 0.95;
             } else if (gpu.includes('rtx 40')) {
-                specs.offloadCapacity = Math.min(ramGB * 0.25, 10);
+                specs.offloadCapacity = Math.min(ramGB * 0.35, 16);
+                specs.memoryEfficiency = 0.90;
             } else if (gpu.includes('rtx 30')) {
-                specs.offloadCapacity = Math.min(ramGB * 0.2, 8);
+                specs.offloadCapacity = Math.min(ramGB * 0.25, 12);
             } else if (gpu.includes('rtx 20') || gpu.includes('gtx 16')) {
                 specs.offloadCapacity = Math.min(ramGB * 0.15, 6);
             }
@@ -609,9 +631,11 @@ class MultiObjectiveSelector {
             }
         }
         
-        // Apply memory scaling bonuses
-        if (ramGB >= 32) {
-            specs.offloadCapacity += 2;
+        // Apply memory scaling bonuses for high-end systems
+        if (ramGB >= 64) {
+            specs.offloadCapacity += 8;  // Massive system bonus
+        } else if (ramGB >= 32) {
+            specs.offloadCapacity += 4;  // High-end system bonus
         }
         
         return specs;
@@ -705,50 +729,64 @@ class MultiObjectiveSelector {
         const baseSpeed = hardware.cpu?.speed || 2.0;
         const vramGB = hardware.gpu?.vram || 0;
         
-        // More realistic TPS calculation based on actual hardware capabilities
-        let baseTPS = 10; // Conservative default
+        // Use improved CPU estimation function for more realistic and varying speeds
+        const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
+                         (cpuModel.includes('13th') || cpuModel.includes('14th') || cpuModel.includes('12th'));
         
-        // GPU-based calculation (dedicated GPU)
+        // GPU-based calculation (dedicated GPU only)
         if (vramGB > 0 && !gpuModel.toLowerCase().includes('iris') && !gpuModel.toLowerCase().includes('integrated')) {
+            let gpuTPS = 20; // Conservative GPU baseline
             if (gpuModel.toLowerCase().includes('rtx 50')) {
-                baseTPS = 80; // RTX 50 series
+                gpuTPS = 60; // RTX 50 series - more realistic
             } else if (gpuModel.toLowerCase().includes('rtx 40')) {
-                baseTPS = 60; // RTX 40 series  
+                gpuTPS = 45; // RTX 40 series  
             } else if (gpuModel.toLowerCase().includes('rtx 30')) {
-                baseTPS = 45; // RTX 30 series
+                gpuTPS = 35; // RTX 30 series
             } else if (gpuModel.toLowerCase().includes('rtx 20')) {
-                baseTPS = 35; // RTX 20 series
+                gpuTPS = 25; // RTX 20 series
             } else if (vramGB >= 8) {
-                baseTPS = 40; // Other high-end GPUs
+                gpuTPS = 30; // Other high-end GPUs
             } else if (vramGB >= 4) {
-                baseTPS = 25; // Mid-range GPUs
+                gpuTPS = 20; // Mid-range GPUs
             }
+            
+            // Scale by model size for GPU
+            return Math.max(5, Math.round((gpuTPS / Math.max(0.8, params)) * 100) / 100);
         }
-        // CPU-based calculation (no dedicated GPU or integrated GPU)
+        // CPU-based calculation (more realistic formula)
         else {
-            const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
-                             (cpuModel.includes('13th') || cpuModel.includes('14th') || cpuModel.includes('12th'));
-            const hasAVX2 = cpuModel.toLowerCase().includes('intel') || cpuModel.toLowerCase().includes('amd');
-            
-            // CPU coefficient based on instruction sets and architecture
-            const cpuCoeff = hasAVX512 ? 4.0 : hasAVX2 ? 2.8 : 2.0;
-            
-            // Calculate based on cores, speed and instruction set
-            baseTPS = Math.min(35, cpuCoeff * Math.min(cores, 8) * (baseSpeed / 3.0));
-            
-            // Intel iGPU boost
-            if (gpuModel.toLowerCase().includes('iris xe')) {
-                baseTPS *= 1.3; // 30% boost for Iris Xe
-            } else if (gpuModel.toLowerCase().includes('uhd')) {
-                baseTPS *= 1.1; // 10% boost for basic iGPU
-            }
+            return this.estimateCpuTps({
+                ghz: baseSpeed,
+                threads: cores,
+                paramsB: params,
+                avx512: hasAVX512,
+                isIrisXe: gpuModel.toLowerCase().includes('iris xe')
+            });
         }
+    }
+    
+    /**
+     * Realistic CPU token per second estimation that varies significantly by model size
+     */
+    estimateCpuTps({ghz, threads, paramsB, avx512, isIrisXe}) {
+        // Base coefficient chosen empirically for realistic results
+        const k = avx512 ? 2.8 : 2.0;
         
-        // Scale by model size (larger models are slower)
-        const scaledTPS = baseTPS / Math.max(1, Math.pow(params / 7, 0.8)); // 7B as reference, sublinear scaling
+        // Apply iGPU boost for Iris Xe
+        const iGpuMultiplier = isIrisXe ? 1.25 : 1.0;
         
-        // Apply minimum realistic bounds
-        return Math.max(2, Math.round(scaledTPS * 100) / 100);
+        // More aggressive scaling for larger models (they really slow down on CPU)
+        const sizeScaling = Math.max(0.5, paramsB); // Linear scaling, larger models much slower
+        
+        // Calculate base TPS with realistic threading efficiency
+        const effectiveThreads = Math.min(threads, 8); // Diminishing returns after 8 threads
+        const baseTPS = (k * ghz * effectiveThreads * iGpuMultiplier) / sizeScaling;
+        
+        // Apply realistic upper bound for CPU (even with best CPUs)
+        const maxCpuTPS = avx512 ? 40 : 30;
+        const finalTPS = Math.min(maxCpuTPS, baseTPS);
+        
+        return Math.max(3, Math.round(finalTPS * 100) / 100);
     }
 
     estimateTTFB(hardware, model) {

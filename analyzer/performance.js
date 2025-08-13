@@ -279,47 +279,104 @@ class PerformanceAnalyzer {
     }
 
     async estimateModelPerformance(model, hardware) {
-        const systemPerf = await this.analyzeSystemPerformance(hardware);
-
+        // Use realistic estimation that considers hardware type properly
+        return this.calculateRealisticPerformance(model, hardware);
+    }
+    
+    calculateRealisticPerformance(model, hardware) {
         // Parse model size
         const modelSizeB = this.parseModelSize(model.size);
-
-        // Base performance estimation
-        let tokensPerSecond = 50; // Conservative baseline
-
-        // CPU factor
-        const cpuFactor = Math.sqrt(systemPerf.cpu.score / 100);
-        tokensPerSecond *= cpuFactor;
-
-        // Memory factor
-        const memoryAdequacy = hardware.memory.total / (model.requirements?.ram || 4);
-        const memoryFactor = Math.min(1.5, Math.max(0.3, memoryAdequacy));
-        tokensPerSecond *= memoryFactor;
-
-        // GPU factor (if applicable)
-        if (hardware.gpu.dedicated && model.requirements?.vram <= hardware.gpu.vram) {
-            const gpuFactor = Math.sqrt(systemPerf.gpu.score / 100);
-            tokensPerSecond *= (1 + gpuFactor); // GPU provides additional boost
-        }
-
-        // Model size penalty
-        const sizePenalty = Math.pow(0.8, Math.log10(modelSizeB));
-        tokensPerSecond *= sizePenalty;
-
-        // Architecture bonus
-        if (hardware.cpu.architecture === 'Apple Silicon') {
-            tokensPerSecond *= 1.2; // Unified memory advantage
+        
+        // Get hardware specifics  
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        const baseSpeed = hardware.cpu?.speed || 2.4;
+        const vramGB = hardware.gpu?.vram || 0;
+        const memoryTotal = hardware.memory?.total || 8;
+        
+        // Hardware type detection
+        const isAppleSilicon = hardware.cpu?.architecture === 'Apple Silicon' || (
+            process.platform === 'darwin' && (
+                gpuModel.toLowerCase().includes('apple') || 
+                gpuModel.toLowerCase().includes('m1') || 
+                gpuModel.toLowerCase().includes('m2') || 
+                gpuModel.toLowerCase().includes('m3') || 
+                gpuModel.toLowerCase().includes('m4')
+            )
+        );
+        const isIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel);
+        const hasDedicatedGPU = vramGB > 0 && !isIntegratedGPU && !isAppleSilicon;
+        
+        let tokensPerSecond;
+        
+        if (isAppleSilicon) {
+            // Apple Silicon - realistic but optimistic due to unified memory
+            let baseTPS = 20; // More realistic baseline
+            if (gpuModel.toLowerCase().includes('m4 pro')) baseTPS = 30;
+            else if (gpuModel.toLowerCase().includes('m4')) baseTPS = 25;
+            else if (gpuModel.toLowerCase().includes('m3 pro')) baseTPS = 28;
+            else if (gpuModel.toLowerCase().includes('m3')) baseTPS = 22;
+            else if (gpuModel.toLowerCase().includes('m2 pro')) baseTPS = 25;
+            else if (gpuModel.toLowerCase().includes('m2')) baseTPS = 20;
+            else if (gpuModel.toLowerCase().includes('m1 pro')) baseTPS = 22;
+            else if (gpuModel.toLowerCase().includes('m1')) baseTPS = 18;
+            
+            // Memory scaling for Apple Silicon
+            if (memoryTotal >= 64) baseTPS *= 1.2;
+            else if (memoryTotal >= 32) baseTPS *= 1.1;
+            
+            tokensPerSecond = Math.max(6, Math.round(baseTPS / Math.max(0.7, modelSizeB)));
+            
+        } else if (hasDedicatedGPU) {
+            // Dedicated GPU - much better but still realistic
+            let gpuTPS = 25;
+            if (gpuModel.toLowerCase().includes('rtx 50')) gpuTPS = 60;
+            else if (gpuModel.toLowerCase().includes('rtx 40')) gpuTPS = 45;
+            else if (gpuModel.toLowerCase().includes('rtx 30')) gpuTPS = 35;
+            else if (gpuModel.toLowerCase().includes('rtx 20')) gpuTPS = 28;
+            else if (vramGB >= 16) gpuTPS = 40;
+            else if (vramGB >= 8) gpuTPS = 30;
+            else if (vramGB >= 4) gpuTPS = 25;
+            
+            tokensPerSecond = Math.max(8, Math.round(gpuTPS / Math.max(0.4, modelSizeB)));
+            
+        } else {
+            // CPU-only or integrated GPU - most conservative and realistic
+            const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
+                             (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
+            const hasAVX2 = cpuModel.toLowerCase().includes('intel') || cpuModel.toLowerCase().includes('amd');
+            
+            // Base CPU performance - very conservative
+            let cpuK = 1.2; // Much more realistic
+            if (hasAVX512) cpuK = 2.0;
+            else if (hasAVX2) cpuK = 1.6;
+            
+            // Threading efficiency (realistic diminishing returns)
+            const effectiveThreads = Math.min(cores, 6); // CPU inference doesn't scale linearly
+            
+            // iGPU small boost
+            const iGpuMultiplier = isIntegratedGPU ? 1.2 : 1.0;
+            
+            // Memory pressure factor
+            const memoryPressure = Math.min(1.0, Math.max(0.6, memoryTotal / (modelSizeB * 2)));
+            
+            const baseTPS = (cpuK * baseSpeed * effectiveThreads * iGpuMultiplier * memoryPressure) / Math.max(2.0, modelSizeB);
+            
+            // Realistic CPU caps based on hardware
+            const maxCPUTPS = hasAVX512 ? 18 : (isIntegratedGPU ? 12 : 8);
+            tokensPerSecond = Math.max(1, Math.min(maxCPUTPS, Math.round(baseTPS)));
         }
 
         return {
             estimatedTokensPerSecond: Math.round(tokensPerSecond),
             confidence: this.calculateConfidence(hardware, model),
             factors: {
-                cpu: cpuFactor,
-                memory: memoryFactor,
-                gpu: hardware.gpu.dedicated ? 'accelerated' : 'cpu_only',
+                cpu: cpuModel,
+                memory: memoryTotal,
+                gpu: hasDedicatedGPU ? 'dedicated' : (isIntegratedGPU ? 'integrated' : 'cpu_only'),
                 modelSize: modelSizeB,
-                architecture: hardware.cpu.architecture
+                architecture: isAppleSilicon ? 'Apple Silicon' : 'x86'
             },
             category: this.categorizePerformance(Math.round(tokensPerSecond)),
             loadTimeEstimate: this.estimateLoadTime(model, hardware)

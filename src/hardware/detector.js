@@ -407,6 +407,7 @@ class HardwareDetector {
             ) / 2)
         };
     }
+
 }
 
 module.exports = HardwareDetector;

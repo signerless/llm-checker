@@ -186,12 +186,13 @@ Alternative options:
 
 ## 🔧 **Advanced Features**
 
-### Hardware Tier Detection
-- **Ultra High**: 64+ GB RAM → 13B-70B models
-- **High**: 24-64 GB RAM → 7B-30B models  
-- **Medium**: 8-16 GB RAM → 3B-13B models
-- **Low**: 4-8 GB RAM → 1B-7B models
-- **Ultra Low**: <4 GB RAM → <3B models
+### Hardware Tier Detection  
+- **Flagship**: RTX 5090/H100 tier → 30B-175B models (new!)
+- **Ultra High**: RTX 4090/A100 tier → 20B-105B models  
+- **High**: RTX 4080/Apple Silicon 32GB → 8B-50B models
+- **Medium**: RTX 4070/Apple Silicon 16GB → 3B-20B models
+- **Low**: Budget systems → 1B-8B models
+- **Ultra Low**: Very limited systems → <3B models
 
 ### Smart Filtering
 - Automatically excludes models >25GB for systems with <32GB RAM
@@ -203,6 +204,32 @@ Alternative options:
 - **macOS**: Apple Silicon optimization with unified memory
 - **Windows**: NVIDIA/AMD GPU detection with device ID mapping  
 - **Linux**: Full GPU compatibility with proper driver detection
+
+---
+
+## 🚀 **What's New in v2.7.0**
+
+### 🎯 **Complete Windows High-End GPU Optimization**
+- **NEW Flagship Tier**: RTX 5090, H100, A100 now properly recognized  
+- **Enhanced RTX 50xx Support**: Up to 50% RAM offload capacity (was 30%)
+- **Smarter Memory Utilization**: 95% VRAM efficiency for flagship GPUs
+- **Better Model Range**: Flagship systems now handle 30B-175B models
+
+### 🔄 **Improved Compatibility Classification**
+- **Realistic Thresholds**: Compatible 65%+ (was 75%+), Marginal 45-64%
+- **Better Category Filtering**: All use cases now work correctly on both platforms
+- **Cross-Platform Parity**: Windows and Mac now have similar model counts
+
+### 🧠 **Enhanced Multi-Objective Scoring**
+- **Hardware Match Priority**: Increased from 5% to 30% weight for better sizing
+- **Platform-Specific Optimization**: Apple Silicon vs Windows GPU paths
+- **Quality-Speed Balance**: Reduced speed emphasis for high-end hardware
+
+### 🛠️ **Bug Fixes**
+- **Chat Category Filter**: Now correctly excludes coding models
+- **Embeddings Fallback**: Proper filtering when no compatible models found  
+- **Score Display**: Fixed 5/100 score bug in CLI output
+- **Platform Detection**: Now uses hardware OS for simulation support
 
 ---
 
