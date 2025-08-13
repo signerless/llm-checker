@@ -82,18 +82,37 @@ class MultiObjectiveSelector {
     }
 
     /**
-     * Memory compatibility check with KV cache estimation
+     * Realistic hardware compatibility check based on tier and actual capabilities
      */
     checkMemoryCompatibility(hardware, model) {
         const modelSizeGB = this.parseModelSize(model.size);
         const contextLength = model.context || 4096;
         
-        // Estimate KV cache (rough approximation)
+        // Get hardware tier using same algorithm as main system
+        const hardwareTier = this.getHardwareTier(hardware);
+        
+        // Estimate KV cache (rough approximation)  
         const kvCacheGB = this.estimateKVCache(model, contextLength);
         const totalMemoryNeeded = modelSizeGB + kvCacheGB;
         
-        // Available memory (with safety margin)
-        const availableMemory = hardware.memory.total * 0.75; // 25% safety margin
+        // Tier-based realistic limits (not just memory, but practical performance)
+        const tierLimits = {
+            'ultra_high': { maxModelSize: 70, availableMemoryRatio: 0.8 },  // High-end GPUs
+            'high': { maxModelSize: 30, availableMemoryRatio: 0.75 },       // Good GPUs, Apple Silicon
+            'medium': { maxModelSize: 13, availableMemoryRatio: 0.7 },      // Mid-range systems
+            'low': { maxModelSize: 7, availableMemoryRatio: 0.6 },          // Budget systems, iGPU
+            'ultra_low': { maxModelSize: 3, availableMemoryRatio: 0.5 }     // Very limited systems
+        };
+        
+        const limits = tierLimits[hardwareTier] || tierLimits['ultra_low'];
+        
+        // Hard size limit based on what the hardware tier can realistically handle
+        if (modelSizeGB > limits.maxModelSize) {
+            return false; // Model too large for this tier regardless of RAM
+        }
+        
+        // Memory check with tier-appropriate safety margin
+        const availableMemory = hardware.memory.total * limits.availableMemoryRatio;
         
         return totalMemoryNeeded <= availableMemory;
     }
@@ -337,14 +356,14 @@ class MultiObjectiveSelector {
         else if (gpu.includes('rtx 4070')) memBandwidthGBs = 448;
         else if (gpu.includes('iris xe')) memBandwidthGBs = 68;
         
-        const mem_bw = clamp(memBandwidthGBs / 800);
+        const mem_bw = clamp(memBandwidthGBs / 500);  // Match main algorithm
         
         // 3) Compute (20%) - simplified estimation
         let compute = 0;
-        if (gpu.includes('m4 pro')) compute = clamp(28 / 120);
-        else if (gpu.includes('m4')) compute = clamp(15 / 120);
-        else if (gpu.includes('rtx 4090')) compute = clamp(165 / 120);
-        else if (gpu.includes('rtx 4080')) compute = clamp(121 / 120);
+        if (gpu.includes('m4 pro')) compute = clamp(28 / 80);  // Match main algorithm
+        else if (gpu.includes('m4')) compute = clamp(15 / 80);
+        else if (gpu.includes('rtx 4090')) compute = clamp(165 / 80);
+        else if (gpu.includes('rtx 4080')) compute = clamp(121 / 80);
         else if (gpu.includes('iris xe')) compute = 0.02;
         else {
             // CPU fallback
