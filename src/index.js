@@ -1020,12 +1020,14 @@ class LLMChecker {
         const cpuCoresPhys = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
         const cpuGHzBase = hardware.cpu?.speed || 2.0;
         
-        // Detect system type
+        // Enhanced Apple Silicon detection
         const isAppleSilicon = architecture.toLowerCase().includes('apple') || 
                               architecture.toLowerCase().includes('m1') || 
                               architecture.toLowerCase().includes('m2') ||
                               architecture.toLowerCase().includes('m3') ||
-                              architecture.toLowerCase().includes('m4');
+                              architecture.toLowerCase().includes('m4') ||
+                              cpuModel.toLowerCase().includes('apple') ||
+                              gpuModel.toLowerCase().includes('apple');
         const unified = isAppleSilicon;
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
@@ -1033,10 +1035,30 @@ class LLMChecker {
                        cpuModel.toLowerCase().includes('amd');
         
         // 1) Capacidad efectiva para pesos del modelo (45%)
-        const effMem = vramGB > 0 
-            ? vramGB + Math.min(0.25 * ramGB, 8)  // GPU dedicada + offload pequeño
-            : unified ? 0.85 * ramGB               // Memoria unificada (menos reserva, más eficiente)
-            : 0.6 * ramGB;                         // Solo CPU (más reserva)
+        let effMem;
+        
+        if (vramGB > 0 && !unified) {
+            // Dedicated GPU path
+            effMem = vramGB + Math.min(0.25 * ramGB, 8);  // GPU + small CPU offload
+        } else if (unified && isAppleSilicon) {
+            // Apple Silicon unified memory optimization
+            const appleSiliconInfo = this.getAppleSiliconSpecs(cpuModel, gpuModel, ramGB);
+            
+            // For Apple Silicon, use higher efficiency ratio due to:
+            // 1. Unified memory architecture (no GPU<->RAM transfers)
+            // 2. High memory bandwidth (200-800 GB/s)
+            // 3. Optimized quantization-aware memory allocation
+            // 4. Metal backend optimizations
+            effMem = appleSiliconInfo.effectiveMemoryRatio * ramGB;
+            
+            // Apply model size bonus for larger unified memory pools
+            if (ramGB >= 32) {
+                effMem += appleSiliconInfo.largeMemoryBonus;
+            }
+        } else {
+            // Traditional CPU-only path
+            effMem = 0.6 * ramGB;  // Conservative for CPU inference
+        }
         
         const mem_cap = clamp(effMem / 32);  // Normalizado contra 32GB para Q4-Q6 (más realista)
         
@@ -1111,9 +1133,137 @@ class LLMChecker {
                 storage: Math.round(storage * 5),
                 effective_memory_gb: Math.round(effMem * 10) / 10,
                 bandwidth_gbs: Math.round(memBandwidthGBs),
-                tflops_fp16: tflopsFP16 > 0 ? Math.round(tflopsFP16 * 10) / 10 : 0
+                tflops_fp16: tflopsFP16 > 0 ? Math.round(tflopsFP16 * 10) / 10 : 0,
+                apple_silicon_optimized: isAppleSilicon
             }
         };
+    }
+    
+    /**
+     * Apple Silicon-specific specifications and optimization parameters
+     * Based on unified memory architecture and quantization-aware allocation
+     */
+    getAppleSiliconSpecs(cpuModel, gpuModel, ramGB) {
+        const cpu = cpuModel.toLowerCase();
+        const gpu = gpuModel.toLowerCase();
+        
+        // Base specs for different Apple Silicon generations
+        let baseSpecs = {
+            effectiveMemoryRatio: 0.85,  // Default unified memory efficiency
+            largeMemoryBonus: 0,         // Bonus for large memory configs
+            memoryBandwidth: 100,        // GB/s
+            quantizationEfficiency: 1.0, // Quantization optimization factor
+            metalOptimization: 1.2       // Metal backend boost
+        };
+        
+        // M4 Pro/Max optimizations
+        if (cpu.includes('m4 pro') || gpu.includes('m4 pro')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.90,  // Higher efficiency due to newer architecture
+                largeMemoryBonus: 4,         // 4GB bonus for 32GB+ configs
+                memoryBandwidth: 273,        // 273 GB/s memory bandwidth
+                quantizationEfficiency: 1.15, // Better quantization support
+                metalOptimization: 1.3       // Enhanced Metal backend
+            };
+        } else if (cpu.includes('m4') || gpu.includes('m4')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.88,
+                largeMemoryBonus: 2,
+                memoryBandwidth: 120,
+                quantizationEfficiency: 1.10,
+                metalOptimization: 1.25
+            };
+        }
+        // M3 optimizations
+        else if (cpu.includes('m3 max') || gpu.includes('m3 max')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.87,
+                largeMemoryBonus: 3,
+                memoryBandwidth: 400,
+                quantizationEfficiency: 1.08,
+                metalOptimization: 1.2
+            };
+        } else if (cpu.includes('m3 pro') || gpu.includes('m3 pro')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.86,
+                largeMemoryBonus: 2,
+                memoryBandwidth: 150,
+                quantizationEfficiency: 1.05,
+                metalOptimization: 1.15
+            };
+        } else if (cpu.includes('m3') || gpu.includes('m3')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.85,
+                largeMemoryBonus: 1,
+                memoryBandwidth: 100,
+                quantizationEfficiency: 1.03,
+                metalOptimization: 1.1
+            };
+        }
+        // M2 optimizations
+        else if (cpu.includes('m2 max') || gpu.includes('m2 max')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.84,
+                largeMemoryBonus: 2,
+                memoryBandwidth: 400,
+                quantizationEfficiency: 1.02,
+                metalOptimization: 1.1
+            };
+        } else if (cpu.includes('m2 pro') || gpu.includes('m2 pro')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.83,
+                largeMemoryBonus: 1,
+                memoryBandwidth: 200,
+                quantizationEfficiency: 1.0,
+                metalOptimization: 1.05
+            };
+        } else if (cpu.includes('m2') || gpu.includes('m2')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.82,
+                largeMemoryBonus: 0,
+                memoryBandwidth: 100,
+                quantizationEfficiency: 1.0,
+                metalOptimization: 1.0
+            };
+        }
+        // M1 optimizations (legacy but still supported)
+        else if (cpu.includes('m1 max') || gpu.includes('m1 max')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.80,
+                largeMemoryBonus: 1,
+                memoryBandwidth: 400,
+                quantizationEfficiency: 0.95,
+                metalOptimization: 1.0
+            };
+        } else if (cpu.includes('m1 pro') || gpu.includes('m1 pro')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.78,
+                largeMemoryBonus: 0,
+                memoryBandwidth: 200,
+                quantizationEfficiency: 0.95,
+                metalOptimization: 0.95
+            };
+        } else if (cpu.includes('m1') || gpu.includes('m1')) {
+            baseSpecs = {
+                effectiveMemoryRatio: 0.75,
+                largeMemoryBonus: 0,
+                memoryBandwidth: 68.25,
+                quantizationEfficiency: 0.90,
+                metalOptimization: 0.90
+            };
+        }
+        
+        // Apply memory configuration scaling
+        if (ramGB >= 64) {
+            baseSpecs.effectiveMemoryRatio += 0.03;  // Bonus for very large memory
+            baseSpecs.largeMemoryBonus += 2;
+        } else if (ramGB >= 32) {
+            baseSpecs.effectiveMemoryRatio += 0.02;  // Bonus for large memory
+        } else if (ramGB <= 8) {
+            baseSpecs.effectiveMemoryRatio -= 0.05;  // Penalty for small memory
+        }
+        
+        return baseSpecs;
     }
     
     bumpTier(tier, direction) {
