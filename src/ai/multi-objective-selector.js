@@ -341,12 +341,22 @@ class MultiObjectiveSelector {
                               gpuModel.toLowerCase().includes('apple');
         const unified = isAppleSilicon;
         
-        // 1) Effective memory for model weights (45%) - Apple Silicon optimized
+        // Detect PC platform (Windows/Linux) to match main algorithm
+        const isPC = !isAppleSilicon && (process.platform === 'win32' || process.platform === 'linux');
+        
+        // 1) Effective memory for model weights (45%) - Apple Silicon & PC optimized
         let effMem;
         
         if (vramGB > 0 && !unified) {
-            // Dedicated GPU path
-            effMem = vramGB + Math.min(0.25 * ramGB, 8);
+            // Dedicated GPU path (Windows/Linux with discrete GPU)
+            if (isPC) {
+                // PC-specific GPU memory calculation with offload support
+                const pcSpecs = this.getPCGPUSpecs(hardware, vramGB, ramGB);
+                effMem = vramGB + pcSpecs.offloadCapacity;
+            } else {
+                // Generic discrete GPU calculation
+                effMem = vramGB + Math.min(0.25 * ramGB, 8);
+            }
         } else if (unified && isAppleSilicon) {
             // Apple Silicon unified memory optimization
             const appleSiliconInfo = this.getAppleSiliconSpecs(cpuModel, gpuModel, ramGB);
@@ -357,8 +367,15 @@ class MultiObjectiveSelector {
                 effMem += appleSiliconInfo.largeMemoryBonus;
             }
         } else {
-            // Traditional CPU-only path
-            effMem = 0.6 * ramGB;
+            // Traditional CPU-only path or integrated GPU
+            if (isPC) {
+                // PC CPU-only with potential iGPU assist
+                const pcSpecs = this.getPCCPUSpecs(hardware, ramGB);
+                effMem = pcSpecs.effectiveMemoryRatio * ramGB;
+            } else {
+                // Generic CPU-only calculation
+                effMem = 0.6 * ramGB;
+            }
         }
         
         const mem_cap = clamp(effMem / 32);  // More realistic normalization
@@ -549,6 +566,127 @@ class MultiObjectiveSelector {
         }
         
         return baseSpecs;
+    }
+    
+    /**
+     * PC GPU-specific specifications - shared implementation with main algorithm
+     */
+    getPCGPUSpecs(hardware, vramGB, ramGB) {
+        const gpuModel = hardware.gpu?.model || '';
+        const gpu = gpuModel.toLowerCase();
+        
+        let specs = {
+            offloadCapacity: 0,      // Additional effective memory from RAM offload
+            memoryEfficiency: 0.85,  // VRAM utilization efficiency
+            backendOptimization: 1.0, // Backend-specific optimization
+            quantizationSupport: 1.0  // Quantization efficiency
+        };
+        
+        // NVIDIA GPU optimizations
+        if (gpu.includes('nvidia') || gpu.includes('geforce') || gpu.includes('rtx') || gpu.includes('gtx')) {
+            if (gpu.includes('rtx 50')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.3, 12);
+            } else if (gpu.includes('rtx 40')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.25, 10);
+            } else if (gpu.includes('rtx 30')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.2, 8);
+            } else if (gpu.includes('rtx 20') || gpu.includes('gtx 16')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.15, 6);
+            }
+        }
+        // AMD GPU optimizations
+        else if (gpu.includes('amd') || gpu.includes('radeon') || gpu.includes('rx ')) {
+            if (gpu.includes('rx 7000') || gpu.includes('rx 7900') || gpu.includes('rx 7800')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.2, 8);
+            } else if (gpu.includes('rx 6000')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.15, 6);
+            }
+        }
+        // Intel GPU optimizations
+        else if (gpu.includes('intel') || gpu.includes('arc')) {
+            if (gpu.includes('arc a7') || gpu.includes('arc a5')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.2, 6);
+            }
+        }
+        
+        // Apply memory scaling bonuses
+        if (ramGB >= 32) {
+            specs.offloadCapacity += 2;
+        }
+        
+        return specs;
+    }
+    
+    /**
+     * PC CPU-specific specifications - shared implementation with main algorithm
+     */
+    getPCCPUSpecs(hardware, ramGB) {
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const cpu = cpuModel.toLowerCase();
+        const gpu = gpuModel.toLowerCase();
+        const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        
+        let specs = {
+            effectiveMemoryRatio: 0.6,   // Default CPU memory efficiency
+            instructionOptimization: 1.0, // CPU instruction set bonus
+            iGPUAssist: 0,               // Integrated GPU assistance
+            thermalHeadroom: 1.0         // Thermal performance factor
+        };
+        
+        // Intel CPU optimizations
+        if (cpu.includes('intel')) {
+            if (cpu.includes('i9') || cpu.includes('13th gen') || cpu.includes('14th gen')) {
+                specs.effectiveMemoryRatio = 0.75;
+            } else if (cpu.includes('i7') || cpu.includes('12th gen')) {
+                specs.effectiveMemoryRatio = 0.70;
+            } else if (cpu.includes('i5')) {
+                specs.effectiveMemoryRatio = 0.65;
+            }
+            
+            // Intel iGPU assistance
+            if (gpu.includes('iris xe')) {
+                specs.effectiveMemoryRatio += 0.05;
+            } else if (gpu.includes('uhd')) {
+                specs.effectiveMemoryRatio += 0.02;
+            }
+        }
+        // AMD CPU optimizations
+        else if (cpu.includes('amd') || cpu.includes('ryzen')) {
+            if (cpu.includes('ryzen 9') || cpu.includes('7000') || cpu.includes('9000')) {
+                specs.effectiveMemoryRatio = 0.72;
+            } else if (cpu.includes('ryzen 7') || cpu.includes('5000') || cpu.includes('6000')) {
+                specs.effectiveMemoryRatio = 0.68;
+            } else if (cpu.includes('ryzen 5')) {
+                specs.effectiveMemoryRatio = 0.65;
+            }
+            
+            // AMD iGPU assistance (RDNA2/3 in APUs)
+            if (gpu.includes('radeon') && gpu.includes('graphics')) {
+                if (gpu.includes('780m') || gpu.includes('880m')) {
+                    specs.effectiveMemoryRatio += 0.08;
+                } else if (gpu.includes('680m') || gpu.includes('660m')) {
+                    specs.effectiveMemoryRatio += 0.06;
+                }
+            }
+        }
+        
+        // Multi-core and memory scaling
+        if (cores >= 16) {
+            specs.effectiveMemoryRatio += 0.05;
+        } else if (cores >= 8) {
+            specs.effectiveMemoryRatio += 0.03;
+        }
+        
+        if (ramGB >= 64) {
+            specs.effectiveMemoryRatio += 0.05;
+        } else if (ramGB >= 32) {
+            specs.effectiveMemoryRatio += 0.03;
+        } else if (ramGB <= 8) {
+            specs.effectiveMemoryRatio -= 0.05;
+        }
+        
+        return specs;
     }
 
     estimateKVCache(model, contextLength) {

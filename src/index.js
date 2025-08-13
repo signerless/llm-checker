@@ -1029,6 +1029,9 @@ class LLMChecker {
                               cpuModel.toLowerCase().includes('apple') ||
                               gpuModel.toLowerCase().includes('apple');
         const unified = isAppleSilicon;
+        
+        // Detect PC platform (Windows/Linux)
+        const isPC = !isAppleSilicon && (process.platform === 'win32' || process.platform === 'linux');
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
         const hasAVX2 = cpuModel.toLowerCase().includes('intel') || 
@@ -1038,8 +1041,19 @@ class LLMChecker {
         let effMem;
         
         if (vramGB > 0 && !unified) {
-            // Dedicated GPU path
-            effMem = vramGB + Math.min(0.25 * ramGB, 8);  // GPU + small CPU offload
+            // Dedicated GPU path (Windows/Linux with discrete GPU)
+            if (isPC) {
+                // PC-specific GPU memory calculation with offload support
+                const PCOptimizer = require('./hardware/pc-optimizer');
+                const pcOpt = new PCOptimizer();
+                const pcSpecs = this.getPCGPUSpecs(hardware, vramGB, ramGB);
+                
+                // For PC discrete GPU: VRAM + strategic offload potential
+                effMem = vramGB + pcSpecs.offloadCapacity;
+            } else {
+                // Generic discrete GPU calculation
+                effMem = vramGB + Math.min(0.25 * ramGB, 8);  // GPU + small CPU offload
+            }
         } else if (unified && isAppleSilicon) {
             // Apple Silicon unified memory optimization
             const appleSiliconInfo = this.getAppleSiliconSpecs(cpuModel, gpuModel, ramGB);
@@ -1056,8 +1070,15 @@ class LLMChecker {
                 effMem += appleSiliconInfo.largeMemoryBonus;
             }
         } else {
-            // Traditional CPU-only path
-            effMem = 0.6 * ramGB;  // Conservative for CPU inference
+            // Traditional CPU-only path or integrated GPU
+            if (isPC) {
+                // PC CPU-only with potential iGPU assist
+                const pcSpecs = this.getPCCPUSpecs(hardware, ramGB);
+                effMem = pcSpecs.effectiveMemoryRatio * ramGB;
+            } else {
+                // Generic CPU-only calculation
+                effMem = 0.6 * ramGB;  // Conservative for CPU inference
+            }
         }
         
         const mem_cap = clamp(effMem / 32);  // Normalizado contra 32GB para Q4-Q6 (más realista)
@@ -1134,7 +1155,8 @@ class LLMChecker {
                 effective_memory_gb: Math.round(effMem * 10) / 10,
                 bandwidth_gbs: Math.round(memBandwidthGBs),
                 tflops_fp16: tflopsFP16 > 0 ? Math.round(tflopsFP16 * 10) / 10 : 0,
-                apple_silicon_optimized: isAppleSilicon
+                apple_silicon_optimized: isAppleSilicon,
+                pc_optimized: isPC
             }
         };
     }
@@ -1264,6 +1286,212 @@ class LLMChecker {
         }
         
         return baseSpecs;
+    }
+    
+    /**
+     * PC GPU-specific specifications for Windows/Linux discrete GPU systems
+     */
+    getPCGPUSpecs(hardware, vramGB, ramGB) {
+        const gpuModel = hardware.gpu?.model || '';
+        const gpu = gpuModel.toLowerCase();
+        
+        let specs = {
+            offloadCapacity: 0,      // Additional effective memory from RAM offload
+            memoryEfficiency: 0.85,  // VRAM utilization efficiency
+            backendOptimization: 1.0, // Backend-specific optimization
+            quantizationSupport: 1.0  // Quantization efficiency
+        };
+        
+        // NVIDIA GPU optimizations
+        if (gpu.includes('nvidia') || gpu.includes('geforce') || gpu.includes('rtx') || gpu.includes('gtx')) {
+            if (gpu.includes('rtx 50')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.3, 12),  // Up to 12GB offload for RTX 50 series
+                    memoryEfficiency: 0.92,
+                    backendOptimization: 1.2,  // Excellent CUDA optimization
+                    quantizationSupport: 1.15  // Great quantization support
+                };
+            } else if (gpu.includes('rtx 40')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.25, 10),  // Up to 10GB offload for RTX 40 series
+                    memoryEfficiency: 0.90,
+                    backendOptimization: 1.15,
+                    quantizationSupport: 1.10
+                };
+            } else if (gpu.includes('rtx 30')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.2, 8),   // Up to 8GB offload for RTX 30 series
+                    memoryEfficiency: 0.88,
+                    backendOptimization: 1.10,
+                    quantizationSupport: 1.05
+                };
+            } else if (gpu.includes('rtx 20') || gpu.includes('gtx 16')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.15, 6),  // Up to 6GB offload for older cards
+                    memoryEfficiency: 0.85,
+                    backendOptimization: 1.05,
+                    quantizationSupport: 1.0
+                };
+            }
+        }
+        // AMD GPU optimizations
+        else if (gpu.includes('amd') || gpu.includes('radeon') || gpu.includes('rx ')) {
+            if (gpu.includes('rx 7000') || gpu.includes('rx 7900') || gpu.includes('rx 7800')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.2, 8),   // Good offload for RDNA3
+                    memoryEfficiency: 0.85,
+                    backendOptimization: 0.95,  // ROCm slightly behind CUDA
+                    quantizationSupport: 1.0
+                };
+            } else if (gpu.includes('rx 6000')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.15, 6),  // Moderate offload for RDNA2
+                    memoryEfficiency: 0.82,
+                    backendOptimization: 0.90,
+                    quantizationSupport: 0.95
+                };
+            }
+        }
+        // Intel GPU optimizations
+        else if (gpu.includes('intel') || gpu.includes('arc')) {
+            if (gpu.includes('arc a7') || gpu.includes('arc a5')) {
+                specs = {
+                    offloadCapacity: Math.min(ramGB * 0.2, 6),   // Decent offload for Arc discrete
+                    memoryEfficiency: 0.80,
+                    backendOptimization: 0.85,  // Intel drivers still maturing
+                    quantizationSupport: 0.90
+                };
+            }
+        }
+        
+        // Apply memory scaling bonuses
+        if (ramGB >= 32) {
+            specs.offloadCapacity += 2;  // Extra offload potential with large RAM
+        }
+        if (vramGB >= 16) {
+            specs.memoryEfficiency += 0.02;  // High VRAM efficiency bonus
+        }
+        
+        return specs;
+    }
+    
+    /**
+     * PC CPU-specific specifications for Windows/Linux CPU-only or iGPU systems
+     */
+    getPCCPUSpecs(hardware, ramGB) {
+        const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
+        const gpuModel = hardware.gpu?.model || '';
+        const cpu = cpuModel.toLowerCase();
+        const gpu = gpuModel.toLowerCase();
+        const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
+        
+        let specs = {
+            effectiveMemoryRatio: 0.6,   // Default CPU memory efficiency
+            instructionOptimization: 1.0, // CPU instruction set bonus
+            iGPUAssist: 0,               // Integrated GPU assistance
+            thermalHeadroom: 1.0         // Thermal performance factor
+        };
+        
+        // Intel CPU optimizations
+        if (cpu.includes('intel')) {
+            if (cpu.includes('i9') || cpu.includes('13th gen') || cpu.includes('14th gen')) {
+                specs.effectiveMemoryRatio = 0.75;  // High-end Intel efficiency
+                specs.instructionOptimization = 1.15; // AVX512 + optimization
+            } else if (cpu.includes('i7') || cpu.includes('12th gen')) {
+                specs.effectiveMemoryRatio = 0.70;
+                specs.instructionOptimization = 1.10;  // AVX2 + some AVX512
+            } else if (cpu.includes('i5')) {
+                specs.effectiveMemoryRatio = 0.65;
+                specs.instructionOptimization = 1.05;
+            }
+            
+            // Intel iGPU assistance
+            if (gpu.includes('iris xe')) {
+                specs.iGPUAssist = 0.05;  // 5% effective memory boost from iGPU
+                specs.effectiveMemoryRatio += 0.05;
+            } else if (gpu.includes('uhd')) {
+                specs.iGPUAssist = 0.02;  // Minimal iGPU assistance
+                specs.effectiveMemoryRatio += 0.02;
+            }
+        }
+        // AMD CPU optimizations
+        else if (cpu.includes('amd') || cpu.includes('ryzen')) {
+            if (cpu.includes('ryzen 9') || cpu.includes('7000') || cpu.includes('9000')) {
+                specs.effectiveMemoryRatio = 0.72;  // High-end AMD efficiency
+                specs.instructionOptimization = 1.12; // Strong AVX2 performance
+            } else if (cpu.includes('ryzen 7') || cpu.includes('5000') || cpu.includes('6000')) {
+                specs.effectiveMemoryRatio = 0.68;
+                specs.instructionOptimization = 1.08;
+            } else if (cpu.includes('ryzen 5')) {
+                specs.effectiveMemoryRatio = 0.65;
+                specs.instructionOptimization = 1.05;
+            }
+            
+            // AMD iGPU assistance (RDNA2/3 in APUs)
+            if (gpu.includes('radeon') && gpu.includes('graphics')) {
+                if (gpu.includes('780m') || gpu.includes('880m')) {
+                    specs.iGPUAssist = 0.08;  // Strong RDNA3 iGPU
+                    specs.effectiveMemoryRatio += 0.08;
+                } else if (gpu.includes('680m') || gpu.includes('660m')) {
+                    specs.iGPUAssist = 0.06;  // Good RDNA2 iGPU
+                    specs.effectiveMemoryRatio += 0.06;
+                }
+            }
+        }
+        
+        // Multi-core efficiency scaling
+        if (cores >= 16) {
+            specs.effectiveMemoryRatio += 0.05;  // High core count bonus
+        } else if (cores >= 8) {
+            specs.effectiveMemoryRatio += 0.03;
+        }
+        
+        // Memory configuration scaling
+        if (ramGB >= 64) {
+            specs.effectiveMemoryRatio += 0.05;  // Large memory pool bonus
+        } else if (ramGB >= 32) {
+            specs.effectiveMemoryRatio += 0.03;
+        } else if (ramGB <= 8) {
+            specs.effectiveMemoryRatio -= 0.05;  // Small memory penalty
+        }
+        
+        return specs;
+    }
+    
+    /**
+     * Generate PC-specific recommendations with backend and offload strategies
+     */
+    async generatePCRecommendations(hardware) {
+        if (!hardware || hardware.cpu?.architecture?.toLowerCase().includes('apple')) {
+            return null; // Not a PC system
+        }
+        
+        try {
+            const PCOptimizer = require('./hardware/pc-optimizer');
+            const pcOptimizer = new PCOptimizer();
+            
+            // Get detailed PC capabilities
+            const pcCapabilities = await pcOptimizer.detectPCCapabilities();
+            
+            // Generate hardware-specific recommendations
+            const recommendations = pcOptimizer.generateRecommendations(pcCapabilities);
+            
+            return {
+                platform: 'PC (Windows/Linux)',
+                backend: recommendations.backend,
+                capability: recommendations.capability,
+                recommendations: recommendations.recommendations,
+                hardwareProfile: {
+                    gpu: pcCapabilities.gpu,
+                    cpu: pcCapabilities.cpu,
+                    memory: pcCapabilities.memory,
+                    availableBackends: pcCapabilities.backends
+                }
+            };
+        } catch (error) {
+            this.logger.warn('PC optimization failed', { error: error.message });
+            return null;
+        }
     }
     
     bumpTier(tier, direction) {
