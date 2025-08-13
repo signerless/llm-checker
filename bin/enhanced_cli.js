@@ -1154,24 +1154,34 @@ async function checkIfModelInstalled(model, ollamaInfo) {
 
         // Ejecutar 'ollama list' para obtener modelos instalados
         const installedModels = await new Promise((resolve, reject) => {
-            const ollama = spawn('ollama', ['list'], { stdio: 'pipe' });
-            let output = '';
-            
-            ollama.stdout.on('data', (data) => {
-                output += data.toString();
-            });
-            
-            ollama.on('close', (code) => {
-                if (code === 0) {
-                    resolve(output);
-                } else {
-                    resolve(''); // Si falla, asumimos que no hay modelos
-                }
-            });
-            
-            ollama.on('error', () => {
-                resolve(''); // Si no se puede ejecutar ollama, no hay modelos
-            });
+            try {
+                const ollama = spawn('ollama', ['list'], { stdio: 'pipe' });
+                let output = '';
+                
+                ollama.stdout.on('data', (data) => {
+                    output += data.toString();
+                });
+                
+                ollama.on('close', (code) => {
+                    if (code === 0) {
+                        resolve(output);
+                    } else {
+                        resolve(''); // Si falla, asumimos que no hay modelos
+                    }
+                });
+                
+                ollama.on('error', (err) => {
+                    // Handle ENOENT and other spawn errors gracefully
+                    if (err.code === 'ENOENT') {
+                        resolve(''); // Ollama not found, no models installed
+                    } else {
+                        resolve(''); // Any other error, assume no models
+                    }
+                });
+            } catch (spawnError) {
+                // Handle synchronous spawn errors
+                resolve(''); // If spawn itself fails, no models available
+            }
         });
 
         // Parsear la salida de 'ollama list'
@@ -1466,10 +1476,15 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
             }
             
             // Check if it's already installed by comparing with Ollama integration
-            const isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
-            if (isInstalled) {
-                console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
-            } else {
+            try {
+                const isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
+                if (isInstalled) {
+                    console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
+                } else {
+                    console.log(`Status: ${chalk.gray('Available for installation')}`);
+                }
+            } catch (installCheckError) {
+                // If checking installation status fails, just show as available
                 console.log(`Status: ${chalk.gray('Available for installation')}`);
             }
         }
@@ -1502,7 +1517,13 @@ async function displayQuickStartCommands(analysis, recommendedModel = null, allR
         console.log(`1. Install Ollama: ${chalk.underline('https://ollama.ai')}`);
         console.log(`2. Come back and run this command again`);
     } else if (bestModel) {
-        const isInstalled = await checkIfModelInstalled(bestModel, analysis.ollamaInfo);
+        let isInstalled = false;
+        try {
+            isInstalled = await checkIfModelInstalled(bestModel, analysis.ollamaInfo);
+        } catch (installCheckError) {
+            // If checking installation status fails, assume not installed
+            isInstalled = false;
+        }
         
         if (isInstalled) {
             const ollamaCommand = getOllamaInstallCommand(bestModel);
