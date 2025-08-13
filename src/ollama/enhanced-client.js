@@ -23,7 +23,7 @@ class EnhancedOllamaClient extends OllamaClient {
                     match_type: match.match_type,
                     score: this.calculateCompatibilityScore(match),
                     size: this.extractSizeFromName(match.cloud.model_identifier),
-                    status: '📦',
+                    status: 'INSTALLED',
                     installation: {
                         ollama: `ollama pull ${match.cloud.model_identifier}`
                     }

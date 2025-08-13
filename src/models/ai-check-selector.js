@@ -137,12 +137,12 @@ Respond with JSON only, no additional text.`;
         }
 
         // Show professional AI-check header in app style
-        console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI-CHECK MODE '));
+        console.log('\n' + chalk.bgMagenta.white.bold(' AI-CHECK MODE '));
         console.log(chalk.magenta('╭' + '─'.repeat(65)));
-        console.log(chalk.magenta('│') + ` 🎯 Category: ${chalk.yellow(category.toUpperCase())}`);
-        console.log(chalk.magenta('│') + ` ⚖️  AI Weight: ${chalk.cyan(Math.round(weight * 100) + '%')} + Deterministic: ${chalk.green(Math.round((1-weight) * 100) + '%')}`);
-        console.log(chalk.magenta('│') + ` 📊 Candidates Found: ${chalk.green(detResults.candidates.length)}`);
-        console.log(chalk.magenta('│') + ` 💻 Hardware: ${chalk.cyan(hardware.cpu.cores + ' cores')}, ${chalk.green(hardware.memory.totalGB + 'GB RAM')}, ${chalk.yellow(hardware.gpu.type)}`);
+        console.log(chalk.magenta('│') + ` Category: ${chalk.yellow(category.toUpperCase())}`);
+        console.log(chalk.magenta('│') + ` AI Weight: ${chalk.cyan(Math.round(weight * 100) + '%')} + Deterministic: ${chalk.green(Math.round((1-weight) * 100) + '%')}`);
+        console.log(chalk.magenta('│') + ` Candidates Found: ${chalk.green(detResults.candidates.length)}`);
+        console.log(chalk.magenta('│') + ` Hardware: ${chalk.cyan(hardware.cpu.cores + ' cores')}, ${chalk.green(hardware.memory.totalGB + 'GB RAM')}, ${chalk.yellow(hardware.gpu.type)}`);
         console.log(chalk.magenta('╰'));
         
         // Phase 2: Pick evaluator model
@@ -182,7 +182,7 @@ Respond with JSON only, no additional text.`;
         // Show evaluator status in app style
         console.log('\n' + chalk.bgCyan.black.bold(' 🤖 AI EVALUATOR STATUS '));
         console.log(chalk.cyan('╭' + '─'.repeat(50)));
-        console.log(chalk.cyan('│') + ` 📦 Model: ${chalk.green.bold(evaluatorModel)}`);
+        console.log(chalk.cyan('│') + ` Model: ${chalk.green.bold(evaluatorModel)}`);
         
         // Phase 3: Build payload for evaluator (use broader set for AI evaluation)
         const aiEvaluationCandidates = {
@@ -624,8 +624,8 @@ Return JSON with this structure:
             
             let statusDisplay, modelDisplay;
             if (isInstalled) {
-                statusDisplay = chalk.green.bold('📦 Installed');
-                modelDisplay = `${modelName} 🦙`;
+                statusDisplay = chalk.green.bold('Installed');
+                modelDisplay = `${modelName}`;
             } else {
                 statusDisplay = '🌐 Available';
                 modelDisplay = modelName;
@@ -656,7 +656,7 @@ Return JSON with this structure:
         console.log(chalk.green('│'));
         
         if (best.meta.installed) {
-            console.log(chalk.green('│') + ` 💻 Ready to use:`);
+            console.log(chalk.green('│') + ` Ready to use:`);
             console.log(chalk.green('│') + `   ${chalk.cyan.bold(`ollama run ${best.meta.model_identifier}`)}`);
         } else {
             console.log(chalk.green('│') + ` 📥 Install command:`);

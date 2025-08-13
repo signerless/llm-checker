@@ -1,6 +1,7 @@
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { classifyAllModels } = require('../utils/model-classifier');
 
 class OllamaNativeScraper {
     constructor() {
@@ -208,7 +209,7 @@ class OllamaNativeScraper {
         
         for (let i = 0; i < basicModels.length; i += batchSize) {
             const batch = basicModels.slice(i, i + batchSize);
-            console.log(`📦 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(basicModels.length/batchSize)}`);
+            console.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(basicModels.length/batchSize)}`);
             
             const batchPromises = batch.map(model => this.getModelDetailedInfo(model));
             const batchResults = await Promise.allSettled(batchPromises);
@@ -252,7 +253,7 @@ class OllamaNativeScraper {
             };
             
         } catch (error) {
-            console.warn(`⚠️ Failed to get details for ${basicModel.model_identifier}: ${error.message}`);
+            console.warn(`Failed to get details for ${basicModel.model_identifier}: ${error.message}`);
             return basicModel; // Fallback a información básica
         }
     }
@@ -500,16 +501,18 @@ class OllamaNativeScraper {
                 }
             }
 
-            // Crear variantes mejoradas
+            // Crear variantes mejoradas con tamaños reales extraídos de la página
             details.variants = details.tags.map(tag => {
                 const size = this.extractSizeFromTag(tag);
                 const quantization = this.extractQuantizationFromTag(tag);
+                const realSizeGB = this.extractRealSizeFromHTML(html, tag);
                 return {
                     tag: tag,
                     size: size,
                     quantization: quantization,
                     command: `ollama pull ${tag}`,
-                    estimated_size_gb: this.estimateModelSizeGB(tag)
+                    estimated_size_gb: this.estimateModelSizeGB(tag),
+                    real_size_gb: realSizeGB || this.estimateModelSizeGB(tag)
                 };
             });
 
@@ -528,6 +531,44 @@ class OllamaNativeScraper {
     extractQuantizationFromTag(tag) {
         const quantMatch = tag.match(/\b(q\d+_[km]?_?[ms]?|fp16|fp32|int8|int4)\b/i);
         return quantMatch ? quantMatch[0].toUpperCase() : 'Q4_0'; // Default assumption
+    }
+
+    extractRealSizeFromHTML(html, tag) {
+        try {
+            // Buscar el patrón específico: [tag]\n size·context·type·date
+            // Ejemplo: [llama3.1:8b]\n4.9GB · 128K context window · Text · 8 months ago
+            const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = new RegExp(`\\[${escapedTag}\\][\\s\\S]*?(\\d+(?:\\.\\d+)?)(GB|MB)`, 'i');
+            const match = html.match(pattern);
+            
+            if (match) {
+                const num = parseFloat(match[1]);
+                const unit = match[2].toUpperCase();
+                
+                if (unit === 'MB') {
+                    return num / 1024; // Convert MB to GB
+                } else {
+                    return num; // Already in GB
+                }
+            }
+            
+            // Fallback: buscar tamaño cerca del tag
+            const tagIndex = html.indexOf(tag);
+            if (tagIndex !== -1) {
+                const surrounding = html.substring(tagIndex, tagIndex + 500);
+                const sizeMatch = surrounding.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+                if (sizeMatch) {
+                    const num = parseFloat(sizeMatch[1]);
+                    const unit = sizeMatch[2].toUpperCase();
+                    return unit === 'MB' ? num / 1024 : num;
+                }
+            }
+            
+            return null; // No se encontró tamaño real
+        } catch (error) {
+            console.warn(`Error extracting real size for ${tag}: ${error.message}`);
+            return null;
+        }
     }
 
     estimateModelSizeGB(tag) {
@@ -560,11 +601,19 @@ class OllamaNativeScraper {
             // Ahora obtenemos información detallada de cada modelo
             const detailedModels = await this.getDetailedModelsInfo(basicModels);
             
-            this.writeDetailedCache(detailedModels);
-
-            return {
+            // Apply classification to all models
+            const classifiedData = classifyAllModels({
                 models: detailedModels,
                 total_count: detailedModels.length,
+                cached_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + this.cacheExpiry).toISOString()
+            });
+            
+            this.writeDetailedCache(classifiedData.models);
+
+            return {
+                models: classifiedData.models,
+                total_count: classifiedData.models.length,
                 cached_at: new Date().toISOString(),
                 expires_at: new Date(Date.now() + this.cacheExpiry).toISOString()
             };

@@ -11,7 +11,7 @@ class OutputFormatter {
         const lines = [];
 
         if (!this.compact) {
-            lines.push(this.header('🖥️  System Information'));
+            lines.push(this.header('System Information'));
         }
 
         lines.push(this.info('CPU', `${hardware.cpu.brand} (${hardware.cpu.cores} cores, ${hardware.cpu.speed || 'Unknown'}GHz)`));
@@ -31,17 +31,17 @@ class OutputFormatter {
         const lines = [];
 
         if (results.compatible.length > 0) {
-            lines.push(this.success('✅ Compatible Models (Score ≥ 75)'));
+            lines.push(this.success('Compatible Models (Score ≥ 75)'));
             lines.push(this.formatModelsTable(results.compatible, 'compatible'));
         }
 
         if (results.marginal.length > 0) {
-            lines.push(this.warning('⚠️  Marginal Performance (Score 60-74)'));
+            lines.push(this.warning('Marginal Performance (Score 60-74)'));
             lines.push(this.formatModelsTable(results.marginal, 'marginal'));
         }
 
         if (results.incompatible.length > 0 && !this.compact) {
-            lines.push(this.error('❌ Incompatible Models (showing top 5)'));
+            lines.push(this.error('Incompatible Models (showing top 5)'));
             lines.push(this.formatModelsTable(results.incompatible.slice(0, 5), 'incompatible'));
         }
 
@@ -76,7 +76,7 @@ class OutputFormatter {
             return '';
         }
 
-        const lines = [this.header('💡 Recommendations')];
+        const lines = [this.header('Recommendations')];
 
         recommendations.forEach((rec, index) => {
             lines.push(`${index + 1}. ${rec}`);
@@ -89,15 +89,15 @@ class OutputFormatter {
         if (!ollamaInfo) return '';
 
         const status = ollamaInfo.available ?
-            this.success(`✅ Running (v${ollamaInfo.version || 'unknown'})`) :
-            this.error(`❌ ${ollamaInfo.error || 'Not available'}`);
+            this.success(`Running (v${ollamaInfo.version || 'unknown'})`) :
+            this.error(`${ollamaInfo.error || 'Not available'}`);
 
-        let result = this.info('🦙 Ollama Status', status);
+        let result = this.info('Ollama Status', status);
 
         if (ollamaInfo.available) {
-            result += '\n' + this.info('📦 Local Models', `${ollamaInfo.localModels || 0} installed`);
+            result += '\n' + this.info('Local Models', `${ollamaInfo.localModels || 0} installed`);
             if (ollamaInfo.runningModels > 0) {
-                result += '\n' + this.info('🚀 Running Models', ollamaInfo.runningModels);
+                result += '\n' + this.info('Running Models', ollamaInfo.runningModels);
             }
         }
 
@@ -107,13 +107,13 @@ class OutputFormatter {
     formatHardwareTier(tier, score) {
         const tierFormatted = tier.replace('_', ' ').toUpperCase();
         const tierColored = this.tierColor(tier, tierFormatted);
-        return this.info('🏆 Hardware Tier', `${tierColored} (Overall Score: ${score}/100)`);
+        return this.info('Hardware Tier', `${tierColored} (Overall Score: ${score}/100)`);
     }
 
     formatPerformanceBenchmark(benchmark) {
         if (!benchmark) return '';
 
-        const lines = [this.header('⚡ Performance Benchmark')];
+        const lines = [this.header('Performance Benchmark')];
         lines.push(this.info('CPU Score', `${benchmark.cpu}/100`));
         lines.push(this.info('Memory Score', `${benchmark.memory}/100`));
         lines.push(this.info('Overall Score', `${benchmark.overall}/100`));
@@ -124,11 +124,11 @@ class OutputFormatter {
     formatInstallCommands(commands) {
         if (!commands || commands.length === 0) return '';
 
-        const lines = [this.header('🚀 Quick Install Commands')];
+        const lines = [this.header('Quick Install Commands')];
 
         commands.forEach(cmd => {
             const status = cmd.isInstalled ?
-                this.success('✓ Installed') :
+                this.success('Installed') :
                 this.dim('Not installed');
             lines.push(`${status} ${this.highlight(cmd.command)}`);
         });
@@ -139,7 +139,7 @@ class OutputFormatter {
     formatUpgradeSuggestions(suggestions) {
         if (!suggestions || suggestions.length === 0) return '';
 
-        const lines = [this.header('🔧 Hardware Upgrade Suggestions')];
+        const lines = [this.header('Hardware Upgrade Suggestions')];
 
         suggestions.forEach((suggestion, index) => {
             lines.push(`${index + 1}. ${suggestion}`);
@@ -151,7 +151,7 @@ class OutputFormatter {
     formatNextSteps(steps) {
         if (!steps || steps.length === 0) return '';
 
-        const lines = [this.header('🎯 Next Steps')];
+        const lines = [this.header('Next Steps')];
 
         steps.forEach((step, index) => {
             lines.push(`${index + 1}. ${step}`);
@@ -214,14 +214,14 @@ class OutputFormatter {
 
     formatSpeed(speed) {
         const speedMap = {
-            'very_fast': '🚀 Very Fast',
-            'fast': '⚡ Fast',
-            'medium': '🚶 Medium',
-            'slow': '🐌 Slow',
-            'very_slow': '🐛 Very Slow'
+            'very_fast': 'Very Fast',
+            'fast': 'Fast',
+            'medium': 'Medium',
+            'slow': 'Slow',
+            'very_slow': 'Very Slow'
         };
 
-        return this.useEmojis ? (speedMap[speed] || speed) : (speed || 'Unknown');
+        return speedMap[speed] || speed || 'Unknown';
     }
 
     truncate(text, maxLength) {

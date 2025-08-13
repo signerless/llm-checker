@@ -68,7 +68,7 @@ class AIModelSelector {
                 let reason = result.best_model.reasoning;
                 
                 if (!isLocallyInstalled) {
-                    console.log(`⚠️ Best model ${recommendedId} not installed locally`);
+                    console.log(`Best model ${recommendedId} not installed locally`);
                     
                     // Buscar el mejor modelo entre los instalados localmente
                     const localResult = this.intelligentSelector.selectBestModels(

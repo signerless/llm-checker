@@ -7,6 +7,244 @@ const os = require('os');
 const { spawn } = require('child_process');
 const LLMChecker = require('../src/index');
 const { getLogger } = require('../src/utils/logger');
+const fs = require('fs');
+const path = require('path');
+
+// Function to search Ollama models by use case
+function searchOllamaModelsForUseCase(useCase, hardware) {
+    try {
+        const cacheFile = path.join(__dirname, '../src/ollama/.cache/ollama-detailed-models.json');
+        if (!fs.existsSync(cacheFile)) return [];
+        
+        const cacheData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        const models = cacheData.models || [];
+        
+        // Filter models by use case with typo tolerance
+        const useCaseModels = models.filter(model => {
+            const lowerUseCase = useCase.toLowerCase();
+            switch (lowerUseCase) {
+                case 'creative':
+                case 'writing':
+                    return model.primary_category === 'creative';
+                    
+                case 'coding':
+                case 'code':
+                    return model.primary_category === 'coding';
+                    
+                case 'chat':
+                case 'conversation':
+                case 'talking':
+                    return model.primary_category === 'chat';
+                    
+                case 'multimodal':
+                case 'vision':
+                    return model.primary_category === 'multimodal';
+                    
+                case 'embeddings':
+                case 'embedings': // typo tolerance
+                case 'embedding':
+                case 'embeding': // typo tolerance
+                    return model.primary_category === 'embeddings';
+                    
+                case 'reasoning':
+                case 'reason':
+                    return model.primary_category === 'reasoning';
+                    
+                default:
+                    // Check for partial matches
+                    if (lowerUseCase.includes('embed')) return model.primary_category === 'embeddings';
+                    if (lowerUseCase.includes('code')) return model.primary_category === 'coding';
+                    if (lowerUseCase.includes('creat')) return model.primary_category === 'creative';
+                    if (lowerUseCase.includes('chat') || lowerUseCase.includes('talk')) return model.primary_category === 'chat';
+                    if (lowerUseCase.includes('vision') || lowerUseCase.includes('multimodal')) return model.primary_category === 'multimodal';
+                    if (lowerUseCase.includes('reason')) return model.primary_category === 'reasoning';
+                    return false;
+            }
+        });
+        
+        // Convert Ollama models to compatible format and add basic compatibility scoring
+        return useCaseModels.map(model => {
+            // Find a suitable variant (prefer 7b-13b for high-end hardware)
+            let bestVariant = null;
+            if (model.variants && model.variants.length > 0) {
+                // For high-tier hardware, prefer 7B-13B models
+                bestVariant = model.variants.find(v => 
+                    v.real_size_gb >= 3 && v.real_size_gb <= 15 &&
+                    !v.tag.includes('-instruct') && !v.tag.includes('-code')
+                ) || model.variants[0];
+            }
+            
+            const size = bestVariant ? bestVariant.real_size_gb : 7;
+            const ollamaTag = bestVariant ? bestVariant.tag : model.model_identifier + ':latest';
+            
+            return {
+                name: model.model_name || model.model_identifier,
+                size: size + 'GB',
+                type: 'ollama',
+                category: model.primary_category,
+                specialization: model.primary_category,
+                primary_category: model.primary_category,
+                categories: model.categories,
+                requirements: {
+                    ram: Math.max(4, Math.ceil(size * 1.2)),
+                    vram: 0,
+                    cpu_cores: 2,
+                    storage: size,
+                    recommended_ram: Math.max(8, Math.ceil(size * 1.5))
+                },
+                frameworks: ['ollama'],
+                performance: {
+                    speed: size <= 7 ? 'fast' : size <= 13 ? 'medium' : 'slow',
+                    quality: model.primary_category === 'coding' ? 'excellent_for_code' : 
+                            model.primary_category === 'creative' ? 'excellent_for_creative' : 'good',
+                    context_length: 4096,
+                    tokens_per_second_estimate: size <= 7 ? '30-50' : '15-30'
+                },
+                installation: {
+                    ollama: `ollama pull ${ollamaTag}`,
+                    description: model.detailed_description || model.description || `${model.primary_category} model`
+                },
+                ollamaId: model.model_identifier,
+                ollamaTag: ollamaTag,
+                source: 'ollama_database',
+                // Basic compatibility score (can be improved)
+                score: calculateBasicCompatibilityScore(size, hardware),
+                isOllamaInstalled: false,
+                ollamaAvailable: true
+            };
+        }).slice(0, 10); // Limit to top 10 models
+        
+    } catch (error) {
+        console.warn('Error searching Ollama models:', error.message);
+        return [];
+    }
+}
+
+// Basic compatibility scoring for Ollama models
+function calculateBasicCompatibilityScore(modelSizeGB, hardware) {
+    const totalRAM = hardware.memory?.total || 8;
+    const availableRAM = totalRAM * 0.8; // Assume 80% available
+    
+    // RAM compatibility
+    let ramScore = 0;
+    if (modelSizeGB * 1.5 <= availableRAM) {
+        ramScore = 100;
+    } else if (modelSizeGB <= availableRAM) {
+        ramScore = 80;
+    } else {
+        ramScore = Math.max(0, 50 - (modelSizeGB - availableRAM) * 10);
+    }
+    
+    // Size efficiency (prefer 7B-13B for high-end hardware)
+    let sizeScore = 100;
+    if (totalRAM >= 16) { // High-end hardware
+        if (modelSizeGB >= 7 && modelSizeGB <= 13) {
+            sizeScore = 100;
+        } else if (modelSizeGB < 7) {
+            sizeScore = 85; // Small models are okay but not optimal
+        } else {
+            sizeScore = Math.max(60, 100 - (modelSizeGB - 13) * 5);
+        }
+    }
+    
+    return Math.round((ramScore * 0.7 + sizeScore * 0.3));
+}
+
+// Function to get real size directly from Ollama cache
+function getRealSizeFromOllamaCache(model) {
+    try {
+        const cacheFile = path.join(__dirname, '../src/ollama/.cache/ollama-detailed-models.json');
+        if (!fs.existsSync(cacheFile)) return null;
+        
+        const cacheData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        const models = cacheData.models || [];
+        
+        // Try to find the model by different strategies
+        let targetModel = null;
+        
+        // Strategy 1: Match by ollamaId directly (e.g., "codellama")
+        if (model.ollamaId) {
+            // Special case: if looking for phind-codellama but model is actually CodeLlama, use codellama instead
+            if (model.ollamaId === 'phind-codellama' && 
+                (model.name.toLowerCase().includes('codellama') || model.name.toLowerCase().includes('code llama'))) {
+                targetModel = models.find(m => m.model_identifier === 'codellama');
+            } 
+            // Special case: DeepSeek Coder has wrong ollamaId
+            else if (model.ollamaId === 'deepseek-v2.5' && 
+                     model.name.toLowerCase().includes('deepseek') && 
+                     model.name.toLowerCase().includes('coder')) {
+                targetModel = models.find(m => m.model_identifier === 'deepseek-coder');
+            } else {
+                targetModel = models.find(m => m.model_identifier === model.ollamaId);
+            }
+        }
+        
+        // Strategy 2: Match by name similarity  
+        if (!targetModel && model.name) {
+            const modelNameLower = model.name.toLowerCase();
+            
+            // Special handling for specific models - be very specific
+            if (modelNameLower.includes('deepseek') && modelNameLower.includes('coder')) {
+                targetModel = models.find(m => m.model_identifier.toLowerCase() === 'deepseek-coder');
+            } else if (modelNameLower.includes('llama3.3')) {
+                targetModel = models.find(m => m.model_identifier.toLowerCase() === 'llama3.3');
+            } else if (modelNameLower.includes('llama3.2')) {
+                targetModel = models.find(m => m.model_identifier.toLowerCase() === 'llama3.2');
+            } else if (modelNameLower.includes('llama3.1') || modelNameLower.includes('llama 3.1')) {
+                targetModel = models.find(m => m.model_identifier.toLowerCase() === 'llama3.1');
+            } else {
+                targetModel = models.find(m => {
+                    const identifier = m.model_identifier.toLowerCase();
+                    return identifier.includes('codellama') && modelNameLower.includes('codellama') ||
+                           identifier.includes('qwen') && modelNameLower.includes('qwen') ||
+                           identifier.includes('mistral') && modelNameLower.includes('mistral');
+                });
+            }
+        }
+        
+        if (!targetModel || !targetModel.variants) return null;
+        
+        // Extract size from model name (e.g., "CodeLlama 7B" -> "7b")
+        let targetSize = null;
+        if (model.size) {
+            targetSize = model.size.toLowerCase().replace('b', '') + 'b';
+        } else if (model.name) {
+            const sizeMatch = model.name.match(/(\d+\.?\d*)[bB]/);
+            if (sizeMatch) {
+                targetSize = sizeMatch[1] + 'b';
+            }
+        }
+        
+        
+        // Find the right variant
+        let variant = null;
+        if (targetSize) {
+            // Look for exact size match (e.g., "codellama:7b")
+            variant = targetModel.variants.find(v => 
+                v.tag.includes(':' + targetSize) && 
+                !v.tag.includes('-instruct') && 
+                !v.tag.includes(':code-') // Exclude variants like ":code-" but allow "coder"
+            );
+            
+        }
+        
+        // Fallback to latest or first variant
+        if (!variant) {
+            variant = targetModel.variants.find(v => v.tag.includes(':latest')) || 
+                     targetModel.variants[0];
+            
+        }
+        
+        if (variant && variant.real_size_gb) {
+            return variant.real_size_gb + 'GB';
+        }
+        
+        return null;
+    } catch (error) {
+        console.warn('Error reading Ollama cache:', error.message);
+        return null;
+    }
+}
 
 const program = new Command();
 
@@ -65,27 +303,27 @@ function getOllamaInstallInstructions() {
 function displayOllamaInstallHelp() {
     const installInfo = getOllamaInstallInstructions();
     
-    console.log(chalk.red.bold('\n❌ Ollama is not installed or not running!'));
-    console.log(chalk.yellow('\n🚀 LLM Checker requires Ollama to function properly.'));
-    console.log(chalk.cyan.bold(`\n📥 Install Ollama for ${installInfo.name}:`));
-    console.log(chalk.blue(`\n🔗 Download: ${installInfo.downloadUrl}`));
+    console.log(chalk.red.bold('\nOllama is not installed or not running!'));
+    console.log(chalk.yellow('\nLLM Checker requires Ollama to function properly.'));
+    console.log(chalk.cyan.bold(`\nInstall Ollama for ${installInfo.name}:`));
+    console.log(chalk.blue(`\nDownload: ${installInfo.downloadUrl}`));
     
-    console.log(chalk.green.bold('\n📋 Installation Steps:'));
+    console.log(chalk.green.bold('\nInstallation Steps:'));
     installInfo.instructions.forEach(step => {
         console.log(chalk.gray(`   ${step}`));
     });
     
     if (installInfo.alternativeInstall) {
-        console.log(chalk.magenta.bold('\n⚡ Quick Install (if available):'));
+        console.log(chalk.magenta.bold('\nQuick Install (if available):'));
         console.log(chalk.white(`   ${installInfo.alternativeInstall}`));
     }
     
-    console.log(chalk.yellow.bold('\n✅ After installation:'));
+    console.log(chalk.yellow.bold('\nAfter installation:'));
     console.log(chalk.gray('   1. Restart your terminal'));
     console.log(chalk.gray('   2. Run: llm-checker check'));
     console.log(chalk.gray('   3. Start using the AI model selector!'));
     
-    console.log(chalk.cyan('\n💡 Need help? Visit: https://github.com/ollama/ollama'));
+    console.log(chalk.cyan('\nNeed help? Visit: https://github.com/ollama/ollama'));
 }
 
 async function checkOllamaAndExit() {
@@ -123,16 +361,16 @@ async function checkOllamaAndExit() {
 function getStatusIcon(model, ollamaModels) {
     const ollamaModel = ollamaModels?.find(om => om.matchedModel?.name === model.name);
 
-    if (ollamaModel?.isRunning) return '🚀';
-    if (ollamaModel?.isInstalled) return '📦';
+    if (ollamaModel?.isRunning) return 'R';
+    if (ollamaModel?.isInstalled) return 'I';
 
-    if (model.specialization === 'code') return '💻';
-    if (model.specialization === 'multimodal' || model.multimodal) return '🖼️';
-    if (model.specialization === 'embeddings') return '🧲';
-    if (model.category === 'ultra_small') return '🐣';
-    if (model.category === 'small') return '🐤';
-    if (model.category === 'medium') return '🐦';
-    if (model.category === 'large') return '🦅';
+    if (model.specialization === 'code') return 'C';
+    if (model.specialization === 'multimodal' || model.multimodal) return 'M';
+    if (model.specialization === 'embeddings') return 'E';
+    if (model.category === 'ultra_small') return 'XS';
+    if (model.category === 'small') return 'S';
+    if (model.category === 'medium') return 'M';
+    if (model.category === 'large') return 'L';
 
     return '-';
 }
@@ -309,18 +547,18 @@ function displayOllamaIntegration(ollamaInfo, ollamaModels) {
 
             const runningCount = ollamaModels.filter(m => m.isRunning).length;
 
-            lines.push(`📦 ${chalk.cyan('Installed:')} ${ollamaModels.length} total, ${chalk.green(compatibleCount)} compatible`);
+            lines.push(`${chalk.cyan('Installed:')} ${ollamaModels.length} total, ${chalk.green(compatibleCount)} compatible`);
             if (runningCount > 0) {
-                lines.push(`🚀 ${chalk.cyan('Running:')} ${chalk.green(runningCount)} models`);
+                lines.push(`${chalk.cyan('Running:')} ${chalk.green(runningCount)} models`);
             }
         } else {
-            lines.push(`📦 ${chalk.gray('No models installed yet')}`);
+            lines.push(`${chalk.gray('No models installed yet')}`);
         }
     } else {
-        lines.push(`${chalk.red('❌ Status:')} Not available`);
+        lines.push(`${chalk.red('Status:')} Not available`);
     }
 
-    console.log('\n' + chalk.bgMagenta.white.bold(' 🦙 OLLAMA INTEGRATION '));
+    console.log('\n' + chalk.bgMagenta.white.bold(' OLLAMA INTEGRATION '));
     console.log(chalk.hex('#a259ff')('╭' + '─'.repeat(50)));
 
     lines.forEach(line => {
@@ -362,15 +600,15 @@ function displayEnhancedCompatibleModels(compatible, ollamaModels) {
         if (model.isOllamaInstalled) {
             const ollamaInfo = model.ollamaInfo || {};
             if (ollamaInfo.isRunning) {
-                statusDisplay = '🚀 Running';
+                statusDisplay = 'Running';
             } else {
-                statusDisplay = '📦 Installed';
+                statusDisplay = 'Installed';
             }
         }
 
         let modelName = model.name;
         if (model.isOllamaInstalled) {
-            modelName = `${model.name} 🦙`;
+            modelName = `${model.name}`;
         }
 
         const row = [
@@ -404,7 +642,7 @@ function displayCompatibleModelsSummary(count) {
 function displayMarginalModels(marginal) {
     if (marginal.length === 0) return;
 
-    console.log('\n' + chalk.yellow.bold('⚠️  Marginal Performance (Score 60-74)'));
+    console.log('\n' + chalk.yellow.bold('Marginal Performance (Score 60-74)'));
 
     const data = [
         [
@@ -458,7 +696,7 @@ function displayStructuredRecommendations(recommendations) {
     console.log(chalk.cyan('╭' + '─'.repeat(50)));
 
     if (recommendations.general && recommendations.general.length > 0) {
-        console.log(chalk.cyan('│') + ` ${chalk.bold.white('💡 General Recommendations:')}`);
+        console.log(chalk.cyan('│') + ` ${chalk.bold.white('General Recommendations:')}`);
         recommendations.general.slice(0, 4).forEach((rec, index) => {
             console.log(chalk.cyan('│') + `   ${index + 1}. ${chalk.white(rec)}`);
         });
@@ -466,7 +704,7 @@ function displayStructuredRecommendations(recommendations) {
     }
 
     if (recommendations.installedModels && recommendations.installedModels.length > 0) {
-        console.log(chalk.cyan('│') + ` ${chalk.bold.green('📦 Your Installed Ollama Models:')}`);
+        console.log(chalk.cyan('│') + ` ${chalk.bold.green('Your Installed Ollama Models:')}`);
         recommendations.installedModels.forEach(rec => {
             console.log(chalk.cyan('│') + `   ${chalk.green(rec)}`);
         });
@@ -474,10 +712,10 @@ function displayStructuredRecommendations(recommendations) {
     }
 
     if (recommendations.cloudSuggestions && recommendations.cloudSuggestions.length > 0) {
-        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('☁️ Recommended from Ollama Cloud:')}`);
+        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('Recommended from Ollama Cloud:')}`);
         recommendations.cloudSuggestions.forEach(rec => {
             if (rec.includes('ollama pull')) {
-                console.log(chalk.cyan('│') + `   🚀 ${chalk.cyan.bold(rec)}`);
+                console.log(chalk.cyan('│') + `   ${chalk.cyan.bold(rec)}`);
             } else {
                 console.log(chalk.cyan('│') + `   ${chalk.blue(rec)}`);
             }
@@ -504,7 +742,7 @@ function displayLegacyRecommendations(recommendations) {
     const quickInstallRecs = [];
 
     recommendations.forEach(rec => {
-        if (rec.includes('📦') && rec.includes('Score:')) {
+        if (rec.includes('Score:')) {
             ollamaFoundRecs.push(rec);
         } else if (rec.includes('ollama pull')) {
             quickInstallRecs.push(rec);
@@ -525,7 +763,7 @@ function displayLegacyRecommendations(recommendations) {
 
     if (ollamaFoundRecs.length > 0) {
         console.log(chalk.cyan('│'));
-        console.log(chalk.cyan('│') + ` ${chalk.bold.green('📦 Your Installed Ollama Models:')}`);
+        console.log(chalk.cyan('│') + ` ${chalk.bold.green('Your Installed Ollama Models:')}`);
         ollamaFoundRecs.forEach(rec => {
             console.log(chalk.cyan('│') + `   ${chalk.green(rec)}`);
         });
@@ -533,7 +771,7 @@ function displayLegacyRecommendations(recommendations) {
 
     if (quickInstallRecs.length > 0) {
         console.log(chalk.cyan('│'));
-        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('🚀 Quick Commands:')}`);
+        console.log(chalk.cyan('│') + ` ${chalk.bold.blue('Quick Commands:')}`);
         quickInstallRecs.slice(0, 3).forEach(cmd => {
             console.log(chalk.cyan('│') + `   > ${chalk.cyan.bold(cmd)}`);
         });
@@ -557,32 +795,32 @@ function displayIntelligentRecommendations(intelligentData) {
     // Mostrar mejor modelo general
     if (summary.best_overall) {
         const best = summary.best_overall;
-        console.log(chalk.red('│') + ` 🌟 ${chalk.bold.yellow('BEST OVERALL:')} ${chalk.green.bold(best.name)}`);
-        console.log(chalk.red('│') + `    📦 Command: ${chalk.cyan.bold(best.command)}`);
-        console.log(chalk.red('│') + `    📊 Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
+        console.log(chalk.red('│') + ` ${chalk.bold.yellow('BEST OVERALL:')} ${chalk.green.bold(best.name)}`);
+        console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(best.command)}`);
+        console.log(chalk.red('│') + `    Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
         console.log(chalk.red('│'));
     }
 
     // Mostrar por categorías
     const categories = {
-        coding: '💻',
-        talking: '💬', 
-        reading: '📚',
-        reasoning: '🧮',
-        multimodal: '🖼️',
-        creative: '🎨',
-        general: '🤖'
+        coding: 'Coding',
+        talking: 'Chat', 
+        reading: 'Reading',
+        reasoning: 'Reasoning',
+        multimodal: 'Multimodal',
+        creative: 'Creative',
+        general: 'General'
     };
 
     Object.entries(summary.by_category).forEach(([category, model]) => {
-        const icon = categories[category] || '📋';
+        const icon = categories[category] || 'Other';
         const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
         const scoreColor = getScoreColor(model.score);
         
-        console.log(chalk.red('│') + ` ${icon} ${chalk.bold.white(categoryName)}:`);
-        console.log(chalk.red('│') + `    🏆 ${chalk.green(model.name)} (${model.size})`);
-        console.log(chalk.red('│') + `    📊 Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
-        console.log(chalk.red('│') + `    📦 ${chalk.cyan.bold(model.command)}`);
+        console.log(chalk.red('│') + ` ${chalk.bold.white(categoryName)} (${icon}):`);
+        console.log(chalk.red('│') + `    ${chalk.green(model.name)} (${model.size})`);
+        console.log(chalk.red('│') + `    Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
+        console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(model.command)}`);
         console.log(chalk.red('│'));
     });
 
@@ -694,9 +932,9 @@ async function displayTopRecommended(models, categoryFilter) {
             
             console.log(chalk.green('│'));
             console.log(chalk.green('│') + ` ${rankEmoji} ${chalk.cyan.bold(variant.name)}`);
-            console.log(chalk.green('│') + `    📏 Size: ${chalk.green(variant.size)} | 📊 Score: ${scoreColor(variant.score + '%')} | 🏷️ ${categoryColor(variant.category)}`);
-            console.log(chalk.green('│') + `    📦 Command: ${chalk.yellow.bold('ollama pull ' + variant.name)}`);
-            console.log(chalk.green('│') + `    💡 ${chalk.gray(variant.reasoning)}`);
+            console.log(chalk.green('│') + `    Size: ${chalk.green(variant.size)} | Score: ${scoreColor(variant.score + '%')} | Category: ${categoryColor(variant.category)}`);
+            console.log(chalk.green('│') + `    Command: ${chalk.yellow.bold('ollama pull ' + variant.name)}`);
+            console.log(chalk.green('│') + `    ${chalk.gray(variant.reasoning)}`);
         });
         
         console.log(chalk.green('╰' + '─'.repeat(65)));
@@ -889,47 +1127,526 @@ function displaySampleCommands(topModels) {
     
     console.log(chalk.yellow('│'));
     console.log(chalk.yellow('│') + ` ${chalk.bold.white('Browse models by category:')}`);
-    console.log(chalk.yellow('│') + `   💻 ${chalk.cyan('llm-checker list-models --category coding')} ${chalk.gray('(Programming & development)')}`);
-    console.log(chalk.yellow('│') + `   🧮 ${chalk.cyan('llm-checker list-models --category reasoning')} ${chalk.gray('(Logic & math problems)')}`);
-    console.log(chalk.yellow('│') + `   💬 ${chalk.cyan('llm-checker list-models --category talking')} ${chalk.gray('(Chat & conversations)')}`);
-    console.log(chalk.yellow('│') + `   📚 ${chalk.cyan('llm-checker list-models --category reading')} ${chalk.gray('(Text analysis & comprehension)')}`);
-    console.log(chalk.yellow('│') + `   🖼️  ${chalk.cyan('llm-checker list-models --category multimodal')} ${chalk.gray('(Image & vision tasks)')}`);
-    console.log(chalk.yellow('│') + `   🎨 ${chalk.cyan('llm-checker list-models --category creative')} ${chalk.gray('(Creative writing & stories)')}`);
-    console.log(chalk.yellow('│') + `   🤖 ${chalk.cyan('llm-checker list-models --category general')} ${chalk.gray('(General purpose tasks)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category coding')} ${chalk.gray('(Programming & development)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category reasoning')} ${chalk.gray('(Logic & math problems)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category talking')} ${chalk.gray('(Chat & conversations)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category reading')} ${chalk.gray('(Text analysis & comprehension)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category multimodal')} ${chalk.gray('(Image & vision tasks)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category creative')} ${chalk.gray('(Creative writing & stories)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker list-models --category general')} ${chalk.gray('(General purpose tasks)')}`);
     console.log(chalk.yellow('│'));
     console.log(chalk.yellow('│') + ` ${chalk.bold.white('AI-powered selection:')}`);
-    console.log(chalk.yellow('│') + `   🧠 ${chalk.cyan('llm-checker ai-check --category coding --top 12')} ${chalk.gray('(AI meta-evaluation)')}`);
-    console.log(chalk.yellow('│') + `   🚀 ${chalk.cyan('llm-checker ai-run')} ${chalk.gray('(Smart model selection & launch)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker ai-check --category coding --top 12')} ${chalk.gray('(AI meta-evaluation)')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.cyan('llm-checker ai-run')} ${chalk.gray('(Smart model selection & launch)')}`);
     console.log(chalk.yellow('│'));
     console.log(chalk.yellow('│') + ` ${chalk.bold.white('Additional options:')}`);
-    console.log(chalk.yellow('│') + `   📊 ${chalk.gray('llm-checker list-models --popular --limit 10')}`);
-    console.log(chalk.yellow('│') + `   💾 ${chalk.gray('llm-checker list-models --json > models.json')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.gray('llm-checker list-models --popular --limit 10')}`);
+    console.log(chalk.yellow('│') + `   ${chalk.gray('llm-checker list-models --json > models.json')}`);
     console.log(chalk.yellow('╰'));
 }
 
-function displayNextSteps(analysis) {
-    const stepsRaw = [];
+async function checkIfModelInstalled(model, ollamaInfo) {
+    try {
+        // Si Ollama no está disponible, no hay modelos instalados
+        if (!ollamaInfo || !ollamaInfo.available) {
+            return false;
+        }
 
-    if (!analysis.ollamaInfo.available) {
-        stepsRaw.push(['🦙', chalk.white(`Install Ollama:`) + ' ' + chalk.underline('https://ollama.ai')]);
-        stepsRaw.push(['📚', `Return here to see compatible models`]);
-    } else if (!analysis.ollamaModels || analysis.ollamaModels.length === 0) {
-        stepsRaw.push(['🚀', `Install a recommended model from above`]);
-        stepsRaw.push(['💬', chalk.yellow(`Start chatting: ollama run <model-name>`)]);
-    } else {
-        stepsRaw.push(['📊', chalk.yellow(`Analyze: llm-checker analyze-model <model>`)]);
-        stepsRaw.push(['🔍', chalk.yellow(`See status: llm-checker ollama --list`)]);
-        stepsRaw.push(['🚀', chalk.yellow(`Try: ollama run <your-best-model>`)]);
+        // Ejecutar 'ollama list' para obtener modelos instalados
+        const installedModels = await new Promise((resolve, reject) => {
+            const ollama = spawn('ollama', ['list'], { stdio: 'pipe' });
+            let output = '';
+            
+            ollama.stdout.on('data', (data) => {
+                output += data.toString();
+            });
+            
+            ollama.on('close', (code) => {
+                if (code === 0) {
+                    resolve(output);
+                } else {
+                    resolve(''); // Si falla, asumimos que no hay modelos
+                }
+            });
+            
+            ollama.on('error', () => {
+                resolve(''); // Si no se puede ejecutar ollama, no hay modelos
+            });
+        });
+
+        // Parsear la salida de 'ollama list'
+        const lines = installedModels.split('\n');
+        const modelNames = [];
+        
+        for (let i = 1; i < lines.length; i++) { // Skip header
+            const line = lines[i].trim();
+            if (line) {
+                const parts = line.split(/\s+/);
+                if (parts.length > 0) {
+                    modelNames.push(parts[0].toLowerCase());
+                }
+            }
+        }
+
+        // Generar el comando de instalación esperado para el modelo
+        const expectedCommand = getOllamaInstallCommand(model);
+        if (!expectedCommand) return false;
+        
+        // Extraer el nombre del modelo del comando (ej: "ollama pull mistral:7b" -> "mistral:7b")
+        const modelNameMatch = expectedCommand.match(/ollama pull (.+)/);
+        if (!modelNameMatch) return false;
+        
+        const expectedModelName = modelNameMatch[1].toLowerCase();
+        
+        // Verificar si el modelo está en la lista de instalados
+        return modelNames.some(installedName => 
+            installedName === expectedModelName || 
+            installedName.startsWith(expectedModelName.split(':')[0])
+        );
+        
+    } catch (error) {
+        // Si hay algún error, asumimos que no está instalado
+        return false;
     }
+}
 
-    console.log('\n' + chalk.bgMagenta.white.bold(' 🎯 NEXT STEPS ') + '\n' + chalk.hex('#a259ff')('╭' + '─'.repeat(40)));
+function displaySimplifiedSystemInfo(hardware) {
+    console.log(chalk.cyan.bold('\nSYSTEM SUMMARY'));
+    console.log(chalk.gray('─'.repeat(50)));
+    
+    const cpuInfo = `${hardware.cpu.brand} (${hardware.cpu.cores} cores)`;
+    const memInfo = `${hardware.memory.total}GB RAM`;
+    const gpuInfo = hardware.gpu.model || 'Integrated GPU';
+    
+    console.log(`CPU: ${chalk.white(cpuInfo)}`);
+    console.log(`Memory: ${chalk.white(memInfo)}`);
+    console.log(`GPU: ${chalk.white(gpuInfo)}`);
+    console.log(`Architecture: ${chalk.white(hardware.cpu.architecture)}`);
+    
+    const tier = getHardwareTierForDisplay(hardware);
+    const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
+    console.log(`Hardware Tier: ${tierColor.bold(tier)}`);
+}
 
-    stepsRaw.forEach(([icon, text], index) => {
-        const num = chalk.green.bold(`${index + 1}.`);
-        console.log(chalk.hex('#a259ff')('│') + ` ${num} ${icon} ${text}`);
-    });
+async function displayModelRecommendations(analysis, hardware, useCase = 'general', limit = 1) {
+    const title = limit === 1 ? 'RECOMMENDED MODEL' : `TOP ${limit} COMPATIBLE MODELS`;
+    console.log(chalk.green.bold(`\n${title}`));
+    console.log(chalk.gray('─'.repeat(50)));
+    
+    // Find the best models from compatible models considering use case
+    let selectedModels = [];
+    let reason = '';
+    
+    if (analysis.compatible && analysis.compatible.length > 0) {
+        // First, try to find models that match the use case
+        let candidateModels = analysis.compatible;
+        
+        // Apply intelligent filtering based on use case
+        if (useCase && useCase !== 'general') {
+            // Specific use case filtering
+            const useCaseModels = candidateModels.filter(model => {
+                const specialization = model.specialization?.toLowerCase();
+                const category = model.category?.toLowerCase();
+                
+                const lowerUseCase = useCase.toLowerCase();
+                switch (lowerUseCase) {
+                    case 'coding':
+                    case 'code':
+                        return model.primary_category === 'coding' ||
+                               model.categories?.includes('coding') ||
+                               specialization === 'code' || category === 'coding' || 
+                               model.name.toLowerCase().includes('code') ||
+                               model.name.toLowerCase().includes('coder');
+                    
+                    case 'creative':
+                    case 'writing':
+                        return model.primary_category === 'creative' ||
+                               model.categories?.includes('creative') ||
+                               category === 'creative' || specialization === 'creative' ||
+                               model.name.toLowerCase().includes('dolphin') ||
+                               model.name.toLowerCase().includes('wizard') ||
+                               model.name.toLowerCase().includes('uncensored');
+                    
+                    case 'chat':
+                    case 'conversation':
+                    case 'talking':
+                        // Prefer chat models, exclude coding models
+                        if (model.primary_category === 'coding' || 
+                            specialization === 'code' || 
+                            model.name.toLowerCase().includes('code') ||
+                            model.name.toLowerCase().includes('coder')) {
+                            return false;
+                        }
+                        return model.primary_category === 'chat' ||
+                               model.categories?.includes('chat') ||
+                               category === 'talking' || specialization === 'chat' ||
+                               model.name.toLowerCase().includes('llama') ||
+                               model.name.toLowerCase().includes('mistral') ||
+                               model.name.toLowerCase().includes('qwen') ||
+                               (!model.name.toLowerCase().includes('llava') &&
+                                (specialization === 'general' || category === 'medium'));
+                    
+                    case 'multimodal':
+                    case 'vision':
+                        return model.primary_category === 'multimodal' ||
+                               model.categories?.includes('multimodal') ||
+                               category === 'multimodal' || 
+                               model.name.toLowerCase().includes('llava') ||
+                               model.name.toLowerCase().includes('vision');
+                    
+                    case 'embeddings':
+                    case 'embedings': // typo tolerance
+                    case 'embedding':
+                    case 'embeding': // typo tolerance
+                        return model.primary_category === 'embeddings' ||
+                               model.categories?.includes('embeddings') ||
+                               category === 'embeddings' ||
+                               model.name.toLowerCase().includes('embed') ||
+                               model.name.toLowerCase().includes('bge');
+                    
+                    case 'reasoning':
+                    case 'reason':
+                        return model.primary_category === 'reasoning' ||
+                               model.categories?.includes('reasoning') ||
+                               category === 'reasoning' ||
+                               model.name.toLowerCase().includes('deepseek-r1') ||
+                               model.name.toLowerCase().includes('reasoning');
+                    
+                    default:
+                        // Check for partial matches with typo tolerance
+                        if (lowerUseCase.includes('embed')) {
+                            return model.primary_category === 'embeddings' ||
+                                   model.categories?.includes('embeddings') ||
+                                   category === 'embeddings' ||
+                                   model.name.toLowerCase().includes('embed');
+                        }
+                        if (lowerUseCase.includes('code')) {
+                            return model.primary_category === 'coding' ||
+                                   model.categories?.includes('coding');
+                        }
+                        if (lowerUseCase.includes('creat')) {
+                            return model.primary_category === 'creative' ||
+                                   model.categories?.includes('creative');
+                        }
+                        return true;
+                }
+            });
+            
+            // If we found use case specific models, use those, otherwise search Ollama database
+            if (useCaseModels.length > 0) {
+                candidateModels = useCaseModels;
+                reason = `Best ${useCase} model for your hardware`;
+            } else {
+                // Search directly in Ollama database for use case specific models
+                const ollamaModels = searchOllamaModelsForUseCase(useCase, hardware);
+                if (ollamaModels.length > 0) {
+                    candidateModels = ollamaModels;
+                    reason = `Best ${useCase} model from Ollama database`;
+                }
+            }
+        } else {
+            // No specific use case - apply intelligent general filtering
+            // First, infer categories for static models that don't have them
+            const modelsWithCategories = candidateModels.map(model => {
+                if (!model.primary_category) {
+                    const modelName = model.name.toLowerCase();
+                    let inferredCategory = 'general';
+                    
+                    if (modelName.includes('code') || modelName.includes('coder')) {
+                        inferredCategory = 'coding';
+                    } else if (modelName.includes('llava') || modelName.includes('vision')) {
+                        inferredCategory = 'multimodal';
+                    } else if (modelName.includes('embed')) {
+                        inferredCategory = 'embeddings';
+                    } else if (modelName.includes('llama') || modelName.includes('mistral') || 
+                               modelName.includes('qwen') || modelName.includes('gemma')) {
+                        inferredCategory = 'chat';
+                    } else if (modelName.includes('phi') && modelName.includes('mini')) {
+                        inferredCategory = 'reasoning';
+                    }
+                    
+                    return { ...model, primary_category: inferredCategory };
+                }
+                return model;
+            });
+            
+            // Prefer versatile models, exclude highly specialized ones
+            const generalModels = modelsWithCategories.filter(model => {
+                // Exclude very specialized models
+                if (model.primary_category === 'embeddings' || 
+                    model.primary_category === 'safety' ||
+                    model.primary_category === 'multimodal') {
+                    return false;
+                }
+                
+                // Include chat, coding, reasoning, creative, and general models
+                return model.primary_category === 'chat' || 
+                       model.primary_category === 'coding' || 
+                       model.primary_category === 'reasoning' ||
+                       model.primary_category === 'creative' ||
+                       model.primary_category === 'general' ||
+                       model.specialization === 'general' ||
+                       model.category === 'medium' ||
+                       model.category === 'small';
+            });
+            
+            if (generalModels.length > 0) {
+                // Re-score general models with category bonus
+                const scoredModels = generalModels.map(model => {
+                    let adjustedScore = model.score || 0;
+                    
+                    // Apply category bonuses for general use
+                    if (model.primary_category === 'chat') {
+                        adjustedScore += 5; // Chat models are great for general use
+                    } else if (model.primary_category === 'coding') {
+                        adjustedScore += 3; // Coding models are versatile
+                    } else if (model.primary_category === 'reasoning') {
+                        adjustedScore += 4; // Reasoning models are smart
+                    } else if (model.primary_category === 'creative') {
+                        adjustedScore += 2; // Creative models are fun
+                    }
+                    
+                    return { ...model, adjustedScore };
+                });
+                
+                candidateModels = scoredModels.sort((a, b) => b.adjustedScore - a.adjustedScore);
+                reason = 'Best general-purpose model for your hardware';
+            }
+        }
+        
+        // Filter out unreasonably large models before final selection
+        const reasonableSizedModels = candidateModels.filter(model => {
+            const realSize = getRealSizeFromOllamaCache(model);
+            const sizeGB = parseFloat(realSize?.replace(/GB|gb/gi, '') || '0');
+            
+            // For hardware with 24GB RAM, models >25GB are not practical
+            const maxReasonableSize = hardware.memory.total > 32 ? 50 : 25;
+            return sizeGB === 0 || sizeGB <= maxReasonableSize; // 0 means unknown/fallback
+        });
+        
+        // Sort by score and get the top models (use adjustedScore if available)
+        const sortedModels = reasonableSizedModels.sort((a, b) => 
+            (b.adjustedScore || b.score || 0) - (a.adjustedScore || a.score || 0)
+        );
+        selectedModels = sortedModels.slice(0, limit);
+        
+        if (!reason) {
+            reason = 'Highest compatibility score for your hardware';
+        }
+    } else if (analysis.marginal && analysis.marginal.length > 0) {
+        const sortedMarginal = analysis.marginal.sort((a, b) => (b.score || 0) - (a.score || 0));
+        selectedModels = sortedMarginal.slice(0, limit);
+        reason = 'Best available option (marginal performance)';
+    }
+    
+    if (selectedModels && selectedModels.length > 0) {
+        for (let index = 0; index < selectedModels.length; index++) {
+            const model = selectedModels[index];
+            
+            if (limit > 1) {
+                const rank = index + 1;
+                const rankColor = rank === 1 ? chalk.yellow : chalk.gray;
+                console.log(`\n${rankColor.bold(`#${rank} - ${model.name}`)}`);
+            } else {
+                console.log(`Model: ${chalk.cyan.bold(model.name)}`);
+            }
+            
+            // Get real size from Ollama cache
+            const realSize = getRealSizeFromOllamaCache(model);
+            console.log(`Size: ${chalk.white(realSize || 'Unknown')}`);
+            console.log(`Compatibility Score: ${chalk.green.bold(model.adjustedScore || model.score || 'N/A')}/100`);
+            
+            if (index === 0) {
+                console.log(`Reason: ${chalk.gray(reason)}`);
+            }
+            
+            // Show performance if available
+            if (model.performanceEstimate) {
+                console.log(`Estimated Speed: ${chalk.yellow(model.performanceEstimate.estimatedTokensPerSecond || 'N/A')} tokens/sec`);
+            }
+            
+            // Check if it's already installed by comparing with Ollama integration
+            const isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
+            if (isInstalled) {
+                console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
+            } else {
+                console.log(`Status: ${chalk.gray('Available for installation')}`);
+            }
+        }
+    } else {
+        console.log(chalk.yellow('No compatible models found for your hardware'));
+        console.log(chalk.gray('Try running with --include-cloud to see more options'));
+    }
+    
+    return selectedModels;
+}
 
-    console.log(chalk.hex('#a259ff')('╰'));
+async function displayQuickStartCommands(analysis, recommendedModel = null, allRecommended = null) {
+    console.log(chalk.yellow.bold('\nQUICK START'));
+    console.log(chalk.gray('─'.repeat(50)));
+    
+    // Use the first model from allRecommended if available, otherwise fallback to recommendedModel
+    let bestModel = (allRecommended && allRecommended.length > 0) ? allRecommended[0] : recommendedModel;
+    
+    if (!bestModel) {
+        if (analysis.compatible && analysis.compatible.length > 0) {
+            const sortedModels = analysis.compatible.sort((a, b) => (b.score || 0) - (a.score || 0));
+            bestModel = sortedModels[0];
+        } else if (analysis.marginal && analysis.marginal.length > 0) {
+            const sortedMarginal = analysis.marginal.sort((a, b) => (b.score || 0) - (a.score || 0));
+            bestModel = sortedMarginal[0];
+        }
+    }
+    
+    if (analysis.ollamaInfo && !analysis.ollamaInfo.available) {
+        console.log(`1. Install Ollama: ${chalk.underline('https://ollama.ai')}`);
+        console.log(`2. Come back and run this command again`);
+    } else if (bestModel) {
+        const isInstalled = await checkIfModelInstalled(bestModel, analysis.ollamaInfo);
+        
+        if (isInstalled) {
+            const ollamaCommand = getOllamaInstallCommand(bestModel);
+            const modelName = ollamaCommand ? extractModelName(ollamaCommand) : bestModel.name.toLowerCase();
+            console.log(`1. Start using your installed model:`);
+            console.log(`   ${chalk.cyan.bold(`ollama run ${modelName}`)}`);
+        } else {
+            // Try to find Ollama command
+            const ollamaCommand = getOllamaInstallCommand(bestModel);
+            if (ollamaCommand) {
+                console.log(`1. Install the recommended model:`);
+                console.log(`   ${chalk.cyan.bold(ollamaCommand)}`);
+                console.log(`2. Start using it:`);
+                console.log(`   ${chalk.cyan.bold(`ollama run ${extractModelName(ollamaCommand)}`)}`);
+            } else {
+                console.log(`1. Search for ${bestModel.name} on Ollama Hub`);
+                console.log(`2. Install and run the model`);
+            }
+        }
+        
+        // If multiple models were shown, suggest trying alternatives (only reasonable ones)
+        if (allRecommended && allRecommended.length > 1) {
+            console.log(`\n${chalk.gray('Alternative options:')}`);
+            
+            // Filter out unreasonable alternatives (>50GB, no ollama command)
+            const reasonableAlternatives = allRecommended.slice(1).filter(model => {
+                const realSize = getRealSizeFromOllamaCache(model);
+                const sizeGB = parseFloat(realSize?.replace(/GB|gb/gi, '') || '0');
+                const ollamaCommand = getOllamaInstallCommand(model);
+                
+                // Only show if size is reasonable (<50GB) and has ollama command
+                return sizeGB < 50 && ollamaCommand;
+            });
+            
+            // Show max 2 alternatives, avoid duplicating commands
+            const seenCommands = new Set();
+            const bestModelCommand = getOllamaInstallCommand(bestModel);
+            if (bestModelCommand) seenCommands.add(bestModelCommand);
+            
+            let alternativeCount = 0;
+            reasonableAlternatives.forEach((model) => {
+                if (alternativeCount >= 2) return; // Max 2 alternatives
+                
+                const ollamaCommand = getOllamaInstallCommand(model);
+                if (ollamaCommand && !seenCommands.has(ollamaCommand)) {
+                    console.log(`   ${chalk.gray(`${alternativeCount + 2}. ${ollamaCommand}`)}`);
+                    seenCommands.add(ollamaCommand);
+                    alternativeCount++;
+                }
+            });
+            
+            // If no reasonable alternatives, don't show the section
+            if (reasonableAlternatives.length === 0) {
+                console.log(`   ${chalk.gray('No other reasonable alternatives found for your hardware')}`);
+            }
+        }
+    } else {
+        console.log(`1. Try expanding search: ${chalk.cyan('llm-checker check --include-cloud')}`);
+        console.log(`2. Or see all available models: ${chalk.cyan('llm-checker list-models')}`);
+    }
+}
+
+function getOllamaInstallCommand(model) {
+    // Special handling for specific models that need corrected commands
+    const modelName = model.name.toLowerCase();
+    
+    if (modelName.includes('codellama') && modelName.includes('7b')) {
+        return 'ollama pull codellama:7b';
+    }
+    if (modelName.includes('mistral') && modelName.includes('7b')) {
+        return 'ollama pull mistral:7b';
+    }
+    if (modelName.includes('llama 3.1') && modelName.includes('8b')) {
+        return 'ollama pull llama3.1:8b';
+    }
+    if (modelName.includes('llama3.1') && !modelName.includes('8b')) {
+        return 'ollama pull llama3.1:8b'; // Default to 8b variant
+    }
+    if (modelName.includes('llama3.2-vision')) {
+        return 'ollama pull llama3.2-vision:latest';
+    }
+    if (modelName.includes('llama3.2')) {
+        return 'ollama pull llama3.2:3b'; // Most common variant
+    }
+    if (modelName.includes('llama3.3')) {
+        return 'ollama pull llama3.3:70b'; // This is the actual size
+    }
+    if (modelName.includes('qwen') && modelName.includes('7b')) {
+        return 'ollama pull qwen2.5:7b';
+    }
+    if (modelName.includes('phi4-reasoning')) {
+        return 'ollama pull phi4-reasoning:latest';
+    }
+    if (modelName.includes('deepseek-r1')) {
+        return 'ollama pull deepseek-r1:8b';
+    }
+    if (modelName.includes('dolphin3')) {
+        return 'ollama pull dolphin3:latest';
+    }
+    if (modelName === 'phi' || modelName.includes('phi ')) {
+        return 'ollama pull phi:latest';
+    }
+    
+    // First priority: use ollamaTag if available (from Ollama database)
+    if (model.ollamaTag) {
+        return `ollama pull ${model.ollamaTag}`;
+    }
+    
+    // Second priority: use installation.ollama if available
+    if (model.installation && model.installation.ollama) {
+        return model.installation.ollama;
+    }
+    
+    // Third priority: try to generate from model name
+    
+    const mapping = {
+        'tinyllama 1.1b': 'ollama pull tinyllama:1.1b',
+        'phi-3 mini 3.8b': 'ollama pull phi3:mini',
+        'llama 3.2 3b': 'ollama pull llama3.2:3b',
+        'llama 3.1 8b': 'ollama pull llama3.1:8b',
+        'mistral 7b': 'ollama pull mistral:7b',
+        'mistral 7b v0.3': 'ollama pull mistral:7b',
+        'qwen 2.5 7b': 'ollama pull qwen2.5:7b',
+        'codellama 7b': 'ollama pull codellama:7b',
+        'codellama': 'ollama pull codellama:7b'
+    };
+    
+    for (const [key, command] of Object.entries(mapping)) {
+        if (modelName.includes(key) || key.includes(modelName)) {
+            return command;
+        }
+    }
+    
+    // Last resort: use ollamaId if available
+    if (model.ollamaId) {
+        return `ollama pull ${model.ollamaId}`;
+    }
+    
+    return null;
+}
+
+function extractModelName(command) {
+    const match = command.match(/ollama pull (.+)/);
+    return match ? match[1] : 'model';
 }
 
 program
@@ -938,20 +1655,24 @@ program
     .option('-d, --detailed', 'Show detailed hardware information')
     .option('-f, --filter <type>', 'Filter by model type')
     .option('-u, --use-case <case>', 'Specify use case', 'general')
+    .option('-l, --limit <number>', 'Number of compatible models to show (default: 1)', '1')
     .option('--include-cloud', 'Include cloud models in analysis')
     .option('--ollama-only', 'Only show models available in Ollama')
     .option('--performance-test', 'Run performance benchmarks')
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
+    .option('--no-verbose', 'Disable step-by-step progress display')
     .action(async (options) => {
-        const spinner = ora('🔍 Analyzing your system...').start();
-
         try {
-            const checker = new LLMChecker();
+            // Use verbose progress unless explicitly disabled
+            const verboseEnabled = options.verbose !== false;
+            const checker = new LLMChecker({ verbose: verboseEnabled });
+            
+            // If verbose is disabled, show simple loading message
+            if (!verboseEnabled) {
+                process.stdout.write(chalk.gray('Analyzing your system...'));
+            }
 
-            spinner.text = '🖥️  Detecting hardware...';
             const hardware = await checker.getSystemInfo();
-
-            spinner.text = '🦙 Integrating with Ollama...';
             const analysis = await checker.analyze({
                 filter: options.filter,
                 useCase: options.useCase,
@@ -959,28 +1680,17 @@ program
                 performanceTest: options.performanceTest
             });
 
-            spinner.succeed('✅ Analysis complete!');
-
-            displaySystemInfo(hardware, analysis);
-            displayOllamaIntegration(analysis.ollamaInfo, analysis.ollamaModels);
-            displayEnhancedCompatibleModels(analysis.compatible, analysis.ollamaModels);
-
-            if (analysis.marginal.length > 0) {
-                displayMarginalModels(analysis.marginal);
+            if (!verboseEnabled) {
+                console.log(chalk.green(' done'));
             }
 
-            displayStructuredRecommendations(analysis.recommendations);
-            
-            // Mostrar recomendaciones inteligentes por categoría
-            if (analysis.intelligentRecommendations) {
-                displayIntelligentRecommendations(analysis.intelligentRecommendations);
-            }
-            
-            displayNextSteps(analysis);
+            // Simplified output - show only essential information
+            displaySimplifiedSystemInfo(hardware);
+            const recommendedModels = await displayModelRecommendations(analysis, hardware, options.useCase, parseInt(options.limit) || 1);
+            await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels);
 
         } catch (error) {
-            spinner.fail('Failed to analyze system');
-            console.error(chalk.red('Error:'), error.message);
+            console.error(chalk.red('\nError:'), error.message);
             if (process.env.DEBUG) {
                 console.error(error.stack);
             }
@@ -1004,8 +1714,8 @@ program
 
             if (!analysis.ollamaInfo.available) {
                 spinner.fail(`Ollama not available`);
-                console.log('\n💡 To install Ollama:');
-                console.log('🔗 Visit: https://ollama.ai');
+                console.log('\nTo install Ollama:');
+                console.log('Visit: https://ollama.ai');
                 return;
             }
 
@@ -1022,68 +1732,30 @@ program
     });
 
 program
-    .command('update-db')
-    .description('Update Ollama models database')
-    .option('-f, --force', 'Force update, ignore cache')
-    .action(async (options) => {
-        const spinner = ora('Updating Ollama models database...').start();
-
-        try {
-            const checker = new LLMChecker();
-            
-            if (options.force) {
-                spinner.text = '🔄 Force updating database (this may take a while)...';
-                const data = await checker.forceUpdateOllamaDatabase();
-                spinner.succeed(`✅ Database force updated! Found ${data.total_count} models`);
-            } else {
-                spinner.text = '📡 Checking for database updates...';
-                const data = await checker.updateOllamaDatabase();
-                if (data) {
-                    spinner.succeed(`✅ Database updated! Found ${data.total_count} models`);
-                } else {
-                    spinner.succeed('📋 Database is up to date');
-                }
-            }
-
-            const stats = await checker.getOllamaModelStats();
-            if (stats) {
-                console.log('\n' + chalk.bgBlue.white.bold(' 📊 DATABASE STATS '));
-                console.log(chalk.blue('╭' + '─'.repeat(40)));
-                console.log(chalk.blue('│') + ` Total models: ${chalk.green.bold(stats.total_models || 'N/A')}`);
-                console.log(chalk.blue('│') + ` Last updated: ${chalk.yellow(stats.last_updated || 'Unknown')}`);
-                console.log(chalk.blue('╰'));
-            }
-
-        } catch (error) {
-            spinner.fail('Failed to update database');
-            console.error(chalk.red('Error:'), error.message);
-            if (process.env.DEBUG) {
-                console.error(error.stack);
-            }
-            process.exit(1);
-        }
-    });
-
-program
     .command('recommend')
     .description('Get intelligent model recommendations for your hardware')
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
+    .option('--no-verbose', 'Disable step-by-step progress display')
     .action(async (options) => {
-        const spinner = ora('🧠 Analyzing your hardware and generating recommendations...').start();
-
         try {
-            const checker = new LLMChecker();
-            const hardware = await checker.getSystemInfo();
+            const verboseEnabled = options.verbose !== false;
+            const checker = new LLMChecker({ verbose: verboseEnabled });
             
-            spinner.text = '📊 Analyzing thousands of models...';
+            if (!verboseEnabled) {
+                process.stdout.write(chalk.gray('Generating recommendations...'));
+            }
+
+            const hardware = await checker.getSystemInfo();
             const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware);
 
             if (!intelligentRecommendations) {
-                spinner.fail('Failed to generate recommendations');
+                console.error(chalk.red('\nFailed to generate recommendations'));
                 return;
             }
 
-            spinner.succeed('✅ Smart recommendations generated!');
+            if (!verboseEnabled) {
+                console.log(chalk.green(' done'));
+            }
 
             // Mostrar información del sistema
             displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
@@ -1092,8 +1764,7 @@ program
             displayIntelligentRecommendations(intelligentRecommendations);
 
         } catch (error) {
-            spinner.fail('Failed to generate recommendations');
-            console.error(chalk.red('Error:'), error.message);
+            console.error(chalk.red('\nError:'), error.message);
             if (process.env.DEBUG) {
                 console.error(error.stack);
             }
@@ -1394,11 +2065,11 @@ program
             
             const result = await aiSelector.selectBestModel(candidateModels, systemSpecs);
             
-            spinner.succeed(`✅ Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
+            spinner.succeed(`Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
             
             // Execute the selected model
-            console.log(chalk.magenta.bold(`\n🚀 Launching ${result.bestModel}...`));
-            console.log(chalk.gray(`💡 Tip: Type ${chalk.cyan('/bye')} to exit the chat when finished\n`));
+            console.log(chalk.magenta.bold(`\nLaunching ${result.bestModel}...`));
+            console.log(chalk.gray(`Tip: Type ${chalk.cyan('/bye')} to exit the chat when finished\n`));
             
             const args = ['run', result.bestModel];
             if (options.prompt) {
@@ -1417,6 +2088,67 @@ program
             console.error(chalk.red('❌ AI-powered execution failed:'), error.message);
             process.exit(1);
         }
+    });
+
+// Comando especial para demostrar el nuevo estilo de verbosity
+program
+    .command('demo')
+    .description('Demo of the enhanced verbose progress with progress bars')
+    .action(async () => {
+        console.log(chalk.cyan.bold('\nLLM Checker - Enhanced Progress Demo'));
+        console.log(chalk.gray('This demonstrates the new step-by-step progress display with visual indicators'));
+        console.log(chalk.gray('─'.repeat(60)));
+        
+        // Simular el proceso de análisis con verbosity
+        const VerboseProgress = require('../src/utils/verbose-progress');
+        const progress = VerboseProgress.create(true);
+        
+        progress.startOperation('LLM Model Analysis & Compatibility Demo', 5);
+        
+        // Simular paso 1
+        progress.step('System Detection', 'Scanning hardware specifications...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        progress.substep('CPU detected: Apple M4 Pro (12 cores)');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        progress.substep('Memory detected: 24GB unified memory', true);
+        progress.stepComplete('Apple M4 Pro, 24GB RAM, Apple Silicon GPU');
+        
+        // Simular paso 2
+        progress.step('Database Sync', 'Updating model database...');
+        await new Promise(resolve => setTimeout(resolve, 800));
+        progress.found('3,247 models in database');
+        progress.stepComplete('Database synchronized');
+        
+        // Simular paso 3
+        progress.step('Compatibility Analysis', 'Running mathematical heuristics...');
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        progress.substep('Analyzing hardware requirements...');
+        await new Promise(resolve => setTimeout(resolve, 600));
+        progress.substep('Calculating performance scores...', true);
+        progress.found('127 compatible models found');
+        progress.stepComplete('Compatibility analysis complete');
+        
+        // Simular paso 4
+        progress.step('AI Evaluation', 'Running intelligent model selection...');
+        await new Promise(resolve => setTimeout(resolve, 900));
+        progress.substep('Mathematical heuristics applied');
+        progress.found('Top 15 models selected by AI');
+        progress.stepComplete('AI evaluation complete');
+        
+        // Simular paso 5
+        progress.step('Smart Recommendations', 'Generating personalized suggestions...');
+        await new Promise(resolve => setTimeout(resolve, 600));
+        progress.substep('Analyzing use case: general');
+        await new Promise(resolve => setTimeout(resolve, 400));
+        progress.substep('Generating Ollama commands...', true);
+        progress.stepComplete('23 recommendations generated');
+        
+        // Completar
+        progress.complete('Analysis complete! Found optimal models for your hardware');
+        
+        console.log(chalk.green.bold('Demo completed successfully!'));
+        console.log(chalk.gray('\\nNow try running: ') + chalk.cyan.bold('llm-checker check'));
+        console.log(chalk.gray('For silent mode: ') + chalk.cyan.bold('llm-checker check --no-verbose'));
     });
 
 program.parse();

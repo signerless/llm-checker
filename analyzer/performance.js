@@ -371,8 +371,9 @@ class PerformanceAnalyzer {
         loadTimeSeconds /= cpuSpeedFactor;
 
 
-        if (hardware.memory.free < modelSizeGB) {
-            loadTimeSeconds *= 2;
+        // Load time doesn't depend on current free memory, but on total RAM vs model size
+        if (hardware.memory.total < modelSizeGB * 1.5) {
+            loadTimeSeconds *= 1.5; // Slower if tight on total memory
         }
 
         return {

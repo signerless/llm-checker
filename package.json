@@ -13,7 +13,6 @@
     "start": "node bin/enhanced_cli.js",
     "check": "node bin/enhanced_cli.js check",
     "recommend": "node bin/enhanced_cli.js recommend",
-    "update-db": "node bin/enhanced_cli.js update-db",
     "ollama": "node bin/enhanced_cli.js ollama",
     "list-models": "node bin/enhanced_cli.js list-models",
     "ai-check": "node bin/enhanced_cli.js ai-check",

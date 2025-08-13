@@ -198,7 +198,7 @@ class DeterministicModelSelector {
                 
                 const modelName = parts[0];
                 const modelId = parts[1];
-                const size = parts[2];
+                const size = parts.length >= 4 ? `${parts[2]} ${parts[3]}` : parts[2];
                 
                 // Get detailed info for each model
                 try {
@@ -446,8 +446,8 @@ class DeterministicModelSelector {
         const catalog = await this.loadCatalog();
         
         if (!silent) {
-            console.log(`💾 Found ${installed.length} installed, ${catalog.length} catalog models`);
-            console.log(`💻 Hardware: ${hardware.cpu.cores} cores, ${hardware.memory.totalGB}GB RAM, ${hardware.gpu.type}`);
+            console.log(`Found ${installed.length} installed, ${catalog.length} catalog models`);
+            console.log(`Hardware: ${hardware.cpu.cores} cores, ${hardware.memory.totalGB}GB RAM, ${hardware.gpu.type}`);
         }
         
         // Combine and dedupe models (prefer installed versions)
@@ -892,9 +892,9 @@ class DeterministicModelSelector {
     formatRecommendations(result) {
         const { category, hardware, candidates, total_evaluated } = result;
         
-        console.log(`\n🎯 ${category.toUpperCase()} RECOMMENDATIONS`);
-        console.log(`💻 Hardware: ${hardware.cpu.cores} cores, ${hardware.memory.totalGB}GB RAM, ${hardware.gpu.type}`);
-        console.log(`📊 Evaluated ${total_evaluated} models\n`);
+        console.log(`\n${category.toUpperCase()} RECOMMENDATIONS`);
+        console.log(`Hardware: ${hardware.cpu.cores} cores, ${hardware.memory.totalGB}GB RAM, ${hardware.gpu.type}`);
+        console.log(`Evaluated ${total_evaluated} models\n`);
         
         if (candidates.length === 0) {
             console.log('❌ No suitable models found for your hardware');
@@ -907,7 +907,7 @@ class DeterministicModelSelector {
         console.log('├─────────────────────────────┼────────┼───────┼─────────┼──────────┼───────┼─────────────────────────────┤');
         
         candidates.forEach((candidate, index) => {
-            const isInstalled = candidate.meta.installed ? '📦' : '🌐';
+            const isInstalled = candidate.meta.installed ? 'INSTALLED' : 'CLOUD';
             const name = candidate.meta.name.padEnd(26);
             const params = `${candidate.meta.paramsB}B`.padEnd(5);
             const quant = candidate.quant.padEnd(6);
@@ -924,8 +924,8 @@ class DeterministicModelSelector {
         // Best pick
         const best = candidates[0];
         console.log(`\n🏆 BEST PICK: ${best.meta.name}`);
-        console.log(`📦 Command: ollama pull ${best.meta.model_identifier}`);
-        console.log(`💡 Why: ${best.rationale}`);
+        console.log(`Command: ollama pull ${best.meta.model_identifier}`);
+        console.log(`Why: ${best.rationale}`);
         console.log(`📊 Score: ${best.score} (Q:${best.components.Q} S:${best.components.S} F:${best.components.F} C:${best.components.C})`);
         
         return result;

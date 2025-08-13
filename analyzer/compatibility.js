@@ -142,6 +142,11 @@ class CompatibilityAnalyzer {
             issues.push(edgeAnalysis.warning);
         }
 
+        // NEW: Penalize models that underutilize high-end hardware
+        const sizeMatchAnalysis = this.analyzeHardwareSizeMatch(hardware, model);
+        score *= sizeMatchAnalysis.factor;
+        notes.push(...sizeMatchAnalysis.notes);
+
         return {
             score: Math.round(Math.max(0, Math.min(100, score))),
             issues: issues.filter(Boolean),
@@ -153,7 +158,7 @@ class CompatibilityAnalyzer {
     analyzeRAMCompatibility(memory, requirements) {
         const analysis = { factor: 1.0, issues: [], notes: [] };
         const totalRAM = memory.total;
-        const availableRAM = memory.free;
+        const availableRAM = memory.free; // Solo para mostrar info, no para lógica
         const requiredRAM = requirements.ram;
         const recommendedRAM = requirements.recommended_ram || requiredRAM * 1.5;
 
@@ -170,13 +175,13 @@ class CompatibilityAnalyzer {
 
             if (totalRAM >= recommendedRAM * 2) {
                 analysis.factor = 1.05;
-                analysis.notes.push('🚀 Abundant RAM allows multiple models simultaneously');
+                analysis.notes.push('Abundant RAM allows multiple models simultaneously');
             }
         }
 
+        // Informational note about current memory usage (not affecting compatibility score)
         if (totalRAM >= requiredRAM && availableRAM < requiredRAM) {
-
-            analysis.notes.push(`💡 Currently only ${availableRAM}GB free RAM - close other applications before running this model`);
+            analysis.notes.push(`Info: Currently ${availableRAM}GB free RAM - you may need to close other applications before running this model`);
         }
 
         return analysis;
@@ -239,12 +244,12 @@ class CompatibilityAnalyzer {
             analysis.issues.push(`Limited cores: ${cores} available, ${requiredCores} recommended`);
         } else if (cores >= requiredCores * 2) {
             analysis.factor = 1.05;
-            analysis.notes.push('🚀 Abundant CPU cores for parallel processing');
+            analysis.notes.push('Abundant CPU cores for parallel processing');
         }
 
         if (cpuSpeed >= 3.5) {
             analysis.factor *= 1.1;
-            analysis.notes.push('⚡ High CPU speed boosts inference performance');
+            analysis.notes.push('High CPU speed boosts inference performance');
         } else if (cpuSpeed < 2.0) {
             analysis.factor *= 0.85;
             analysis.notes.push('⚠️ Low CPU speed may impact performance');
@@ -271,7 +276,7 @@ class CompatibilityAnalyzer {
             case 'Apple Silicon':
                 if (model.frameworks?.includes('llama.cpp')) {
                     analysis.factor = this.ollamaOptimizations.hardwareOptimizations['Apple Silicon'].metalBonus;
-                    analysis.notes.push('🍎 Apple Silicon with Metal acceleration');
+                    analysis.notes.push('Apple Silicon with Metal acceleration');
                 }
 
                 if (model.requirements?.vram === 0) {
@@ -352,7 +357,7 @@ class CompatibilityAnalyzer {
 
         if (recommendedQuant) {
             analysis.factor = quantBonus;
-            analysis.notes.push(`🎯 Recommended quantization: ${recommendedQuant}`);
+            analysis.notes.push(`Recommended quantization: ${recommendedQuant}`);
         } else {
             analysis.notes.push('⚠️ Limited quantization options for your hardware');
         }
@@ -368,16 +373,16 @@ class CompatibilityAnalyzer {
         }
 
         analysis.factor = 1.05;
-        analysis.notes.push('🦙 Native Ollama support');
+        analysis.notes.push('Native Ollama support');
 
         if (model.name.includes('Llama')) {
             analysis.factor *= 1.02;
-            analysis.notes.push('🦙 Llama models are well-optimized in Ollama');
+            analysis.notes.push('Llama models are well-optimized in Ollama');
         }
 
         if (model.name.includes('Mistral')) {
             analysis.factor *= 1.02;
-            analysis.notes.push('🌪️ Mistral models have excellent Ollama integration');
+            analysis.notes.push('Mistral models have excellent Ollama integration');
         }
 
         if (hardware.gpu.dedicated && hardware.gpu.vram >= 8) {
@@ -470,38 +475,38 @@ class CompatibilityAnalyzer {
                 break;
 
             case 'low':
-                recommendations.push('🐤 Small models (1B-3B) work well on your system');
-                recommendations.push('🎯 Use Q4_0 quantization for good balance');
+                recommendations.push('Small models (1B-3B) work well on your system');
+                recommendations.push('Use Q4_0 quantization for good balance');
                 break;
 
             case 'medium':
-                recommendations.push('🐦 Medium models (3B-8B) are ideal for your hardware');
-                recommendations.push('⚡ Use Q5_K_M for high quality');
+                recommendations.push('Medium models (3B-8B) are ideal for your hardware');
+                recommendations.push('Use Q5_K_M for high quality');
                 break;
 
             case 'high':
-                recommendations.push('🦅 Large models (8B-30B) run excellently');
-                recommendations.push('💎 Use Q6_K or Q8_0 for maximum quality');
+                recommendations.push('Large models (8B-30B) run excellently');
+                recommendations.push('Use Q6_K or Q8_0 for maximum quality');
                 break;
 
             case 'ultra_high':
-                recommendations.push('🚀 Any model size supported - try the largest available');
-                recommendations.push('🌟 Consider running multiple models simultaneously');
+                recommendations.push('Any model size supported - try the largest available');
+                recommendations.push('Consider running multiple models simultaneously');
                 break;
         }
 
         if (options.includeOllamaOptimizations !== false) {
-            recommendations.push('🦙 Install Ollama for easy model management');
+            recommendations.push('Install Ollama for easy model management');
 
             if (hardware.cpu.architecture === 'Apple Silicon') {
-                recommendations.push('🍎 Ollama will use Metal acceleration automatically');
+                recommendations.push('Ollama will use Metal acceleration automatically');
             }
 
             if (results.compatible.length > 0) {
                 const topModel = results.compatible[0];
                 const ollamaCmd = this.getOllamaCommand(topModel.name);
                 if (ollamaCmd) {
-                    recommendations.push(`🚀 Try: ${ollamaCmd}`);
+                    recommendations.push(`Try: ${ollamaCmd}`);
                 }
             }
         }
@@ -523,6 +528,56 @@ class CompatibilityAnalyzer {
         };
 
         return mapping[modelName] || null;
+    }
+
+    analyzeHardwareSizeMatch(hardware, model) {
+        const analysis = { factor: 1.0, notes: [] };
+        
+        // Get hardware tier and model size
+        const hardwareTier = this.getHardwareTier(hardware);
+        const totalRAM = hardware.memory.total;
+        const modelSizeGB = this.parseModelSize(model.size);
+        
+        // Define optimal model sizes for each hardware tier
+        const optimalSizes = {
+            'ultra_high': { min: 13, max: 70, sweet: 20 },    // 64+ GB: 13B-70B models
+            'high': { min: 7, max: 30, sweet: 13 },           // 16-32 GB: 7B-30B models  
+            'medium': { min: 3, max: 13, sweet: 7 },          // 8-16 GB: 3B-13B models
+            'low': { min: 1, max: 7, sweet: 3 },              // 4-8 GB: 1B-7B models
+            'ultra_low': { min: 0.1, max: 3, sweet: 1 }      // <4 GB: <3B models
+        };
+        
+        const optimal = optimalSizes[hardwareTier] || optimalSizes['medium'];
+        
+        // Calculate penalty/bonus based on model size vs optimal range
+        if (modelSizeGB < optimal.min) {
+            // Model too small for hardware - penalize significantly
+            const underutilization = optimal.min / modelSizeGB;
+            if (underutilization >= 10) {
+                analysis.factor = 0.3; // Major penalty for extreme underutilization
+                analysis.notes.push(`Model (${model.size}) significantly underutilizes your ${hardwareTier.replace('_', ' ')} hardware`);
+            } else if (underutilization >= 5) {
+                analysis.factor = 0.5; // Moderate penalty
+                analysis.notes.push(`Model (${model.size}) underutilizes your hardware - consider larger models`);
+            } else {
+                analysis.factor = 0.7; // Small penalty
+                analysis.notes.push(`Model smaller than optimal for your ${totalRAM}GB system`);
+            }
+        } else if (modelSizeGB > optimal.max) {
+            // Model too large for hardware - already handled by RAM analysis
+            analysis.factor = 1.0; // No additional penalty (RAM analysis covers this)
+        } else {
+            // Model in good range - give bonus for sweet spot
+            const distanceFromSweet = Math.abs(modelSizeGB - optimal.sweet) / optimal.sweet;
+            if (distanceFromSweet <= 0.3) {
+                analysis.factor = 1.1; // 10% bonus for sweet spot
+                analysis.notes.push(`Excellent size match for your ${hardwareTier.replace('_', ' ')} hardware`);
+            } else {
+                analysis.factor = 1.0; // No penalty, good range
+            }
+        }
+        
+        return analysis;
     }
 }
 
