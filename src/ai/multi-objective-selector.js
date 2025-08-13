@@ -361,11 +361,31 @@ class MultiObjectiveSelector {
         const score = 100 * (0.45 * mem_cap + 0.20 * mem_bw + 0.20 * compute + 0.10 * sys_ram + 0.05 * storage);
         
         // Map to tier (final adjusted thresholds)
-        if (score >= 75) return 'ultra_high';
-        if (score >= 55) return 'high';      // M4 Pro should land here
-        if (score >= 35) return 'medium';
-        if (score >= 20) return 'low';
-        return 'ultra_low';
+        let tier = score >= 75 ? 'ultra_high' :
+                  score >= 55 ? 'high' :
+                  score >= 35 ? 'medium' :
+                  score >= 20 ? 'low' : 'ultra_low';
+        
+        // Apply same reality-based adjustments as main algorithm
+        const bumpTier = (t, direction) => {
+            const tiers = ['ultra_low', 'low', 'medium', 'high', 'ultra_high'];
+            const index = tiers.indexOf(t);
+            const newIndex = Math.max(0, Math.min(tiers.length - 1, index + direction));
+            return tiers[newIndex];
+        };
+        
+        // Realistic adjustments for LLM inference capabilities
+        if (vramGB >= 24) {
+            tier = bumpTier(tier, +1);  // High-end GPU boost
+        } else if (!vramGB && !unified) {
+            tier = bumpTier(tier, -1);  // CPU-only penalty (moderate)
+        } else if (/iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+            tier = bumpTier(tier, -1);  // iGPU penalty
+        } else if (vramGB > 0 && vramGB < 6) {
+            tier = bumpTier(tier, -1);  // Low VRAM penalty
+        }
+        
+        return tier;
     }
 
     estimateKVCache(model, contextLength) {

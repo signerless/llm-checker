@@ -1085,14 +1085,18 @@ class LLMChecker {
                   score >= 35 ? 'medium' :         // 35-54 for mid-range systems
                   score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
         
-        // Reglas de ajuste
+        // Ajustes realistas basados en capacidades reales de LLM inference
         if (vramGB >= 24 && memBandwidthGBs >= 400) {
+            // High-end dedicated GPU boost (RTX 4090, etc.)
             tier = this.bumpTier(tier, +1);
-        }
-        
-        if ((!vramGB && !unified) || 
-            /iris xe|uhd|vega.*integrated/i.test(gpuModel) || 
-            memBandwidthGBs < 150) {
+        } else if (!vramGB && !unified) {
+            // Windows/Linux CPU-only - significativa limitación pero no extrema
+            tier = this.bumpTier(tier, -1);
+        } else if (/iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+            // iGPU - limitada pero algo mejor que CPU puro
+            tier = this.bumpTier(tier, -1);
+        } else if (vramGB > 0 && vramGB < 6) {
+            // GPU dedicada con poca VRAM (GTX 1060, etc.)
             tier = this.bumpTier(tier, -1);
         }
         

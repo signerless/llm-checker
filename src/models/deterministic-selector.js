@@ -215,7 +215,7 @@ class DeterministicModelSelector {
             
             return parsed;
         } catch (error) {
-            console.warn('Failed to get installed models:', error.message);
+            // Silently fail when Ollama is not available - this is expected
             return [];
         }
     }
