@@ -10,33 +10,45 @@ class OllamaAISelector {
 
     async getAvailableModels() {
         return new Promise((resolve, reject) => {
-            const ollama = spawn('ollama', ['list']);
-            let output = '';
-            let error = '';
+            try {
+                const ollama = spawn('ollama', ['list']);
+                let output = '';
+                let error = '';
 
-            ollama.stdout.on('data', (data) => {
-                output += data.toString();
-            });
+                ollama.stdout.on('data', (data) => {
+                    output += data.toString();
+                });
 
-            ollama.stderr.on('data', (data) => {
-                error += data.toString();
-            });
+                ollama.stderr.on('data', (data) => {
+                    error += data.toString();
+                });
 
-            ollama.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Ollama list failed: ${error}`));
-                    return;
-                }
+                ollama.on('close', (code) => {
+                    if (code !== 0) {
+                        reject(new Error(`Ollama list failed: ${error}`));
+                        return;
+                    }
 
-                // Parse ollama list output
-                const lines = output.trim().split('\n').slice(1); // Skip header
-                const models = lines
-                    .filter(line => line.trim())
-                    .map(line => line.split(/\s+/)[0])
-                    .filter(model => model && !model.includes('NAME'));
+                    // Parse ollama list output
+                    const lines = output.trim().split('\n').slice(1); // Skip header
+                    const models = lines
+                        .filter(line => line.trim())
+                        .map(line => line.split(/\s+/)[0])
+                        .filter(model => model && !model.includes('NAME'));
 
-                resolve(models);
-            });
+                    resolve(models);
+                });
+                
+                ollama.on('error', (err) => {
+                    if (err.code === 'ENOENT') {
+                        reject(new Error('Ollama not found. Please install Ollama from https://ollama.ai'));
+                    } else {
+                        reject(new Error(`Ollama spawn error: ${err.message}`));
+                    }
+                });
+            } catch (spawnError) {
+                reject(new Error(`Failed to start Ollama: ${spawnError.message}`));
+            }
         });
     }
 
@@ -44,14 +56,15 @@ class OllamaAISelector {
         console.log(`🚀 Running Ollama with ${modelName}...`);
         
         return new Promise((resolve, reject) => {
-            const args = ['run', modelName];
-            if (prompt) {
-                args.push(prompt);
-            }
+            try {
+                const args = ['run', modelName];
+                if (prompt) {
+                    args.push(prompt);
+                }
 
-            const ollama = spawn('ollama', args, { 
-                stdio: 'inherit' // Stream output directly to terminal
-            });
+                const ollama = spawn('ollama', args, { 
+                    stdio: 'inherit' // Stream output directly to terminal
+                });
 
             ollama.on('close', (code) => {
                 if (code === 0) {
@@ -61,9 +74,16 @@ class OllamaAISelector {
                 }
             });
 
-            ollama.on('error', (error) => {
-                reject(new Error(`Failed to start Ollama: ${error.message}`));
-            });
+                ollama.on('error', (error) => {
+                    if (error.code === 'ENOENT') {
+                        reject(new Error('Ollama not found. Please install Ollama from https://ollama.ai'));
+                    } else {
+                        reject(new Error(`Failed to start Ollama: ${error.message}`));
+                    }
+                });
+            } catch (spawnError) {
+                reject(new Error(`Failed to start Ollama: ${spawnError.message}`));
+            }
         });
     }
 

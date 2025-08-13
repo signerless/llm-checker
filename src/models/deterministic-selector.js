@@ -221,7 +221,8 @@ class DeterministicModelSelector {
     }
 
     async getModelDetails(modelName) {
-        const details = await this.runOllamaCommand(['show', modelName]);
+        try {
+            const details = await this.runOllamaCommand(['show', modelName]);
         
         // Parse model details from ollama show output
         const meta = {
@@ -236,7 +237,22 @@ class DeterministicModelSelector {
             model_identifier: modelName
         };
         
-        return meta;
+            return meta;
+        } catch (error) {
+            // If Ollama is not available or model details can't be fetched, return minimal info
+            return {
+                name: modelName,
+                family: 'unknown',
+                paramsB: 0,
+                ctxMax: 2048,
+                quant: 'unknown',
+                sizeGB: 0,
+                modalities: ['text'],
+                tags: [],
+                model_identifier: modelName,
+                error: error.message
+            };
+        }
     }
 
     /**
@@ -404,20 +420,34 @@ class DeterministicModelSelector {
 
     async runOllamaCommand(args) {
         return new Promise((resolve, reject) => {
-            const proc = spawn('ollama', args, { stdio: 'pipe' });
-            let output = '';
-            let error = '';
-            
-            proc.stdout.on('data', (data) => output += data);
-            proc.stderr.on('data', (data) => error += data);
-            
-            proc.on('close', (code) => {
-                if (code === 0) {
-                    resolve(output);
-                } else {
-                    reject(new Error(`Ollama command failed: ${error}`));
-                }
-            });
+            try {
+                const proc = spawn('ollama', args, { stdio: 'pipe' });
+                let output = '';
+                let error = '';
+                
+                proc.stdout.on('data', (data) => output += data);
+                proc.stderr.on('data', (data) => error += data);
+                
+                proc.on('close', (code) => {
+                    if (code === 0) {
+                        resolve(output);
+                    } else {
+                        reject(new Error(`Ollama command failed: ${error}`));
+                    }
+                });
+                
+                proc.on('error', (err) => {
+                    // Handle ENOENT and other spawn errors gracefully
+                    if (err.code === 'ENOENT') {
+                        reject(new Error('Ollama not found. Please install Ollama from https://ollama.ai'));
+                    } else {
+                        reject(new Error(`Ollama spawn error: ${err.message}`));
+                    }
+                });
+            } catch (spawnError) {
+                // Handle synchronous spawn errors
+                reject(new Error(`Failed to start Ollama: ${spawnError.message}`));
+            }
         });
     }
 
