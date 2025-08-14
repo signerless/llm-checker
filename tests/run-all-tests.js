@@ -5,6 +5,7 @@
 
 const MultiGPUTests = require('./gpu-detection/multi-gpu.test');
 const CrossPlatformTests = require('./platform-tests/cross-platform.test');
+const InterfaceTests = require('./ui-tests/interface.test');
 
 class TestRunner {
     constructor() {
@@ -36,6 +37,17 @@ class TestRunner {
             const crossPlatformTester = new CrossPlatformTests();
             const crossPlatformResults = await crossPlatformTester.runAll();
             this.allResults.push(...crossPlatformResults);
+
+            console.log('\n');
+
+            // Run UI/Interface Tests  
+            console.log('=' .repeat(70));
+            console.log('🖥️  UI/INTERFACE TESTS');
+            console.log('=' .repeat(70));
+            
+            const interfaceTester = new InterfaceTests();
+            const interfaceResults = await interfaceTester.runAll();
+            this.allResults.push(...interfaceResults);
 
             // Overall Summary
             this.printOverallSummary();
@@ -119,6 +131,9 @@ class TestRunner {
             } else if (result.name.includes('macOS') || result.name.includes('Windows') || 
                        result.name.includes('Linux') || result.name.includes('Platform')) {
                 category = 'Cross-Platform';
+            } else if (result.name.includes('Spinner') || result.name.includes('Emoji') || 
+                       result.name.includes('Progress') || result.name.includes('UI')) {
+                category = 'UI/Interface';
             }
             
             if (!categories[category]) {

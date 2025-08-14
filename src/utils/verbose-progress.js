@@ -38,9 +38,9 @@ class VerboseProgress {
     step(description, details = null) {
         if (!this.enabled) return;
         
-        // Finalizar spinner anterior si existe
+        // Finalizar spinner anterior si existe (disabled)
         if (this.currentSpinner) {
-            this.currentSpinner.stop();
+            // this.currentSpinner.stop(); // Disabled to prevent UI issues
         }
         
         this.currentStep++;
@@ -151,9 +151,9 @@ class VerboseProgress {
     complete(summary = null) {
         if (!this.enabled) return;
         
-        // Finalizar spinner si existe
+        // Finalizar spinner si existe (disabled)
         if (this.currentSpinner) {
-            this.currentSpinner.stop();
+            // this.currentSpinner.stop(); // Disabled to prevent UI issues
             this.currentSpinner = null;
         }
         
@@ -180,9 +180,9 @@ class VerboseProgress {
     fail(error = null) {
         if (!this.enabled) return;
         
-        // Finalizar spinner si existe
+        // Finalizar spinner si existe (disabled)
         if (this.currentSpinner) {
-            this.currentSpinner.fail();
+            // this.currentSpinner.fail(); // Disabled to prevent UI issues
             this.currentSpinner = null;
         }
         
