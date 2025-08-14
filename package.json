@@ -8,6 +8,9 @@
   "main": "src/index.js",
   "scripts": {
     "test": "jest",
+    "test:gpu": "node tests/gpu-detection/multi-gpu.test.js",
+    "test:platform": "node tests/platform-tests/cross-platform.test.js",
+    "test:all": "node tests/run-all-tests.js",
     "build": "echo 'No build needed'",
     "dev": "node bin/enhanced_cli.js",
     "start": "node bin/enhanced_cli.js",

@@ -89,25 +89,46 @@ class HardwareDetector {
         }
 
 
-        const dedicatedGPU = controllers.find(gpu => {
+        // Filter out invalid/virtualized GPUs first
+        const validGPUs = controllers.filter(gpu => {
             const model = (gpu.model || '').toLowerCase();
-            // Check for dedicated GPU indicators - improved detection for NVIDIA RTX cards
+            const vendor = (gpu.vendor || '').toLowerCase();
+            
+            // Skip GPUs with empty/invalid data (like virtualized GPUs)
+            if (!model || !vendor || model === 'unknown' || vendor === '') {
+                return false;
+            }
+            
+            // Skip very generic/placeholder entries
+            if (model.includes('standard vga') || model.includes('microsoft basic')) {
+                return false;
+            }
+            
+            return true;
+        });
+
+        // Find all dedicated GPUs from valid GPUs
+        const dedicatedGPUs = validGPUs.filter(gpu => {
+            const model = (gpu.model || '').toLowerCase();
             const isDedicated = !this.isIntegratedGPU(gpu.model) && (
                 gpu.vram > 0 || // Has dedicated VRAM
                 model.includes('rtx') || // NVIDIA RTX series
                 model.includes('gtx') || // NVIDIA GTX series  
                 model.includes('radeon rx') || // AMD RX series
                 model.includes('tesla') || // NVIDIA Tesla
-                model.includes('quadro') // NVIDIA Quadro
+                model.includes('quadro') || // NVIDIA Quadro
+                model.includes('geforce') // NVIDIA GeForce
             );
             return isDedicated;
         });
 
-        const integratedGPU = controllers.find(gpu =>
+        // Find integrated GPUs from valid GPUs
+        const integratedGPUs = validGPUs.filter(gpu =>
             this.isIntegratedGPU(gpu.model)
         );
 
-        const primaryGPU = dedicatedGPU || integratedGPU || controllers[0];
+        // Select the best GPU using smart selection logic
+        const primaryGPU = this.selectBestGPU(dedicatedGPUs, integratedGPUs, validGPUs);
 
         if (!primaryGPU) {
             return {
@@ -129,16 +150,8 @@ class HardwareDetector {
             enhancedModel = this.getGPUModelFromDeviceId(primaryGPU.deviceId) || enhancedModel;
         }
 
-        // Enhanced VRAM detection
-        let vram = primaryGPU.vram || 0;
-        
-        // For Windows, sometimes VRAM is reported in bytes instead of MB
-        if (vram > 100000) {
-            vram = Math.round(vram / (1024 * 1024)); // Convert bytes to MB
-        }
-        
-        // Convert MB to GB
-        vram = Math.round(vram / 1024);
+        // Enhanced VRAM detection using the new normalizeVRAM function
+        let vram = this.normalizeVRAM(primaryGPU.vram || 0);
         
         // If VRAM is still 0, try to estimate based on model or handle unified memory
         if (vram === 0 && primaryGPU.model) {
@@ -158,17 +171,11 @@ class HardwareDetector {
             vramDynamic: primaryGPU.vramDynamic || false,
             dedicated: !this.isIntegratedGPU(enhancedModel),
             driverVersion: primaryGPU.driverVersion || 'Unknown',
-            all: controllers.map(gpu => {
-                let gpuVram = gpu.vram || 0;
-                if (gpuVram > 100000) {
-                    gpuVram = Math.round(gpuVram / (1024 * 1024));
-                }
-                return {
-                    model: gpu.model,
-                    vram: Math.round(gpuVram / 1024),
-                    vendor: gpu.vendor
-                };
-            }),
+            all: controllers.map(gpu => ({
+                model: gpu.model,
+                vram: this.normalizeVRAM(gpu.vram || 0),
+                vendor: gpu.vendor
+            })),
             displays: displays.length,
             score: this.calculateGPUScore(primaryGPU)
         };
@@ -377,6 +384,139 @@ class HardwareDetector {
         else if (model.includes('apple m')) score += 15;
 
         return Math.min(Math.round(score), 100);
+    }
+
+    /**
+     * Select the best GPU from multiple available GPUs
+     * Prioritizes: 1) Dedicated GPUs by VRAM, 2) Model tier, 3) Integrated GPUs
+     */
+    selectBestGPU(dedicatedGPUs, integratedGPUs, validGPUs) {
+        // If we have dedicated GPUs, choose the best one
+        if (dedicatedGPUs.length > 0) {
+            // Sort dedicated GPUs by a combination of VRAM and model tier
+            return dedicatedGPUs.sort((a, b) => {
+                // First priority: VRAM amount
+                const vramA = this.normalizeVRAM(a.vram || 0);
+                const vramB = this.normalizeVRAM(b.vram || 0);
+                
+                if (vramA !== vramB) {
+                    return vramB - vramA; // Higher VRAM first
+                }
+                
+                // Second priority: GPU tier (RTX 50xx > RTX 40xx > RTX 30xx, etc.)
+                const tierA = this.getGPUTier(a.model || '');
+                const tierB = this.getGPUTier(b.model || '');
+                
+                if (tierA !== tierB) {
+                    return tierB - tierA; // Higher tier first
+                }
+                
+                // Third priority: Vendor preference (NVIDIA > AMD > Intel)
+                const vendorA = this.getVendorPriority(a.vendor || '');
+                const vendorB = this.getVendorPriority(b.vendor || '');
+                
+                return vendorB - vendorA;
+            })[0];
+        }
+        
+        // If no dedicated GPUs, use the best integrated GPU
+        if (integratedGPUs.length > 0) {
+            return integratedGPUs.sort((a, b) => {
+                const tierA = this.getGPUTier(a.model || '');
+                const tierB = this.getGPUTier(b.model || '');
+                return tierB - tierA;
+            })[0];
+        }
+        
+        // Fallback to any valid GPU (should rarely happen)
+        return validGPUs.length > 0 ? validGPUs[0] : null;
+    }
+    
+    /**
+     * Normalize VRAM values (handle different units and wrong totals)
+     */
+    normalizeVRAM(vram) {
+        if (!vram || vram <= 0) return 0;
+        
+        let vramValue = vram;
+        
+        // Handle VRAM in bytes (some systems report this way)  
+        if (vramValue > 100000) {
+            vramValue = Math.round(vramValue / (1024 * 1024)); // Convert bytes to MB
+        }
+        
+        // Now determine if we have MB or GB values
+        if (vramValue >= 1024) {
+            // Values >= 1024 are likely MB, convert to GB
+            vramValue = Math.round(vramValue / 1024);
+        } else if (vramValue >= 512 && vramValue < 1024) {
+            // 512-1023 MB, round to 1GB
+            vramValue = 1;
+        } else if (vramValue > 80) {
+            // Values between 80-511 are likely incorrect MB values, treat as MB
+            vramValue = Math.round(vramValue / 1024) || 1;
+        } else if (vramValue >= 1 && vramValue <= 80) {
+            // Values 1-80 are likely already in GB, keep as is
+            vramValue = vramValue;
+        } else {
+            // Values < 1 round to 0
+            vramValue = 0;
+        }
+        
+        return vramValue;
+    }
+    
+    /**
+     * Get GPU tier score for prioritization
+     */
+    getGPUTier(model) {
+        const modelLower = model.toLowerCase();
+        
+        // NVIDIA RTX series
+        if (modelLower.includes('rtx 50')) return 100;
+        if (modelLower.includes('rtx 4090')) return 95;
+        if (modelLower.includes('rtx 40')) return 90;
+        if (modelLower.includes('rtx 3090')) return 85;
+        if (modelLower.includes('rtx 30')) return 80;
+        if (modelLower.includes('rtx 20')) return 70;
+        if (modelLower.includes('gtx 16')) return 60;
+        if (modelLower.includes('gtx 10')) return 50;
+        
+        // NVIDIA Professional
+        if (modelLower.includes('a100')) return 98;
+        if (modelLower.includes('h100')) return 99;
+        if (modelLower.includes('tesla')) return 75;
+        if (modelLower.includes('quadro')) return 65;
+        
+        // AMD
+        if (modelLower.includes('rx 7900')) return 85;
+        if (modelLower.includes('rx 7800')) return 80;
+        if (modelLower.includes('rx 7700')) return 75;
+        if (modelLower.includes('rx 6900')) return 70;
+        if (modelLower.includes('rx 6800')) return 65;
+        
+        // Intel
+        if (modelLower.includes('arc a7')) return 55;
+        if (modelLower.includes('arc a5')) return 45;
+        
+        // Apple Silicon
+        if (modelLower.includes('apple') || modelLower.includes('m1') || 
+            modelLower.includes('m2') || modelLower.includes('m3') || 
+            modelLower.includes('m4')) return 80;
+        
+        return 10; // Default for unknown
+    }
+    
+    /**
+     * Get vendor priority score
+     */
+    getVendorPriority(vendor) {
+        const vendorLower = vendor.toLowerCase();
+        if (vendorLower.includes('nvidia')) return 3;
+        if (vendorLower.includes('amd') || vendorLower.includes('ati')) return 2;
+        if (vendorLower.includes('intel')) return 1;
+        if (vendorLower.includes('apple')) return 3;
+        return 0;
     }
 
     async runQuickBenchmark() {

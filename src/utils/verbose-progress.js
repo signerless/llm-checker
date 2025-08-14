@@ -57,12 +57,8 @@ class VerboseProgress {
             console.log(`    ${chalk.gray('└─ ' + details)}`);
         }
         
-        // Crear spinner para este paso
-        this.currentSpinner = ora({
-            text: chalk.gray('Processing...'),
-            indent: 4,
-            color: 'cyan'
-        }).start();
+        // Crear spinner para este paso (disabled to fix UI issues)
+        this.currentSpinner = null;
         
         this.stepTimes.push(this.stepStartTime);
         
@@ -74,11 +70,6 @@ class VerboseProgress {
      */
     substep(description, isLast = false) {
         if (!this.enabled) return;
-        
-        // Actualizar el spinner con la descripción
-        if (this.currentSpinner) {
-            this.currentSpinner.text = chalk.gray(description);
-        }
         
         const connector = isLast ? '└─' : '├─';
         const elapsed = this.getStepElapsedTime();
@@ -93,13 +84,8 @@ class VerboseProgress {
     stepComplete(result = null, timing = null) {
         if (!this.enabled) return;
         
-        // Finalizar spinner
-        if (this.currentSpinner) {
-            this.currentSpinner.stopAndPersist({
-                symbol: '',
-                text: chalk.green(`${result || 'Complete'}`)
-            });
-            this.currentSpinner = null;
+        if (result) {
+            console.log(`      ${chalk.green(result)}`);
         }
         
         // Mostrar timing
@@ -115,12 +101,8 @@ class VerboseProgress {
     stepFail(error = null) {
         if (!this.enabled) return;
         
-        if (this.currentSpinner) {
-            this.currentSpinner.stopAndPersist({
-                symbol: '',
-                text: chalk.red(`${error || 'Failed'}`)
-            });
-            this.currentSpinner = null;
+        if (error) {
+            console.log(`      ${chalk.red(error)}`);
         }
         
         return this;

@@ -589,14 +589,14 @@ class OllamaNativeScraper {
                 return this.readDetailedCache();
             }
 
-            console.log('🔍 Scraping ALL Ollama models with detailed information...');
+            console.log('Scraping ALL Ollama models with detailed information...');
             
             // Primero obtenemos la lista básica de modelos
             const response = await this.httpRequest(`${this.baseURL}/library`);
             if (response.statusCode !== 200) throw new Error(`Failed to fetch: ${response.statusCode}`);
             const basicModels = this.parseModelFromHTML(response.data);
             
-            console.log(`📋 Found ${basicModels.length} models. Getting detailed information...`);
+            console.log(`Found ${basicModels.length} models. Getting detailed information...`);
             
             // Ahora obtenemos información detallada de cada modelo
             const detailedModels = await this.getDetailedModelsInfo(basicModels);
