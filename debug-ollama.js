@@ -30,7 +30,8 @@ async function diagnoseOllama() {
             console.log(`   Details: ${testResult.details}`);
             
             console.log('\n🔧 Possible solutions:');
-            console.log('1. Install Ollama: curl -fsSL https://ollama.ai/install.sh | sh');
+            console.log('1. Install Ollama (review official docs and prefer package manager):');
+            console.log('   https://github.com/ollama/ollama#installation');
             console.log('2. Start Ollama: ollama serve');
             console.log('3. Check if running: curl http://localhost:11434/api/version');
         }

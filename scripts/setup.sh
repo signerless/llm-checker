@@ -179,22 +179,27 @@ test_installation() {
 
 # Install Ollama (optional)
 install_ollama() {
-    print_status "Would you like to install Ollama? (y/N)"
+    print_status "Would you like guidance to install Ollama? (y/N)"
     read -r response
 
     if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        print_status "Installing Ollama..."
-
-        if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "darwin"* ]]; then
-            curl -fsSL https://ollama.ai/install.sh | sh
-            print_success "Ollama installed successfully"
-            print_status "You can now use: ollama pull llama3.2:3b"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            print_status "On macOS you can use Homebrew (recommended):"
+            echo "  brew install ollama"
+            print_status "Or download from: https://ollama.com/download/mac"
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            print_status "On Linux, please follow official installation options:"
+            echo "  https://github.com/ollama/ollama/blob/main/docs/linux.md"
+            print_warning "Avoid piping remote scripts directly to shell unless you have reviewed them."
         else
-            print_status "Please visit https://ollama.ai to install Ollama on Windows"
+            print_status "Please visit https://ollama.ai to install Ollama for your platform"
         fi
+        print_status "After installation, start the service if needed and test:"
+        echo "  ollama serve"
+        echo "  ollama run llama2:7b"
     else
-        print_status "Skipping Ollama installation"
-        print_status "You can install it later from: https://ollama.ai"
+        print_status "Skipping Ollama installation guidance"
+        print_status "You can review options later at: https://ollama.ai"
     fi
 }
 

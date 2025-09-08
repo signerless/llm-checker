@@ -1,15 +1,24 @@
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { classifyAllModels } = require('../utils/model-classifier');
 
 class OllamaNativeScraper {
     constructor() {
         this.baseURL = 'https://ollama.com';
         this.registryAPI = 'https://registry.ollama.ai';
-        this.cacheDir = path.join(__dirname, '.cache');
+
+        // New secure cache location (user home)
+        this.cacheDir = path.join(os.homedir(), '.llm-checker', 'cache', 'ollama');
         this.cacheFile = path.join(this.cacheDir, 'ollama-models.json');
         this.detailedCacheFile = path.join(this.cacheDir, 'ollama-detailed-models.json');
+
+        // Legacy cache location (inside repo) for backward compatibility
+        this.legacyCacheDir = path.join(__dirname, '.cache');
+        this.legacyCacheFile = path.join(this.legacyCacheDir, 'ollama-models.json');
+        this.legacyDetailedCacheFile = path.join(this.legacyCacheDir, 'ollama-detailed-models.json');
+
         this.cacheExpiry = 6 * 60 * 60 * 1000; // 6 horas para actualizar más frecuentemente
 
         if (!fs.existsSync(this.cacheDir)) {
@@ -29,17 +38,29 @@ class OllamaNativeScraper {
                     'User-Agent': 'Mozilla/5.0',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
+                    // Do not claim compression we don't handle here
                     'Connection': 'keep-alive',
                     'Upgrade-Insecure-Requests': '1',
                     ...options.headers
-                },
-                ...options
+                }
             };
+
+            const timeoutMs = typeof options.timeout === 'number' ? options.timeout : 15000;
+            const maxBytes = typeof options.maxBytes === 'number' ? options.maxBytes : 5 * 1024 * 1024; // 5MB
 
             const req = https.request(requestOptions, (res) => {
                 let data = '';
-                res.on('data', chunk => { data += chunk; });
+                let received = 0;
+
+                res.on('data', chunk => {
+                    received += chunk.length;
+                    if (received > maxBytes) {
+                        req.destroy(new Error('Response too large'));
+                        return;
+                    }
+                    data += chunk.toString('utf8');
+                });
+
                 res.on('end', () => {
                     if (res.statusCode >= 200 && res.statusCode < 300) {
                         resolve({ statusCode: res.statusCode, data, headers: res.headers });
@@ -47,6 +68,11 @@ class OllamaNativeScraper {
                         reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
                     }
                 });
+            });
+
+            // Socket/request timeout
+            req.setTimeout(timeoutMs, () => {
+                req.destroy(new Error('Request timeout'));
             });
 
             req.on('error', reject);
@@ -142,15 +168,18 @@ class OllamaNativeScraper {
     }
 
     isCacheValid() {
-        if (!fs.existsSync(this.cacheFile)) return false;
-        const stats = fs.statSync(this.cacheFile);
+        const file = fs.existsSync(this.cacheFile) ? this.cacheFile : (fs.existsSync(this.legacyCacheFile) ? this.legacyCacheFile : null);
+        if (!file) return false;
+        const stats = fs.statSync(file);
         const age = Date.now() - stats.mtime.getTime();
         return age < this.cacheExpiry;
     }
 
     readCache() {
         try {
-            const data = fs.readFileSync(this.cacheFile, 'utf8');
+            const file = fs.existsSync(this.cacheFile) ? this.cacheFile : this.legacyCacheFile;
+            if (!file) return null;
+            const data = fs.readFileSync(file, 'utf8');
             return JSON.parse(data);
         } catch {
             return null;
@@ -173,15 +202,18 @@ class OllamaNativeScraper {
     }
 
     isDetailedCacheValid() {
-        if (!fs.existsSync(this.detailedCacheFile)) return false;
-        const stats = fs.statSync(this.detailedCacheFile);
+        const file = fs.existsSync(this.detailedCacheFile) ? this.detailedCacheFile : (fs.existsSync(this.legacyDetailedCacheFile) ? this.legacyDetailedCacheFile : null);
+        if (!file) return false;
+        const stats = fs.statSync(file);
         const age = Date.now() - stats.mtime.getTime();
         return age < this.cacheExpiry;
     }
 
     readDetailedCache() {
         try {
-            const data = fs.readFileSync(this.detailedCacheFile, 'utf8');
+            const file = fs.existsSync(this.detailedCacheFile) ? this.detailedCacheFile : this.legacyDetailedCacheFile;
+            if (!file) return null;
+            const data = fs.readFileSync(file, 'utf8');
             return JSON.parse(data);
         } catch {
             return null;

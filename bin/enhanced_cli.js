@@ -11,9 +11,21 @@ const fs = require('fs');
 const path = require('path');
 
 // Function to search Ollama models by use case
+function getOllamaCacheFile(filename) {
+    try {
+        const homePath = path.join(os.homedir(), '.llm-checker', 'cache', 'ollama', filename);
+        const legacyPath = path.join(__dirname, '../src/ollama/.cache', filename);
+        if (fs.existsSync(homePath)) return homePath;
+        if (fs.existsSync(legacyPath)) return legacyPath;
+        return homePath; // default preferred path
+    } catch {
+        return path.join(__dirname, '../src/ollama/.cache', filename);
+    }
+}
+
 function searchOllamaModelsForUseCase(useCase, hardware) {
     try {
-        const cacheFile = path.join(__dirname, '../src/ollama/.cache/ollama-detailed-models.json');
+        const cacheFile = getOllamaCacheFile('ollama-detailed-models.json');
         if (!fs.existsSync(cacheFile)) return [];
         
         const cacheData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
@@ -209,7 +221,7 @@ function estimateModelSize(model) {
 
 function getRealSizeFromOllamaCache(model) {
     try {
-        const cacheFile = path.join(__dirname, '../src/ollama/.cache/ollama-detailed-models.json');
+        const cacheFile = getOllamaCacheFile('ollama-detailed-models.json');
         if (!fs.existsSync(cacheFile)) return null;
         
         const cacheData = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
@@ -348,11 +360,12 @@ function getOllamaInstallInstructions() {
             name: 'Linux',
             downloadUrl: 'https://ollama.com/download/linux',
             instructions: [
-                '1. Run the installation script:',
-                '   curl -fsSL https://ollama.com/install.sh | sh',
-                '2. Start Ollama service:',
+                '1. Review official installation options:',
+                '   https://github.com/ollama/ollama/blob/main/docs/linux.md',
+                '2. Prefer a package manager (apt/dnf/pacman) when available',
+                '3. Start service after install:',
                 '   sudo systemctl start ollama',
-                '3. Test with: ollama run llama2:7b'
+                '4. Test with: ollama run llama2:7b'
             ],
             alternativeInstall: 'Manual install: https://github.com/ollama/ollama/blob/main/docs/linux.md'
         }

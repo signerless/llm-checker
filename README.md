@@ -207,6 +207,14 @@ Alternative options:
 
 ---
 
+## 🔒 Security & Caching
+
+- Installation guidance: For Ollama on Linux, prefer official package managers or documented methods rather than piping remote scripts into the shell. See the official installation docs: https://github.com/ollama/ollama/blob/main/docs/linux.md
+- Cache location: The Ollama model cache used by LLM Checker is stored at `~/.llm-checker/cache/ollama`.
+- Backward compatibility: Existing cache files in the legacy path (`src/ollama/.cache`) are still read if present, but new cache writes go to the home directory.
+
+---
+
 ## 🚀 **What's New in v2.7.0**
 
 ### 🎯 **Complete Windows High-End GPU Optimization**
