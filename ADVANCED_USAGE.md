@@ -385,4 +385,4 @@ llm-checker check --load-plugins
 
 ---
 
-Made with ❤️  by **signerless** (<agenc.marketplace@proton.me>).
+Made with ❤️ by **Pavelevich**.

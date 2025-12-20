@@ -265,7 +265,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 👨‍💻 **Author**
 
-**signerless** - [GitHub](https://github.com/Pavelevich) | [Email](mailto:agenc.marketplace@proton.me)
+**Pavelevich** - [GitHub](https://github.com/Pavelevich)
 
 ---
 
@@ -276,5 +276,3 @@ If you find LLM Checker useful, please consider:
 - Contributing improvements 🛠️
 - Reporting issues 🐛
 - Sharing with others 📢
-
-**Buy me a coffee:** [github.com/signerless/llm-checker](https://github.com/signerless/llm-checker)

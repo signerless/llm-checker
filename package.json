@@ -61,8 +61,7 @@
     "apple-silicon",
     "memory-optimization"
   ],
-  "author": "signerless",
-  "funding": "https://github.com/signerless/llm-checker",
+  "author": "Pavelevich",
   "license": "MIT",
   "repository": {
     "type": "git",
