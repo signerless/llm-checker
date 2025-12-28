@@ -1,8 +1,17 @@
 const fetch = require('node-fetch');
 
 class OllamaClient {
-    constructor(baseURL = 'http://localhost:11434') {
-        this.baseURL = baseURL;
+    constructor(baseURL = null) {
+        // Support OLLAMA_HOST environment variable (standard Ollama configuration)
+        // Also support OLLAMA_URL for backwards compatibility
+        this.baseURL = baseURL || process.env.OLLAMA_HOST || process.env.OLLAMA_URL || 'http://localhost:11434';
+
+        // Normalize URL: ensure it has protocol and remove trailing slash
+        if (!this.baseURL.startsWith('http://') && !this.baseURL.startsWith('https://')) {
+            this.baseURL = 'http://' + this.baseURL;
+        }
+        this.baseURL = this.baseURL.replace(/\/$/, '');
+
         this.isAvailable = null;
         this.lastCheck = 0;
         this.cacheTimeout = 30000;
@@ -36,13 +45,27 @@ class OllamaClient {
             this.lastCheck = Date.now();
             return this.isAvailable;
         } catch (error) {
+            let errorMessage;
+            let hint = '';
+
+            if (error.message.includes('ECONNREFUSED')) {
+                errorMessage = `Ollama not running at ${this.baseURL}`;
+                hint = 'Make sure Ollama is running. Try: ollama serve';
+            } else if (error.message.includes('timeout') || error.name === 'AbortError') {
+                errorMessage = `Ollama connection timeout at ${this.baseURL}`;
+                hint = 'The server is not responding. Check if Ollama is running and accessible.';
+            } else if (error.message.includes('ENOTFOUND')) {
+                errorMessage = `Cannot resolve host: ${this.baseURL}`;
+                hint = 'Check your OLLAMA_HOST environment variable or network configuration.';
+            } else {
+                errorMessage = error.message;
+            }
+
             this.isAvailable = {
                 available: false,
-                error: error.message.includes('ECONNREFUSED') ?
-                    'Ollama not running (connection refused)' :
-                    error.message.includes('timeout') ?
-                    'Ollama connection timeout' :
-                    error.message
+                error: errorMessage,
+                hint: hint,
+                attemptedURL: this.baseURL
             };
             this.lastCheck = Date.now();
             return this.isAvailable;

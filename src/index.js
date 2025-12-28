@@ -318,7 +318,7 @@ class LLMChecker {
         }
 
         // Step 5: Filter Models (skip step if no filtering needed)
-        if (options.filter || !options.includeCloud) {
+        if (options.filter || !options.includeCloud || options.maxSize || options.minSize) {
             if (this.progress) {
                 this.progress.step('Model Filtering', 'Applying user-specified filters...');
             }
@@ -337,7 +337,31 @@ class LLMChecker {
                     this.progress.substep('Cloud models excluded', true);
                 }
             }
-            
+
+            // Apply size filters (maxSize and minSize in billions of parameters)
+            if (options.maxSize || options.minSize) {
+                models = models.filter(model => {
+                    // Extract size in B from model.size (e.g., "7B", "13B", "70B")
+                    const sizeMatch = (model.size || '').match(/(\d+\.?\d*)/);
+                    if (!sizeMatch) return true; // Keep models without size info
+                    const modelSizeB = parseFloat(sizeMatch[1]);
+
+                    if (options.maxSize && modelSizeB > options.maxSize) {
+                        return false;
+                    }
+                    if (options.minSize && modelSizeB < options.minSize) {
+                        return false;
+                    }
+                    return true;
+                });
+                if (this.progress) {
+                    const sizeInfo = [];
+                    if (options.minSize) sizeInfo.push(`min: ${options.minSize}B`);
+                    if (options.maxSize) sizeInfo.push(`max: ${options.maxSize}B`);
+                    this.progress.substep(`Size filter: ${sizeInfo.join(', ')}`, true);
+                }
+            }
+
             if (this.progress) {
                 this.progress.stepComplete(`${models.length}/${originalCount} models selected`);
             }

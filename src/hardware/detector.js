@@ -164,13 +164,31 @@ class HardwareDetector {
             }
         }
 
+        // Calculate total VRAM from all dedicated GPUs (for multi-GPU setups)
+        let totalDedicatedVRAM = 0;
+        let gpuCount = 0;
+
+        dedicatedGPUs.forEach(gpu => {
+            const gpuVram = this.normalizeVRAM(gpu.vram || 0) || this.estimateVRAMFromModel(gpu.model);
+            if (gpuVram > 0) {
+                totalDedicatedVRAM += gpuVram;
+                gpuCount++;
+            }
+        });
+
+        // If we have multiple dedicated GPUs, use the combined VRAM
+        const effectiveVRAM = gpuCount > 1 ? totalDedicatedVRAM : vram;
+
         return {
             model: enhancedModel,
             vendor: primaryGPU.vendor || 'Unknown',
-            vram: vram,
+            vram: effectiveVRAM,
+            vramPerGPU: vram, // VRAM of primary GPU for reference
             vramDynamic: primaryGPU.vramDynamic || false,
             dedicated: !this.isIntegratedGPU(enhancedModel),
             driverVersion: primaryGPU.driverVersion || 'Unknown',
+            gpuCount: gpuCount > 0 ? gpuCount : (dedicatedGPUs.length > 0 ? dedicatedGPUs.length : 1),
+            isMultiGPU: gpuCount > 1,
             all: controllers.map(gpu => ({
                 model: gpu.model,
                 vram: this.normalizeVRAM(gpu.vram || 0),

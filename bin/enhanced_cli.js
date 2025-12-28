@@ -1688,21 +1688,40 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
             }
             
             // Check if it's already installed by comparing with Ollama integration
+            let isInstalled = false;
             try {
-                const isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
+                isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
                 if (isInstalled) {
                     console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
                 } else if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
-                    console.log(`Status: ${chalk.gray('Available via Ollama')}`);
+                    console.log(`Status: ${chalk.gray('Available for installation')}`);
                 } else {
                     console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
                 }
             } catch (installCheckError) {
                 // If checking installation status fails, show based on Ollama availability
                 if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
-                    console.log(`Status: ${chalk.gray('Available via Ollama')}`);
+                    console.log(`Status: ${chalk.gray('Available for installation')}`);
                 } else {
                     console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+                }
+            }
+
+            // Show pull/run command directly in each model block (Issue #3)
+            const ollamaCommand = getOllamaInstallCommand(model);
+            if (ollamaCommand) {
+                const modelName = extractModelName(ollamaCommand);
+                if (isInstalled) {
+                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama run ${modelName}`)}`);
+                } else {
+                    console.log(`\nCommand: ${chalk.cyan.bold(ollamaCommand)}`);
+                }
+            } else if (model.ollamaTag || model.ollamaId) {
+                const tag = model.ollamaTag || model.ollamaId;
+                if (isInstalled) {
+                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama run ${tag}`)}`);
+                } else {
+                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama pull ${tag}`)}`);
                 }
             }
         }
@@ -1895,6 +1914,8 @@ program
     .option('-f, --filter <type>', 'Filter by model type')
     .option('-u, --use-case <case>', 'Specify use case', 'general')
     .option('-l, --limit <number>', 'Number of compatible models to show (default: 1)', '1')
+    .option('--max-size <size>', 'Maximum model size to consider (e.g., "30B" or "30GB")')
+    .option('--min-size <size>', 'Minimum model size to consider (e.g., "7B" or "7GB")')
     .option('--include-cloud', 'Include cloud models in analysis')
     .option('--ollama-only', 'Only show models available in Ollama')
     .option('--performance-test', 'Run performance benchmarks')
@@ -1930,12 +1951,30 @@ program
             
             const normalizedUseCase = normalizeUseCase(options.useCase);
             
+            // Parse size filters
+            const parseSizeFilter = (sizeStr) => {
+                if (!sizeStr) return null;
+                const match = sizeStr.toUpperCase().match(/^(\d+\.?\d*)\s*(B|GB)?$/);
+                if (match) {
+                    const num = parseFloat(match[1]);
+                    const unit = match[2] || 'B';
+                    // Return size in billions of parameters (B)
+                    return unit === 'GB' ? num / 0.5 : num; // Approximate: 0.5GB per 1B params (Q4)
+                }
+                return null;
+            };
+
+            const maxSize = parseSizeFilter(options.maxSize);
+            const minSize = parseSizeFilter(options.minSize);
+
             const analysis = await checker.analyze({
                 filter: options.filter,
                 useCase: normalizedUseCase,
                 includeCloud: options.includeCloud,
                 performanceTest: options.performanceTest,
-                limit: parseInt(options.limit) || 10
+                limit: parseInt(options.limit) || 10,
+                maxSize: maxSize,
+                minSize: minSize
             });
 
             if (!verboseEnabled) {
@@ -1974,6 +2013,13 @@ program
                 spinner.fail(`Ollama not available`);
                 console.log('\nTo install Ollama:');
                 console.log('Visit: https://ollama.ai');
+                if (analysis.ollamaInfo.hint) {
+                    console.log(chalk.yellow('Hint: ' + analysis.ollamaInfo.hint));
+                }
+                if (analysis.ollamaInfo.attemptedURL) {
+                    console.log(chalk.gray('Attempted URL: ' + analysis.ollamaInfo.attemptedURL));
+                    console.log(chalk.gray('Set OLLAMA_HOST environment variable to use a different URL'));
+                }
                 return;
             }
 
@@ -1986,6 +2032,179 @@ program
         } catch (error) {
             spinner.fail('Error with Ollama integration');
             console.error(chalk.red('Error:'), error.message);
+        }
+    });
+
+// New command: installed - Show ranking of installed Ollama models
+program
+    .command('installed')
+    .description('Show ranking of installed Ollama models by compatibility and use-case')
+    .option('--sort <by>', 'Sort by: score, size, name (default: score)', 'score')
+    .option('--json', 'Output in JSON format')
+    .action(async (options) => {
+        const spinner = ora('Analyzing installed models...').start();
+
+        try {
+            const checker = new LLMChecker({ verbose: false });
+            const OllamaClient = require('../src/ollama/client');
+            const ollamaClient = new OllamaClient();
+
+            // Check Ollama availability
+            const availability = await ollamaClient.checkOllamaAvailability();
+            if (!availability.available) {
+                spinner.fail('Ollama not available');
+                console.log(chalk.red('\n' + availability.error));
+                if (availability.hint) {
+                    console.log(chalk.yellow('Hint: ' + availability.hint));
+                }
+                return;
+            }
+
+            // Get installed models
+            const installedModels = await ollamaClient.getLocalModels();
+            if (!installedModels || installedModels.length === 0) {
+                spinner.fail('No models installed');
+                console.log(chalk.yellow('\nNo Ollama models found. Install one with:'));
+                console.log(chalk.cyan('  ollama pull llama3.2:3b'));
+                return;
+            }
+
+            // Get hardware info for scoring
+            const hardware = await checker.getSystemInfo();
+            const analysis = await checker.analyze({ limit: 100 });
+
+            spinner.succeed(`Found ${installedModels.length} installed models`);
+
+            // Score and categorize each installed model
+            const scoredModels = installedModels.map(model => {
+                // Find matching model in analysis
+                const matchingModel = [...(analysis.compatible || []), ...(analysis.marginal || [])].find(m =>
+                    m.name && model.name && (
+                        m.name.toLowerCase().includes(model.family) ||
+                        model.name.toLowerCase().includes(m.name.toLowerCase().split(' ')[0])
+                    )
+                );
+
+                // Determine use-case from model name
+                const nameLower = model.name.toLowerCase();
+                let useCase = 'general';
+                if (nameLower.includes('code') || nameLower.includes('coder') || nameLower.includes('deepseek-coder')) {
+                    useCase = 'coding';
+                } else if (nameLower.includes('embed') || nameLower.includes('nomic') || nameLower.includes('bge')) {
+                    useCase = 'embeddings';
+                } else if (nameLower.includes('llava') || nameLower.includes('vision') || nameLower.includes('bakllava')) {
+                    useCase = 'multimodal';
+                } else if (nameLower.includes('r1') || nameLower.includes('qwq') || nameLower.includes('reasoning')) {
+                    useCase = 'reasoning';
+                } else if (nameLower.includes('wizard') || nameLower.includes('creative')) {
+                    useCase = 'creative';
+                } else if (nameLower.includes('chat') || nameLower.includes('instruct')) {
+                    useCase = 'chat';
+                }
+
+                // Calculate compatibility score
+                const fileSizeGB = model.fileSizeGB || 0;
+                const availableRAM = hardware.memory.total * 0.8;
+                let score = 50;
+
+                // RAM fit score
+                if (fileSizeGB <= availableRAM * 0.3) score += 30;
+                else if (fileSizeGB <= availableRAM * 0.5) score += 20;
+                else if (fileSizeGB <= availableRAM * 0.7) score += 10;
+                else score -= 10;
+
+                // Size efficiency for hardware tier
+                const sizeMatch = (model.size || '').match(/(\d+)/);
+                const paramSize = sizeMatch ? parseInt(sizeMatch[1]) : 7;
+                if (hardware.memory.total >= 32 && paramSize >= 13) score += 10;
+                else if (hardware.memory.total >= 16 && paramSize >= 7) score += 10;
+                else if (hardware.memory.total >= 8 && paramSize <= 7) score += 10;
+
+                // Use matched model score if available
+                if (matchingModel && matchingModel.score) {
+                    score = Math.round((score + matchingModel.score) / 2);
+                }
+
+                return {
+                    name: model.name,
+                    displayName: model.displayName,
+                    size: model.size,
+                    fileSizeGB: model.fileSizeGB,
+                    quantization: model.quantization,
+                    useCase: useCase,
+                    score: Math.min(100, Math.max(0, score)),
+                    command: `ollama run ${model.name}`
+                };
+            });
+
+            // Sort models
+            scoredModels.sort((a, b) => {
+                switch (options.sort) {
+                    case 'size':
+                        return b.fileSizeGB - a.fileSizeGB;
+                    case 'name':
+                        return a.name.localeCompare(b.name);
+                    case 'score':
+                    default:
+                        return b.score - a.score;
+                }
+            });
+
+            // Output
+            if (options.json) {
+                console.log(JSON.stringify(scoredModels, null, 2));
+                return;
+            }
+
+            console.log('\n' + chalk.bgGreen.white.bold(' INSTALLED MODELS RANKING '));
+            console.log(chalk.green('╭' + '─'.repeat(75)));
+            console.log(chalk.green('│') + ` Sorted by: ${chalk.cyan(options.sort)} | Hardware: ${chalk.yellow(hardware.memory.total + 'GB RAM')}`);
+            console.log(chalk.green('├' + '─'.repeat(75)));
+
+            const headers = [
+                chalk.bold(' # '),
+                chalk.bold(' Model '),
+                chalk.bold(' Size '),
+                chalk.bold(' Score '),
+                chalk.bold(' Use Case '),
+                chalk.bold(' Command ')
+            ];
+            const data = [headers];
+
+            scoredModels.forEach((model, index) => {
+                const rank = index + 1;
+                const rankIcon = rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : `${rank}.`;
+                const scoreColor = model.score >= 75 ? chalk.green : model.score >= 50 ? chalk.yellow : chalk.red;
+
+                data.push([
+                    rankIcon,
+                    model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name,
+                    `${model.fileSizeGB}GB`,
+                    scoreColor(`${model.score}/100`),
+                    model.useCase,
+                    chalk.cyan(`ollama run ${model.name.split(':')[0]}`)
+                ]);
+            });
+
+            console.log(table(data));
+
+            // Show suggestions for low-ranking models
+            const lowRankingModels = scoredModels.filter(m => m.score < 50);
+            if (lowRankingModels.length > 0) {
+                console.log(chalk.yellow('\nConsider removing these low-ranking models to free up space:'));
+                lowRankingModels.forEach(m => {
+                    console.log(chalk.gray(`  ollama rm ${m.name}  # Score: ${m.score}/100, Size: ${m.fileSizeGB}GB`));
+                });
+            }
+
+            console.log(chalk.green('╰' + '─'.repeat(75)));
+
+        } catch (error) {
+            spinner.fail('Error analyzing installed models');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
         }
     });
 
