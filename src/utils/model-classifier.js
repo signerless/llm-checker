@@ -141,9 +141,18 @@ function classifyAllModels(inputData) {
 }
 
 function run(path) {
-  const input = JSON.parse(fs.readFileSync(path, 'utf8'));
-  const output = classifyAllModels(input);
-  console.log(JSON.stringify(output, null, 2));
+  try {
+    const input = JSON.parse(fs.readFileSync(path, 'utf8'));
+    const output = classifyAllModels(input);
+    console.log(JSON.stringify(output, null, 2));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error(`Invalid JSON in file: ${path}`, error.message);
+    } else {
+      console.error(`Error reading file: ${path}`, error.message);
+    }
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {

@@ -244,9 +244,11 @@ class HardwareDetector {
     isIntegratedGPU(model) {
         if (!model) return false;
         const modelLower = model.toLowerCase();
-        return modelLower.includes('intel') && !modelLower.includes('arc') ||
-            modelLower.includes('amd') && modelLower.includes('graphics') && !modelLower.includes(' rx ') ||
-            modelLower.includes('radeon') && modelLower.includes('graphics') ||
+        // Check if GPU is integrated (on-chip or shared memory, not discrete)
+        // Note: && has higher precedence than ||, each line is grouped with ()
+        return (modelLower.includes('intel') && !modelLower.includes('arc')) ||
+            (modelLower.includes('amd') && modelLower.includes('graphics') && !modelLower.includes(' rx ')) ||
+            (modelLower.includes('radeon') && modelLower.includes('graphics')) ||
             modelLower.includes('iris') ||
             modelLower.includes('uhd') ||
             modelLower.includes('hd graphics') ||

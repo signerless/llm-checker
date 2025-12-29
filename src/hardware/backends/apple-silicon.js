@@ -70,7 +70,7 @@ class AppleSiliconDetector {
 
         // Get chip brand
         try {
-            const brand = execSync('sysctl -n machdep.cpu.brand_string', { encoding: 'utf8' }).trim();
+            const brand = execSync('sysctl -n machdep.cpu.brand_string', { encoding: 'utf8', timeout: 5000 }).trim();
             result.chip = brand;
 
             // Parse chip variant and generation
@@ -83,16 +83,16 @@ class AppleSiliconDetector {
 
         // Get CPU cores
         try {
-            result.cores.total = parseInt(execSync('sysctl -n hw.ncpu', { encoding: 'utf8' }).trim());
-            result.cores.performance = parseInt(execSync('sysctl -n hw.perflevel0.logicalcpu', { encoding: 'utf8' }).trim()) || Math.ceil(result.cores.total / 2);
-            result.cores.efficiency = parseInt(execSync('sysctl -n hw.perflevel1.logicalcpu', { encoding: 'utf8' }).trim()) || Math.floor(result.cores.total / 2);
+            result.cores.total = parseInt(execSync('sysctl -n hw.ncpu', { encoding: 'utf8', timeout: 5000 }).trim());
+            result.cores.performance = parseInt(execSync('sysctl -n hw.perflevel0.logicalcpu', { encoding: 'utf8', timeout: 5000 }).trim()) || Math.ceil(result.cores.total / 2);
+            result.cores.efficiency = parseInt(execSync('sysctl -n hw.perflevel1.logicalcpu', { encoding: 'utf8', timeout: 5000 }).trim()) || Math.floor(result.cores.total / 2);
         } catch (e) {
             result.cores.total = require('os').cpus().length;
         }
 
         // Get memory (unified memory on Apple Silicon)
         try {
-            const memBytes = parseInt(execSync('sysctl -n hw.memsize', { encoding: 'utf8' }).trim());
+            const memBytes = parseInt(execSync('sysctl -n hw.memsize', { encoding: 'utf8', timeout: 5000 }).trim());
             result.memory.unified = Math.round(memBytes / (1024 ** 3));
         } catch (e) {
             result.memory.unified = Math.round(require('os').totalmem() / (1024 ** 3));

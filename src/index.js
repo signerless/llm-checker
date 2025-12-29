@@ -41,13 +41,24 @@ class LLMChecker {
             
             const hardware = await this.hardwareDetector.getSystemInfo();
             this.logger.info('Hardware detected', { hardware });
-            
+
             // Detect platform and route to appropriate logic (use hardware OS for simulation support)
             const detectedPlatform = hardware.os?.platform || process.platform;
+
+            // Report hardware detection progress before platform-specific analysis
+            if (this.progress) {
+                this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
+                await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for demo
+                const isApple = detectedPlatform === 'darwin';
+                const memLabel = isApple ? 'unified memory' : 'RAM';
+                this.progress.substep(`Memory detected: ${hardware.memory.total}GB ${memLabel}`, true);
+                const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
+                this.progress.stepComplete(summary);
+            }
             const isAppleSilicon = detectedPlatform === 'darwin';
             const isWindows = detectedPlatform === 'win32';
             const isLinux = detectedPlatform === 'linux';
-            
+
             if (isAppleSilicon) {
                 return await this.analyzeForAppleSilicon(hardware, options);
             } else if (isWindows) {
@@ -58,39 +69,22 @@ class LLMChecker {
                 // Fallback to Windows logic for unknown platforms
                 return await this.analyzeForWindows(hardware, options);
             }
-            
-            if (this.progress) {
-                this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
-                await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for demo
-                const isApple = detectedPlatform === 'darwin';
-                const memLabel = isApple ? 'unified memory' : 'RAM';
-                this.progress.substep(`Memory detected: ${hardware.memory.total}GB ${memLabel}`, true);
-                const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
-                this.progress.stepComplete(summary);
-            }
 
-            // Step 2: Database Sync (using static database)
+            // Step 2: Load Base Models (dynamic count from database)
             if (this.progress) {
                 this.progress.step('Database Sync', 'Loading model database...');
             }
-            
-            // Using static pre-loaded model database with classifications
-            const modelCount = 177; // Static count from pre-loaded database
-            
+
+            let models = this.expandedModelsDatabase.getAllModels();
+            const modelCount = models.length; // Dynamic count from actual database
+
             if (this.progress) {
                 this.progress.found(`${modelCount} models in database`);
                 this.progress.stepComplete('Database synchronized');
             }
 
-            // Step 3: Load Base Models
+            // Step 3: Model Analysis (use count from already loaded models)
             if (this.progress) {
-                this.progress.step('Model Analysis', 'Loading base model definitions...');
-            }
-            
-            let models = this.expandedModelsDatabase.getAllModels();
-            
-            if (this.progress) {
-                this.progress.found(`Loaded ${models.length} base models`);
                 this.progress.stepComplete('Base models loaded');
             }
 
@@ -537,8 +531,14 @@ class LLMChecker {
             }
 
             const [localModels, runningModels] = await Promise.all([
-                this.ollamaClient.getLocalModels().catch(() => []),
-                this.ollamaClient.getRunningModels().catch(() => [])
+                this.ollamaClient.getLocalModels().catch(error => {
+                    this.logger.warn('Failed to get local Ollama models', { error: error.message });
+                    return [];
+                }),
+                this.ollamaClient.getRunningModels().catch(error => {
+                    this.logger.warn('Failed to get running Ollama models', { error: error.message });
+                    return [];
+                })
             ]);
 
             integration.currentlyRunning = runningModels;
@@ -719,11 +719,14 @@ class LLMChecker {
             };
             
             // Agregar modelos sin puntuación alta a incompatibles
+            // Build a set of already included model names for O(1) lookup (instead of O(n) .some())
+            const includedModelNames = new Set();
+            compatibility.compatible.forEach(m => includedModelNames.add(m.name));
+            compatibility.marginal.forEach(m => includedModelNames.add(m.name));
+            compatibility.incompatible.forEach(m => includedModelNames.add(m.name));
+
             allUniqueModels.forEach(model => {
-                const alreadyIncluded = [...compatibility.compatible, ...compatibility.marginal, ...compatibility.incompatible]
-                    .some(m => m.name === model.name);
-                    
-                if (!alreadyIncluded) {
+                if (!includedModelNames.has(model.name)) {
                     compatibility.incompatible.push({
                         ...model,
                         score: 0,
@@ -2245,8 +2248,14 @@ class LLMChecker {
             }
 
             const [localModels, runningModels] = await Promise.all([
-                this.ollamaClient.getLocalModels().catch(() => []),
-                this.ollamaClient.getRunningModels().catch(() => [])
+                this.ollamaClient.getLocalModels().catch(error => {
+                    this.logger.warn('Failed to get local Ollama models for analysis', { error: error.message });
+                    return [];
+                }),
+                this.ollamaClient.getRunningModels().catch(error => {
+                    this.logger.warn('Failed to get running Ollama models for analysis', { error: error.message });
+                    return [];
+                })
             ]);
 
             const isInstalled = localModels.some(m => m.name.toLowerCase().includes(modelName.toLowerCase()));

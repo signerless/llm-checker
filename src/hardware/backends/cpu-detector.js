@@ -89,7 +89,7 @@ class CPUDetector {
     getPhysicalCores() {
         try {
             if (process.platform === 'darwin') {
-                return parseInt(execSync('sysctl -n hw.physicalcpu', { encoding: 'utf8' }).trim());
+                return parseInt(execSync('sysctl -n hw.physicalcpu', { encoding: 'utf8', timeout: 5000 }).trim());
             } else if (process.platform === 'linux') {
                 const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
                 const coreIds = new Set();
@@ -99,7 +99,7 @@ class CPUDetector {
                 }
                 return coreIds.size || os.cpus().length;
             } else if (process.platform === 'win32') {
-                const wmic = execSync('wmic cpu get NumberOfCores', { encoding: 'utf8' });
+                const wmic = execSync('wmic cpu get NumberOfCores', { encoding: 'utf8', timeout: 5000 });
                 const match = wmic.match(/\d+/);
                 return match ? parseInt(match[0]) : os.cpus().length;
             }
@@ -125,7 +125,7 @@ class CPUDetector {
                 );
                 return Math.round(parseInt(maxFreq) / 1000);  // kHz to MHz
             } else if (process.platform === 'win32') {
-                const wmic = execSync('wmic cpu get MaxClockSpeed', { encoding: 'utf8' });
+                const wmic = execSync('wmic cpu get MaxClockSpeed', { encoding: 'utf8', timeout: 5000 });
                 const match = wmic.match(/\d+/);
                 return match ? parseInt(match[0]) : 0;
             }
@@ -148,10 +148,10 @@ class CPUDetector {
 
         try {
             if (process.platform === 'darwin') {
-                cache.l1d = parseInt(execSync('sysctl -n hw.l1dcachesize', { encoding: 'utf8' })) / 1024 || 0;
-                cache.l1i = parseInt(execSync('sysctl -n hw.l1icachesize', { encoding: 'utf8' })) / 1024 || 0;
-                cache.l2 = parseInt(execSync('sysctl -n hw.l2cachesize', { encoding: 'utf8' })) / 1024 / 1024 || 0;
-                cache.l3 = parseInt(execSync('sysctl -n hw.l3cachesize', { encoding: 'utf8' })) / 1024 / 1024 || 0;
+                cache.l1d = parseInt(execSync('sysctl -n hw.l1dcachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
+                cache.l1i = parseInt(execSync('sysctl -n hw.l1icachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
+                cache.l2 = parseInt(execSync('sysctl -n hw.l2cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
+                cache.l3 = parseInt(execSync('sysctl -n hw.l3cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
             } else if (process.platform === 'linux') {
                 // Parse from /sys/devices/system/cpu/cpu0/cache/
                 const cachePath = '/sys/devices/system/cpu/cpu0/cache';

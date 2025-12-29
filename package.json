@@ -1,6 +1,6 @@
 {
   "name": "ollama-checker",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
     "ollama-checker": "bin/enhanced_cli.js"
