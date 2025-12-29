@@ -17,6 +17,154 @@ const { getLogger } = require('../src/utils/logger');
 const fs = require('fs');
 const path = require('path');
 
+// ASCII Art for each command
+const ASCII_ART = {
+    'hw-detect': `
+   ╔═══════════════════════════════════════╗
+   ║   ⚙️  HARDWARE DETECTION              ║
+   ╠═══════════════════════════════════════╣
+   ║     ┌─────────┐                       ║
+   ║     │ ░░░░░░░ │  ◄── CPU/GPU         ║
+   ║     │ ░░░░░░░ │      Analysis         ║
+   ║     └────┬────┘                       ║
+   ║          │                            ║
+   ║     ═════╧═════                       ║
+   ╚═══════════════════════════════════════╝`,
+
+    'smart-recommend': `
+   ╔═══════════════════════════════════════╗
+   ║   🧠 SMART RECOMMENDATIONS            ║
+   ╠═══════════════════════════════════════╣
+   ║         .-"""-.                       ║
+   ║        /        \\    AI-Powered      ║
+   ║       |  O    O  |   Model Selection  ║
+   ║       |    __    |                    ║
+   ║        \\  \\__/  /                    ║
+   ║         '------'                      ║
+   ╚═══════════════════════════════════════╝`,
+
+    'search': `
+   ╔═══════════════════════════════════════╗
+   ║   🔍 MODEL SEARCH                     ║
+   ╠═══════════════════════════════════════╣
+   ║       .-""""""-.                      ║
+   ║      /  ______  \\                    ║
+   ║     |  /      \\  |   6900+ Models    ║
+   ║     | |        | |   Available        ║
+   ║      \\ \\______/ /                    ║
+   ║       '-.____..-'\\                   ║
+   ║                   \\                  ║
+   ╚═══════════════════════════════════════╝`,
+
+    'sync': `
+   ╔═══════════════════════════════════════╗
+   ║   🔄 DATABASE SYNC                    ║
+   ╠═══════════════════════════════════════╣
+   ║           ↓↓↓↓↓                       ║
+   ║        ┌───────┐                      ║
+   ║        │ ▓▓▓▓▓ │  Downloading        ║
+   ║        │ ▓▓▓░░ │  Latest Models      ║
+   ║        │ ▓░░░░ │                      ║
+   ║        └───────┘                      ║
+   ║           ↑↑↑↑↑                       ║
+   ╚═══════════════════════════════════════╝`,
+
+    'check': `
+   ╔═══════════════════════════════════════╗
+   ║   ✅ COMPATIBILITY CHECK              ║
+   ╠═══════════════════════════════════════╣
+   ║                                       ║
+   ║         ╔═══╗                         ║
+   ║         ║ ✓ ║  Analyzing Your        ║
+   ║         ╚═══╝  System...              ║
+   ║                                       ║
+   ╚═══════════════════════════════════════╝`,
+
+    'installed': `
+   ╔═══════════════════════════════════════╗
+   ║   📦 INSTALLED MODELS                 ║
+   ╠═══════════════════════════════════════╣
+   ║      ┌─────────────┐                  ║
+   ║      │ ▣ model-1   │                  ║
+   ║      │ ▣ model-2   │  Local Models   ║
+   ║      │ ▣ model-3   │                  ║
+   ║      └─────────────┘                  ║
+   ╚═══════════════════════════════════════╝`,
+
+    'ai-check': `
+   ╔═══════════════════════════════════════╗
+   ║   🤖 AI-POWERED CHECK                 ║
+   ╠═══════════════════════════════════════╣
+   ║        ┌─────────┐                    ║
+   ║        │  ◠  ◠  │                    ║
+   ║        │    ▽    │   AI Analysis     ║
+   ║        │  ╰───╯  │   In Progress     ║
+   ║        └─────────┘                    ║
+   ╚═══════════════════════════════════════╝`,
+
+    'ai-run': `
+   ╔═══════════════════════════════════════╗
+   ║   🚀 AI MODEL RUNNER                  ║
+   ╠═══════════════════════════════════════╣
+   ║            /\\                         ║
+   ║           /  \\                        ║
+   ║          / 🔥 \\   Launching Model    ║
+   ║         /______\\                      ║
+   ║           ║║║║                        ║
+   ║           ╚╩╩╝                        ║
+   ╚═══════════════════════════════════════╝`,
+
+    'demo': `
+   ╔═══════════════════════════════════════╗
+   ║   🎬 DEMO MODE                        ║
+   ╠═══════════════════════════════════════╣
+   ║        ╔═══════════╗                  ║
+   ║        ║  ► PLAY   ║                  ║
+   ║        ╚═══════════╝                  ║
+   ║     Interactive Demo                  ║
+   ╚═══════════════════════════════════════╝`,
+
+    'ollama': `
+   ╔═══════════════════════════════════════╗
+   ║   🦙 OLLAMA STATUS                    ║
+   ╠═══════════════════════════════════════╣
+   ║                                       ║
+   ║       (\\/)                            ║
+   ║       (oo)   Checking Ollama...      ║
+   ║      _\\()/                           ║
+   ║                                       ║
+   ╚═══════════════════════════════════════╝`,
+
+    'recommend': `
+   ╔═══════════════════════════════════════╗
+   ║   ⭐ RECOMMENDATIONS                  ║
+   ╠═══════════════════════════════════════╣
+   ║         ★ ★ ★                        ║
+   ║        ★     ★                       ║
+   ║         ★ ★ ★   Top Picks for You   ║
+   ║        ★     ★                       ║
+   ║         ★ ★ ★                        ║
+   ╚═══════════════════════════════════════╝`,
+
+    'list-models': `
+   ╔═══════════════════════════════════════╗
+   ║   📋 MODEL LIST                       ║
+   ╠═══════════════════════════════════════╣
+   ║     1. ████████████  llama           ║
+   ║     2. ██████████    qwen            ║
+   ║     3. ████████      mistral         ║
+   ║     4. ██████        gemma           ║
+   ╚═══════════════════════════════════════╝`
+};
+
+// Function to display ASCII art for a command
+function showAsciiArt(command) {
+    if (ASCII_ART[command]) {
+        console.log(chalk.cyan(ASCII_ART[command]));
+        console.log('');
+    }
+}
+
 // Function to search Ollama models by use case
 function getOllamaCacheFile(filename) {
     try {
@@ -1929,6 +2077,7 @@ program
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .action(async (options) => {
+        showAsciiArt('check');
         try {
             // Use verbose progress unless explicitly disabled
             const verboseEnabled = options.verbose !== false;
@@ -2010,6 +2159,7 @@ program
     .option('-c, --compatible', 'Show only hardware-compatible installed models')
     .option('--recommendations', 'Show installation recommendations')
     .action(async (options) => {
+        showAsciiArt('ollama');
         const spinner = ora('Checking Ollama integration...').start();
 
         try {
@@ -2049,6 +2199,7 @@ program
     .option('--sort <by>', 'Sort by: score, size, name (default: score)', 'score')
     .option('--json', 'Output in JSON format')
     .action(async (options) => {
+        if (!options.json) showAsciiArt('installed');
         const spinner = ora('Analyzing installed models...').start();
 
         try {
@@ -2221,6 +2372,7 @@ program
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .action(async (options) => {
+        showAsciiArt('recommend');
         try {
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
@@ -2267,6 +2419,7 @@ program
     .option('--full', 'Show full details including variants and tags')
     .option('--json', 'Output in JSON format')
     .action(async (options) => {
+        if (!options.json) showAsciiArt('list-models');
         const spinner = ora('📋 Loading models database...').start();
 
         try {
@@ -2458,6 +2611,7 @@ program
     .option('-e, --evaluator <model>', 'Evaluator model (auto for best available)', 'auto')
     .option('-w, --weight <number>', 'AI weight (0.0-1.0, default 0.3)', '0.3')
     .action(async (options) => {
+        showAsciiArt('ai-check');
         // Check if Ollama is installed first
         await checkOllamaAndExit();
         
@@ -2498,6 +2652,7 @@ program
     .option('-m, --models <models...>', 'Specific models to choose from')
     .option('--prompt <prompt>', 'Prompt to run with selected model')
     .action(async (options) => {
+        showAsciiArt('ai-run');
         // Check if Ollama is installed first
         await checkOllamaAndExit();
         
@@ -2579,6 +2734,7 @@ program
     .command('demo')
     .description('Demo of the enhanced verbose progress with progress bars')
     .action(async () => {
+        showAsciiArt('demo');
         console.log(chalk.cyan.bold('\nLLM Checker - Enhanced Progress Demo'));
         console.log(chalk.gray('This demonstrates the new step-by-step progress display with visual indicators'));
         console.log(chalk.gray('─'.repeat(60)));
@@ -2646,6 +2802,7 @@ program
     .option('--incremental', 'Only sync new and updated models')
     .option('-q, --quiet', 'Suppress progress output')
     .action(async (options) => {
+        if (!options.quiet) showAsciiArt('sync');
         const SyncManager = require('../src/data/sync-manager');
 
         const spinner = options.quiet ? null : ora('Initializing sync...').start();
@@ -2700,6 +2857,7 @@ program
     .option('--family <name>', 'Filter by model family (llama, qwen, mistral, etc.)')
     .option('-j, --json', 'Output as JSON')
     .action(async (query, options) => {
+        if (!options.json) showAsciiArt('search');
         const SyncManager = require('../src/data/sync-manager');
         const IntelligentSelector = require('../src/models/intelligent-selector');
         const UnifiedDetector = require('../src/hardware/unified-detector');
@@ -2820,6 +2978,7 @@ program
     .option('--include-embeddings', 'Include embedding models')
     .option('-j, --json', 'Output as JSON')
     .action(async (options) => {
+        if (!options.json) showAsciiArt('smart-recommend');
         const SyncManager = require('../src/data/sync-manager');
         const IntelligentSelector = require('../src/models/intelligent-selector');
         const UnifiedDetector = require('../src/hardware/unified-detector');
@@ -2959,6 +3118,7 @@ program
     .description('Detect and display detailed hardware capabilities')
     .option('-j, --json', 'Output as JSON')
     .action(async (options) => {
+        if (!options.json) showAsciiArt('hw-detect');
         const UnifiedDetector = require('../src/hardware/unified-detector');
 
         const spinner = options.json ? null : ora('Detecting hardware...').start();
