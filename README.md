@@ -2,7 +2,7 @@
 
 **AI-powered CLI tool that analyzes your hardware and recommends optimal LLM models from 6900+ variants across 200+ Ollama models.**
 
-[![npm version](https://badge.fury.io/js/llm-checker.svg)](https://www.npmjs.com/package/llm-checker)
+[![npm version](https://badge.fury.io/js/ollama-checker.svg)](https://www.npmjs.com/package/ollama-checker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org/)
 
@@ -23,23 +23,23 @@
 ### Installation
 
 ```bash
-npm install -g llm-checker
+npm install -g ollama-checker
 ```
 
 ### Basic Usage
 
 ```bash
 # Detect your hardware
-llm-checker hw-detect
+ollama-checker hw-detect
 
 # Get smart recommendations
-llm-checker smart-recommend
+ollama-checker smart-recommend
 
 # Search for specific models
-llm-checker search qwen -l 5
+ollama-checker search qwen -l 5
 
 # Sync model database (first time)
-llm-checker sync
+ollama-checker sync
 ```
 
 ---
@@ -51,7 +51,7 @@ llm-checker sync
 Analyzes your system and shows compatible backends:
 
 ```bash
-llm-checker hw-detect
+ollama-checker hw-detect
 ```
 
 Output:
@@ -80,9 +80,9 @@ METAL:
 Gets the best models for your hardware:
 
 ```bash
-llm-checker smart-recommend
-llm-checker smart-recommend --use-case coding
-llm-checker smart-recommend -l 10
+ollama-checker smart-recommend
+ollama-checker smart-recommend --use-case coding
+ollama-checker smart-recommend -l 10
 ```
 
 Output:
@@ -106,9 +106,9 @@ Highest Quality:
 Search with intelligent scoring:
 
 ```bash
-llm-checker search llama -l 5
-llm-checker search coding --use-case coding
-llm-checker search qwen --quant Q4_K_M
+ollama-checker search llama -l 5
+ollama-checker search coding --use-case coding
+ollama-checker search qwen --quant Q4_K_M
 ```
 
 Options:
@@ -123,7 +123,7 @@ Options:
 Downloads latest models from Ollama:
 
 ```bash
-llm-checker sync
+ollama-checker sync
 ```
 
 ---
@@ -202,19 +202,19 @@ Models are scored on 4 dimensions:
 ### Find the best coding model
 
 ```bash
-llm-checker smart-recommend --use-case coding -l 3
+ollama-checker smart-recommend --use-case coding -l 3
 ```
 
 ### Search for small, fast models
 
 ```bash
-llm-checker search "3b OR 7b" --max-size 5 -l 10
+ollama-checker search "3b OR 7b" --max-size 5 -l 10
 ```
 
 ### Get all Qwen variants
 
 ```bash
-llm-checker search qwen -l 20
+ollama-checker search qwen -l 20
 ```
 
 ---
@@ -222,8 +222,8 @@ llm-checker search qwen -l 20
 ## Development
 
 ```bash
-git clone https://github.com/Pavelevich/llm-checker.git
-cd llm-checker
+git clone https://github.com/Pavelevich/ollama-checker.git
+cd ollama-checker
 npm install
 node bin/enhanced_cli.js hw-detect
 ```
@@ -238,6 +238,6 @@ MIT License - see LICENSE for details.
 
 ## Links
 
-- GitHub: https://github.com/Pavelevich/llm-checker
-- npm: https://www.npmjs.com/package/llm-checker
-- Issues: https://github.com/Pavelevich/llm-checker/issues
+- GitHub: https://github.com/Pavelevich/ollama-checker
+- npm: https://www.npmjs.com/package/ollama-checker
+- Issues: https://github.com/Pavelevich/ollama-checker/issues
