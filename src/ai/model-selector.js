@@ -45,7 +45,7 @@ class AIModelSelector {
             const allModelData = await scraper.scrapeAllModels(false);
             const allAvailableModels = allModelData.models || [];
             
-            console.log(`📊 Evaluating against ${allAvailableModels.length} models from database`);
+            console.log(`Evaluating against ${allAvailableModels.length} models from database`);
             
             // Usar el selector inteligente con TODOS los modelos disponibles
             const result = this.intelligentSelector.selectBestModels(

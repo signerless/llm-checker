@@ -1,9 +1,9 @@
 {
-  "name": "llm-checker",
-  "version": "2.7.2",
+  "name": "ollama-checker",
+  "version": "3.0.1",
   "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
-    "llm-checker": "bin/enhanced_cli.js"
+    "ollama-checker": "bin/enhanced_cli.js"
   },
   "main": "src/index.js",
   "scripts": {
@@ -23,7 +23,7 @@
     "ai-run": "node bin/enhanced_cli.js ai-run",
     "benchmark": "cd ml-model && python python/benchmark_collector.py",
     "train-ai": "cd ml-model && python python/train_model.py",
-    "postinstall": "echo '🎉 LLM Checker installed! Try: npm run check'"
+    "postinstall": "echo 'LLM Checker installed. Run: llm-checker hw-detect'"
   },
   "dependencies": {
     "chalk": "^4.1.2",
@@ -31,6 +31,7 @@
     "inquirer": "^8.2.6",
     "node-fetch": "^2.7.0",
     "ora": "^5.4.1",
+    "sql.js": "^1.10.0",
     "systeminformation": "^5.21.0",
     "table": "^6.8.1"
   },
@@ -61,7 +62,7 @@
     "apple-silicon",
     "memory-optimization"
   ],
-  "author": "Pavelevich",
+  "author": "Pavelevich (https://github.com/Pavelevich)",
   "license": "MIT",
   "repository": {
     "type": "git",

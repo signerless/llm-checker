@@ -2296,7 +2296,7 @@ class LLMChecker {
             recommendations.push('Consider using heavy quantization (Q2_K, Q3_K_M)');
         } else if (compatibility.score < 75) {
             recommendations.push('✅ Model should run with some optimizations');
-            recommendations.push('🎯 Use Q4_K_M quantization for best balance');
+            recommendations.push('Use Q4_K_M quantization for best balance');
         } else {
             recommendations.push('Model should run excellently on this hardware');
             if (hardware.memory.total >= 32) {

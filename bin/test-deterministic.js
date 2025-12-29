@@ -14,8 +14,8 @@ async function main() {
     const topN = process.argv.includes('--limit') ? 
         parseInt(process.argv[process.argv.indexOf('--limit') + 1]) : 5;
 
-    console.log('🧠 LLM-Checker: Deterministic Model Selector (v1.0)');
-    console.log(`🎯 Category: ${category}`);
+    console.log('LLM-Checker: Deterministic Model Selector (v1.0)');
+    console.log(`Category: ${category}`);
     console.log(`🔬 Quick probe: ${enableProbe ? 'enabled' : 'disabled'}`);
     console.log('─'.repeat(80));
 

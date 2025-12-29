@@ -485,7 +485,7 @@ class DeterministicModelSelector {
         const filtered = this.filterByCategory(pool, category);
         
         if (!silent) {
-            console.log(`📊 Evaluating ${filtered.length} models for ${category} category`);
+            console.log(`Evaluating ${filtered.length} models for ${category} category`);
         }
         
         // Phase 1: Estimation filter
@@ -958,10 +958,10 @@ class DeterministicModelSelector {
         
         // Best pick
         const best = candidates[0];
-        console.log(`\n🏆 BEST PICK: ${best.meta.name}`);
+        console.log(`\nBEST PICK: ${best.meta.name}`);
         console.log(`Command: ollama pull ${best.meta.model_identifier}`);
         console.log(`Why: ${best.rationale}`);
-        console.log(`📊 Score: ${best.score} (Q:${best.components.Q} S:${best.components.S} F:${best.components.F} C:${best.components.C})`);
+        console.log(`Score: ${best.score} (Q:${best.components.Q} S:${best.components.S} F:${best.components.F} C:${best.components.C})`);
         
         return result;
     }

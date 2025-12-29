@@ -52,7 +52,7 @@ module.exports = {
         beforeGenerateReport: async function(data, pluginManager) {
             // Add note about custom models in reports
             if (data.recommendations) {
-                data.recommendations.push('🔧 Custom models available via plugin');
+                data.recommendations.push('Custom models available via plugin');
             }
             return data;
         }

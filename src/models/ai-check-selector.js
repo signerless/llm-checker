@@ -80,7 +80,7 @@ Respond with JSON only, no additional text.`;
         const allOllamaModels = ollamaData.models || [];
         
         if (!silent) {
-            console.log(chalk.cyan('│') + ` 📊 Found ${allOllamaModels.length} models in Ollama database`);
+            console.log(chalk.cyan('│') + ` Found ${allOllamaModels.length} models in Ollama database`);
         }
         
         // Convert Ollama models to deterministic selector format and evaluate them
@@ -92,7 +92,7 @@ Respond with JSON only, no additional text.`;
         const categoryModels = this.filterOllamaModelsByCategory(allOllamaModels, category);
         
         if (!silent) {
-            console.log(chalk.cyan('│') + ` 🎯 ${categoryModels.length} models match ${category} category`);
+            console.log(chalk.cyan('│') + ` ${categoryModels.length} models match ${category} category`);
         }
         
         // Evaluate each model using deterministic scoring
@@ -128,7 +128,7 @@ Respond with JSON only, no additional text.`;
         };
 
         if (detResults.candidates.length === 0) {
-            console.log(`🧠 AI-Check Mode: ${category.toUpperCase()}`);
+            console.log(`AI-Check Mode: ${category.toUpperCase()}`);
             console.log(`❌ No suitable candidates found by deterministic selector.`);
             return {
                 results: detResults,
@@ -180,7 +180,7 @@ Respond with JSON only, no additional text.`;
         }
 
         // Show evaluator status in app style
-        console.log('\n' + chalk.bgCyan.black.bold(' 🤖 AI EVALUATOR STATUS '));
+        console.log('\n' + chalk.bgCyan.black.bold(' AI EVALUATOR STATUS '));
         console.log(chalk.cyan('╭' + '─'.repeat(50)));
         console.log(chalk.cyan('│') + ` Model: ${chalk.green.bold(evaluatorModel)}`);
         
@@ -588,11 +588,11 @@ Return JSON with this structure:
         }
 
         // AI-Check header
-        console.log('\n' + chalk.bgMagenta.white.bold(' 🧠 AI-CHECK RESULTS '));
+        console.log('\n' + chalk.bgMagenta.white.bold(' AI-CHECK RESULTS '));
         console.log(chalk.magenta('╭' + '─'.repeat(65)));
-        console.log(chalk.magenta('│') + ` 🤖 Evaluator: ${chalk.cyan(evaluatorModel || 'None')}`);
-        console.log(chalk.magenta('│') + ` 🎯 Category: ${chalk.yellow(results.category || 'general').toUpperCase()}`);
-        console.log(chalk.magenta('│') + ` 📊 Models Evaluated: ${chalk.green(results.candidates.length)}`);
+        console.log(chalk.magenta('│') + ` Evaluator: ${chalk.cyan(evaluatorModel || 'None')}`);
+        console.log(chalk.magenta('│') + ` Category: ${chalk.yellow(results.category || 'general').toUpperCase()}`);
+        console.log(chalk.magenta('│') + ` Models Evaluated: ${chalk.green(results.candidates.length)}`);
         if (note) {
             console.log(chalk.magenta('│') + ` 📝 Note: ${chalk.gray(note)}`);
         }
@@ -648,10 +648,10 @@ Return JSON with this structure:
 
         // Best recommendation section
         const best = results.candidates[0];
-        console.log('\n' + chalk.bgGreen.black.bold(' 🎯 AI-POWERED RECOMMENDATION '));
+        console.log('\n' + chalk.bgGreen.black.bold(' AI-POWERED RECOMMENDATION '));
         console.log(chalk.green('╭' + '─'.repeat(50)));
-        console.log(chalk.green('│') + ` 🏆 Best Model: ${chalk.cyan.bold(best.meta.name || best.meta.model_identifier)}`);
-        console.log(chalk.green('│') + ` 📊 Final Score: ${this.getScoreColor(best.finalScore)(Math.round(best.finalScore) + '/100')}`);
+        console.log(chalk.green('│') + ` Best Model: ${chalk.cyan.bold(best.meta.name || best.meta.model_identifier)}`);
+        console.log(chalk.green('│') + ` Final Score: ${this.getScoreColor(best.finalScore)(Math.round(best.finalScore) + '/100')}`);
         console.log(chalk.green('│') + ` ⚖️  Det: ${Math.round(best.score)} + AI: ${best.aiScore ? Math.round(best.aiScore) : 'N/A'}`);
         console.log(chalk.green('│'));
         
@@ -664,7 +664,7 @@ Return JSON with this structure:
         }
         
         console.log(chalk.green('│'));
-        console.log(chalk.green('│') + ` 🎯 Why this model?`);
+        console.log(chalk.green('│') + ` Why this model?`);
         
         // Parse and display reasoning nicely
         const reasons = best.rationale.split(' | ');

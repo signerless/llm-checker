@@ -54,7 +54,7 @@ class IntelligentModelRecommender {
         const hardwareTier = this.calculateHardwareTier(hardware);
         const recommendations = {};
 
-        console.log(`🧠 Analyzing ${allModels.length} models for hardware tier: ${hardwareTier}`);
+        console.log(`Analyzing ${allModels.length} models for hardware tier: ${hardwareTier}`);
 
         // Para cada categoría, encontrar los mejores modelos
         Object.keys(this.categories).forEach(category => {

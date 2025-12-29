@@ -5,7 +5,14 @@ const ora = require('ora');
 const { table } = require('table');
 const os = require('os');
 const { spawn } = require('child_process');
-const LLMChecker = require('../src/index');
+// LLMChecker is loaded lazily to avoid slow systeminformation init
+let _LLMChecker = null;
+function getLLMChecker() {
+    if (!_LLMChecker) {
+        _LLMChecker = require('../src/index');
+    }
+    return _LLMChecker;
+}
 const { getLogger } = require('../src/utils/logger');
 const fs = require('fs');
 const path = require('path');
@@ -614,9 +621,9 @@ function displaySystemInfo(hardware, analysis) {
     const tier = analysis.summary.hardwareTier?.replace('_', ' ').toUpperCase() || 'UNKNOWN';
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
 
-    lines.push(`🏆 ${chalk.bold('Hardware Tier:')} ${tierColor.bold(tier)}`);
+    lines.push(`${chalk.bold('Hardware Tier:')} ${tierColor.bold(tier)}`);
 
-    console.log('\n' + chalk.bgBlue.white.bold(' 🖥️  SYSTEM INFORMATION '));
+    console.log('\n' + chalk.bgBlue.white.bold(' SYSTEM INFORMATION '));
     console.log(chalk.blue('╭' + '─'.repeat(50)));
 
     lines.forEach(line => {
@@ -786,7 +793,7 @@ function displayStructuredRecommendations(recommendations) {
         return;
     }
 
-    console.log('\n' + chalk.bgCyan.white.bold(' 🎯 SMART RECOMMENDATIONS '));
+    console.log('\n' + chalk.bgCyan.white.bold('  SMART RECOMMENDATIONS '));
     console.log(chalk.cyan('╭' + '─'.repeat(50)));
 
     if (recommendations.general && recommendations.general.length > 0) {
@@ -881,9 +888,9 @@ function displayIntelligentRecommendations(intelligentData) {
     const tier = summary.hardware_tier.replace('_', ' ').toUpperCase();
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
 
-    console.log('\n' + chalk.bgRed.white.bold(' 🧠 INTELLIGENT RECOMMENDATIONS BY CATEGORY '));
+    console.log('\n' + chalk.bgRed.white.bold(' INTELLIGENT RECOMMENDATIONS BY CATEGORY '));
     console.log(chalk.red('╭' + '─'.repeat(65)));
-    console.log(chalk.red('│') + ` 🏆 Hardware Tier: ${tierColor.bold(tier)} | Models Analyzed: ${chalk.cyan.bold(intelligentData.totalModelsAnalyzed)}`);
+    console.log(chalk.red('│') + ` Hardware Tier: ${tierColor.bold(tier)} | Models Analyzed: ${chalk.cyan.bold(intelligentData.totalModelsAnalyzed)}`);
     console.log(chalk.red('│'));
 
     // Mostrar mejor modelo general
@@ -922,7 +929,7 @@ function displayIntelligentRecommendations(intelligentData) {
 }
 
 function displayModelsStats(originalCount, filteredCount, options) {
-    console.log('\n' + chalk.bgGreen.white.bold(' 📊 DATABASE STATS '));
+    console.log('\n' + chalk.bgGreen.white.bold('  DATABASE STATS '));
     console.log(chalk.green('╭' + '─'.repeat(60)));
     console.log(chalk.green('│') + ` Total models in database: ${chalk.cyan.bold(originalCount)}`);
     console.log(chalk.green('│') + ` After filters: ${chalk.yellow.bold(filteredCount)}`);
@@ -944,7 +951,7 @@ function displayModelsStats(originalCount, filteredCount, options) {
 }
 
 async function displayTopRecommended(models, categoryFilter) {
-    console.log('\n' + chalk.bgGreen.white.bold(' 🏆 TOP 3 RECOMMENDED FOR YOUR HARDWARE '));
+    console.log('\n' + chalk.bgGreen.white.bold(' TOP 3 RECOMMENDED FOR YOUR HARDWARE '));
     
     try {
         // Usar la heurística matemática inteligente
@@ -1925,7 +1932,7 @@ program
         try {
             // Use verbose progress unless explicitly disabled
             const verboseEnabled = options.verbose !== false;
-            const checker = new LLMChecker({ verbose: verboseEnabled });
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
             
             // If verbose is disabled, show simple loading message
             if (!verboseEnabled) {
@@ -2006,7 +2013,7 @@ program
         const spinner = ora('Checking Ollama integration...').start();
 
         try {
-            const checker = new LLMChecker();
+            const checker = new (getLLMChecker())();
             const analysis = await checker.analyze();
 
             if (!analysis.ollamaInfo.available) {
@@ -2045,7 +2052,7 @@ program
         const spinner = ora('Analyzing installed models...').start();
 
         try {
-            const checker = new LLMChecker({ verbose: false });
+            const checker = new (getLLMChecker())({ verbose: false });
             const OllamaClient = require('../src/ollama/client');
             const ollamaClient = new OllamaClient();
 
@@ -2216,7 +2223,7 @@ program
     .action(async (options) => {
         try {
             const verboseEnabled = options.verbose !== false;
-            const checker = new LLMChecker({ verbose: verboseEnabled });
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
             
             if (!verboseEnabled) {
                 process.stdout.write(chalk.gray('Generating recommendations...'));
@@ -2263,7 +2270,7 @@ program
         const spinner = ora('📋 Loading models database...').start();
 
         try {
-            const checker = new LLMChecker();
+            const checker = new (getLLMChecker())();
             const data = await checker.ollamaScraper.scrapeAllModels(false);
             
             if (!data || !data.models) {
@@ -2358,7 +2365,7 @@ program
                         return (b.pulls || 0) - (a.pulls || 0);
                     });
                     
-                    spinner.text = `🧠 Sorted by hardware compatibility (${getHardwareTierForDisplay(hardware)})`;
+                    spinner.text = `Sorted by hardware compatibility (${getHardwareTierForDisplay(hardware)})`;
                 } catch (error) {
                     console.warn('Could not sort by hardware compatibility:', error.message);
                     // Fallback a ordenar por popularidad
@@ -2457,7 +2464,7 @@ program
         const AICheckSelector = require('../src/models/ai-check-selector');
         
         try {
-            const spinner = ora('🧠 AI-Check Mode: Meta-evaluation in progress...').start();
+            const spinner = ora('AI-Check Mode: Meta-evaluation in progress...').start();
             
             const aiCheckSelector = new AICheckSelector();
             
@@ -2497,10 +2504,10 @@ program
         const AIModelSelector = require('../src/ai/model-selector');
         
         try {
-            const spinner = ora('🧠 Selecting best model and launching...').start();
+            const spinner = ora('Selecting best model and launching...').start();
             
             const aiSelector = new AIModelSelector();
-            const checker = new LLMChecker();
+            const checker = new (getLLMChecker())();
             const systemInfo = await checker.getSystemInfo();
             
             // Get available models or use provided ones
@@ -2626,6 +2633,407 @@ program
         console.log(chalk.green.bold('Demo completed successfully!'));
         console.log(chalk.gray('\\nNow try running: ') + chalk.cyan.bold('llm-checker check'));
         console.log(chalk.gray('For silent mode: ') + chalk.cyan.bold('llm-checker check --no-verbose'));
+    });
+
+// ============================================================
+// NEW ENHANCED COMMANDS (v3.0 - Intelligent Model Selection)
+// ============================================================
+
+program
+    .command('sync')
+    .description('Sync the model database from Ollama registry (scrapes all models)')
+    .option('-f, --force', 'Force full sync even if recent data exists')
+    .option('--incremental', 'Only sync new and updated models')
+    .option('-q, --quiet', 'Suppress progress output')
+    .action(async (options) => {
+        const SyncManager = require('../src/data/sync-manager');
+
+        const spinner = options.quiet ? null : ora('Initializing sync...').start();
+
+        try {
+            const syncManager = new SyncManager({
+                onProgress: (info) => {
+                    if (!options.quiet && spinner) {
+                        if (info.phase === 'complete') {
+                            spinner.succeed(info.message);
+                        } else {
+                            spinner.text = info.message;
+                        }
+                    }
+                },
+                onError: (err) => {
+                    if (!options.quiet) console.error(chalk.yellow('Warning:'), err);
+                }
+            });
+
+            let result;
+            if (options.incremental) {
+                result = await syncManager.incrementalSync();
+            } else {
+                result = await syncManager.sync({ force: options.force });
+            }
+
+            if (!options.quiet) {
+                console.log(chalk.green('\n[OK] Sync complete!'));
+                console.log(chalk.gray(`  Models: ${result.stats?.models || result.models || 0}`));
+                console.log(chalk.gray(`  Variants: ${result.stats?.variants || result.variants || 0}`));
+            }
+
+            syncManager.close();
+
+        } catch (error) {
+            if (spinner) spinner.fail('Sync failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('search <query>')
+    .description('Search models in the database with intelligent scoring')
+    .option('-u, --use-case <case>', 'Optimize for use case (general, coding, chat, reasoning, creative)', 'general')
+    .option('-l, --limit <n>', 'Maximum number of results', '10')
+    .option('--max-size <gb>', 'Maximum model size in GB')
+    .option('--min-size <gb>', 'Minimum model size in GB')
+    .option('--quant <type>', 'Filter by quantization (Q4_K_M, Q5_K_M, Q8_0, etc.)')
+    .option('--family <name>', 'Filter by model family (llama, qwen, mistral, etc.)')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (query, options) => {
+        const SyncManager = require('../src/data/sync-manager');
+        const IntelligentSelector = require('../src/models/intelligent-selector');
+        const UnifiedDetector = require('../src/hardware/unified-detector');
+
+        const spinner = options.json ? null : ora('Searching models...').start();
+
+        try {
+            // Detect hardware first to determine max size
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+            const hardwareMaxSize = detector.getMaxModelSize();
+
+            const syncManager = new SyncManager({ onProgress: () => {} });
+            await syncManager.init();
+
+            // Check if we need to sync first
+            const syncStatus = await syncManager.needsSync();
+            if (syncStatus.needed && !options.json) {
+                spinner.text = 'Database needs sync, running quick check...';
+            }
+
+            // Use user-provided maxSize or hardware-detected max
+            const effectiveMaxSize = options.maxSize
+                ? parseFloat(options.maxSize)
+                : hardwareMaxSize + 2;  // Add some headroom
+
+            // Search for variants in database
+            const searchResults = await syncManager.searchVariants(query, {
+                maxSize: effectiveMaxSize,
+                minSize: options.minSize ? parseFloat(options.minSize) : null,
+                quant: options.quant,
+                family: options.family,
+                limit: parseInt(options.limit) * 5  // Get more for scoring
+            });
+
+            if (searchResults.length === 0) {
+                if (spinner) spinner.info('No models found matching your query');
+                syncManager.close();
+                return;
+            }
+
+            // Score with intelligent selector (reuse detector from above)
+            const selector = new IntelligentSelector({ detector });
+
+            const recommendations = await selector.recommend(searchResults, {
+                useCase: options.useCase,
+                limit: parseInt(options.limit)
+            });
+
+            syncManager.close();
+
+            if (options.json) {
+                console.log(JSON.stringify(recommendations, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed(`Found ${recommendations.meta.afterFiltering} matching models`);
+
+            // Display results
+            console.log(chalk.blue.bold('\nSearch Results for: ') + chalk.white(query));
+            console.log(chalk.gray(`Hardware: ${recommendations.hardware.description}`));
+            console.log(chalk.gray(`Max model size: ${recommendations.hardware.maxSize}GB`));
+            console.log('');
+
+            for (const item of recommendations.all) {
+                const v = item.variant;
+                const s = item.score;
+
+                // Format model name (tag already contains model:variant format)
+                const fullTag = v.tag || 'latest';
+                const displayName = fullTag.includes(':') ? fullTag : `${v.model_id || v.modelId}:${fullTag}`;
+
+                const scoreColor = s.final >= 80 ? chalk.green : s.final >= 60 ? chalk.yellow : chalk.red;
+
+                console.log(
+                    scoreColor(`[${s.final}]`) + ' ' +
+                    chalk.white.bold(displayName)
+                );
+                console.log(
+                    chalk.gray(`     ${v.params_b || v.paramsB || '?'}B params, `) +
+                    chalk.gray(`${v.size_gb || v.sizeGB || '?'}GB, `) +
+                    chalk.gray(`${v.quant || 'Q4_K_M'}, `) +
+                    chalk.cyan(`~${s.meta.estimatedTPS} tok/s`)
+                );
+                console.log(
+                    chalk.gray(`     Q:${s.components.quality} S:${s.components.speed} F:${s.components.fit} C:${s.components.context}`)
+                );
+                console.log(chalk.cyan(`     ollama pull ${displayName}`));
+                console.log('');
+            }
+
+            // Show insights
+            if (recommendations.insights.length > 0) {
+                console.log(chalk.blue.bold('Insights:'));
+                for (const insight of recommendations.insights) {
+                    const icon = insight.type === 'success' ? '[OK]' : insight.type === 'warning' ? '[!]' : '[i]';
+                    const color = insight.type === 'success' ? chalk.green : insight.type === 'warning' ? chalk.yellow : chalk.cyan;
+                    console.log(color(`  ${icon} ${insight.message}`));
+                }
+            }
+
+        } catch (error) {
+            if (spinner) spinner.fail('Search failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('smart-recommend')
+    .description('Get intelligent model recommendations using the new scoring engine')
+    .option('-u, --use-case <case>', 'Optimize for use case', 'general')
+    .option('-l, --limit <n>', 'Maximum number of recommendations', '5')
+    .option('--target-tps <n>', 'Target tokens per second', '20')
+    .option('--target-context <n>', 'Target context length', '8192')
+    .option('--include-vision', 'Include vision/multimodal models')
+    .option('--include-embeddings', 'Include embedding models')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        const SyncManager = require('../src/data/sync-manager');
+        const IntelligentSelector = require('../src/models/intelligent-selector');
+        const UnifiedDetector = require('../src/hardware/unified-detector');
+
+        const spinner = options.json ? null : ora('Analyzing hardware and models...').start();
+
+        try {
+            // Detect hardware
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+
+            if (spinner) spinner.text = 'Loading model database...';
+
+            // Load models from database
+            const syncManager = new SyncManager({ onProgress: () => {} });
+            await syncManager.init();
+
+            const syncStatus = await syncManager.needsSync();
+            if (syncStatus.needed) {
+                if (spinner) spinner.text = 'Syncing model database (first time takes a few minutes)...';
+                await syncManager.sync();
+            }
+
+            // Get all variants that might fit
+            const maxSize = detector.getMaxModelSize() + 2;
+            const variants = await syncManager.getCompatibleVariants(maxSize, {});
+
+            if (spinner) spinner.text = `Scoring ${variants.length} model variants...`;
+
+            // Get intelligent recommendations
+            const selector = new IntelligentSelector({ detector });
+            const recommendations = await selector.recommend(variants, {
+                useCase: options.useCase,
+                targetTPS: parseInt(options.targetTps) || 20,
+                targetContext: parseInt(options.targetContext) || 8192,
+                includeVision: options.includeVision,
+                includeEmbeddings: options.includeEmbeddings,
+                limit: parseInt(options.limit)
+            });
+
+            syncManager.close();
+
+            if (options.json) {
+                console.log(JSON.stringify(recommendations, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('Analysis complete!');
+
+            // Display hardware info
+            console.log(chalk.blue.bold('\n=== Hardware Analysis ==='));
+            console.log(chalk.white(`  ${recommendations.hardware.description}`));
+            console.log(chalk.gray(`  Tier: ${recommendations.hardware.tier.replace('_', ' ').toUpperCase()}`));
+            console.log(chalk.gray(`  Backend: ${recommendations.hardware.backend}`));
+            console.log(chalk.gray(`  Max model size: ${recommendations.hardware.maxSize}GB`));
+
+            // Display top picks
+            console.log(chalk.blue.bold('\n=== Top Recommendations ==='));
+
+            // Helper to format model name (tag already contains model:variant)
+            const formatModelName = (v) => {
+                const fullTag = v.tag || 'latest';
+                return fullTag.includes(':') ? fullTag : `${v.model_id}:${fullTag}`;
+            };
+
+            const picks = recommendations.topPicks;
+            if (picks.best) {
+                const v = picks.best.variant;
+                const s = picks.best.score;
+                const name = formatModelName(v);
+                console.log(chalk.green.bold('\n[BEST] Best Overall:'));
+                console.log(chalk.white.bold(`  ${name}`));
+                console.log(chalk.gray(`  ${v.params_b || '?'}B params | ${v.size_gb || '?'}GB | ${v.quant || 'Q4_K_M'}`));
+                console.log(chalk.cyan(`  Score: ${s.final}/100 (Q:${s.components.quality} S:${s.components.speed} F:${s.components.fit})`));
+                console.log(chalk.yellow(`  ~${s.meta.estimatedTPS} tokens/sec`));
+                console.log(chalk.cyan(`  ollama pull ${name}`));
+            }
+
+            if (picks.fast && picks.fast !== picks.best) {
+                const v = picks.fast.variant;
+                const s = picks.fast.score;
+                const name = formatModelName(v);
+                console.log(chalk.blue.bold('\n⚡ Fastest:'));
+                console.log(chalk.white(`  ${name}`));
+                console.log(chalk.gray(`  ${v.params_b || '?'}B | ${v.size_gb || '?'}GB | ~${s.meta.estimatedTPS} tok/s`));
+                console.log(chalk.cyan(`  ollama pull ${name}`));
+            }
+
+            if (picks.quality && picks.quality !== picks.best) {
+                const v = picks.quality.variant;
+                const s = picks.quality.score;
+                const name = formatModelName(v);
+                console.log(chalk.magenta.bold('\nHighest Quality:'));
+                console.log(chalk.white(`  ${name}`));
+                console.log(chalk.gray(`  ${v.params_b || '?'}B | ${v.size_gb || '?'}GB | Quality: ${s.components.quality}/100`));
+                console.log(chalk.cyan(`  ollama pull ${name}`));
+            }
+
+            // Show other recommendations
+            if (recommendations.all.length > 1) {
+                console.log(chalk.blue.bold('\n=== Other Good Options ==='));
+                for (const item of recommendations.all.slice(1, parseInt(options.limit))) {
+                    const v = item.variant;
+                    const s = item.score;
+                    const name = formatModelName(v);
+                    console.log(
+                        chalk.gray(`[${s.final}] `) +
+                        chalk.white(name) +
+                        chalk.gray(` - ${v.params_b || '?'}B, ${v.size_gb || '?'}GB`)
+                    );
+                }
+            }
+
+            // Show insights
+            if (recommendations.insights.length > 0) {
+                console.log(chalk.blue.bold('\n=== Insights ==='));
+                for (const insight of recommendations.insights) {
+                    const icon = insight.type === 'success' ? chalk.green('[OK]') :
+                                insight.type === 'warning' ? chalk.yellow('[!]') :
+                                insight.type === 'tip' ? chalk.cyan('[TIP]') : chalk.blue('[i]');
+                    console.log(`  ${icon} ${insight.message}`);
+                }
+            }
+
+            console.log('');
+
+        } catch (error) {
+            if (spinner) spinner.fail('Recommendation failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('hw-detect')
+    .description('Detect and display detailed hardware capabilities')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        const UnifiedDetector = require('../src/hardware/unified-detector');
+
+        const spinner = options.json ? null : ora('Detecting hardware...').start();
+
+        try {
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+
+            if (options.json) {
+                console.log(JSON.stringify(hardware, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('Hardware detected!');
+
+            console.log(chalk.blue.bold('\n=== Hardware Detection ===\n'));
+
+            // Summary
+            console.log(chalk.white.bold('Summary:'));
+            console.log(`  ${detector.getHardwareDescription()}`);
+            console.log(`  Tier: ${chalk.cyan(detector.getHardwareTier().replace('_', ' ').toUpperCase())}`);
+            console.log(`  Max model size: ${chalk.green(detector.getMaxModelSize() + 'GB')}`);
+            console.log(`  Best backend: ${chalk.cyan(hardware.summary.bestBackend)}`);
+
+            // CPU
+            if (hardware.cpu) {
+                console.log(chalk.blue.bold('\nCPU:'));
+                console.log(`  ${hardware.cpu.brand}`);
+                console.log(`  Cores: ${hardware.cpu.cores.logical} (${hardware.cpu.cores.physical} physical)`);
+                console.log(`  SIMD: ${hardware.cpu.capabilities.bestSimd}`);
+                if (hardware.cpu.capabilities.avx512) console.log(chalk.green('  [OK] AVX-512'));
+                if (hardware.cpu.capabilities.avx2) console.log(chalk.green('  [OK] AVX2'));
+                if (hardware.cpu.capabilities.neon) console.log(chalk.green('  [OK] ARM NEON'));
+            }
+
+            // GPU backends
+            for (const [backend, info] of Object.entries(hardware.backends)) {
+                if (!info.available || backend === 'cpu') continue;
+
+                console.log(chalk.blue.bold(`\n${backend.toUpperCase()}:`));
+
+                if (backend === 'metal' && info.info) {
+                    console.log(`  ${info.info.chip}`);
+                    console.log(`  GPU Cores: ${info.info.gpu.cores}`);
+                    console.log(`  Unified Memory: ${info.info.memory.unified}GB`);
+                    console.log(`  Memory Bandwidth: ${info.info.memory.bandwidth}GB/s`);
+                }
+
+                if (backend === 'cuda' && info.info) {
+                    console.log(`  Driver: ${info.info.driver}`);
+                    console.log(`  CUDA: ${info.info.cuda}`);
+                    console.log(`  Total VRAM: ${info.info.totalVRAM}GB`);
+                    for (const gpu of info.info.gpus) {
+                        console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);
+                    }
+                }
+
+                if (backend === 'rocm' && info.info) {
+                    console.log(`  ROCm: ${info.info.rocmVersion}`);
+                    console.log(`  Total VRAM: ${info.info.totalVRAM}GB`);
+                    for (const gpu of info.info.gpus) {
+                        console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);
+                    }
+                }
+            }
+
+            console.log(chalk.gray(`\nFingerprint: ${hardware.fingerprint}`));
+            console.log('');
+
+        } catch (error) {
+            if (spinner) spinner.fail('Detection failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
     });
 
 program.parse();
