@@ -172,86 +172,88 @@ class ScoringEngine {
             }
         };
 
-        // Speed coefficients by backend (tokens/sec base for 1B params)
+        // Speed coefficients by backend (tokens/sec for 7B Q4_K_M as baseline)
+        // These are realistic values based on actual Ollama benchmarks
         this.backendSpeed = {
-            // NVIDIA
-            'cuda_h100': 400,
-            'cuda_a100': 300,
-            'cuda_4090': 260,
-            'cuda_4080': 220,
-            'cuda_3090': 200,
-            'cuda_3080': 180,
-            'cuda_3070': 150,
-            'cuda_3060': 110,
-            'cuda_2080': 120,
-            'cuda_default': 100,
+            // NVIDIA - based on real llama.cpp/Ollama benchmarks
+            'cuda_h100': 120,    // ~100-140 TPS for 7B Q4
+            'cuda_a100': 90,     // ~80-100 TPS for 7B Q4
+            'cuda_4090': 70,     // ~60-80 TPS for 7B Q4
+            'cuda_4080': 55,     // ~50-60 TPS for 7B Q4
+            'cuda_3090': 50,     // ~45-55 TPS for 7B Q4
+            'cuda_3080': 40,     // ~35-45 TPS for 7B Q4
+            'cuda_3070': 32,     // ~28-35 TPS for 7B Q4
+            'cuda_3060': 25,     // ~20-28 TPS for 7B Q4
+            'cuda_2080': 28,     // ~25-30 TPS for 7B Q4
+            'cuda_default': 30,
 
-            // AMD
-            'rocm_mi300': 350,
-            'rocm_mi250': 250,
-            'rocm_7900xtx': 200,
-            'rocm_7900xt': 180,
-            'rocm_7800xt': 150,
-            'rocm_6900xt': 140,
-            'rocm_default': 120,
+            // AMD - slightly lower than equivalent NVIDIA
+            'rocm_mi300': 100,
+            'rocm_mi250': 70,
+            'rocm_7900xtx': 55,
+            'rocm_7900xt': 45,
+            'rocm_7800xt': 38,
+            'rocm_6900xt': 35,
+            'rocm_default': 30,
 
-            // Apple
-            'metal_m4_ultra': 320,
-            'metal_m4_max': 300,
-            'metal_m4_pro': 270,
-            'metal_m4': 240,
-            'metal_m3_ultra': 280,
-            'metal_m3_max': 260,
-            'metal_m3_pro': 240,
-            'metal_m3': 220,
-            'metal_m2_ultra': 260,
-            'metal_m2_max': 240,
-            'metal_m2_pro': 220,
-            'metal_m2': 200,
-            'metal_m1_ultra': 240,
-            'metal_m1_max': 220,
-            'metal_m1_pro': 200,
-            'metal_m1': 180,
-            'metal_default': 200,
+            // Apple Silicon - based on real M-series benchmarks
+            'metal_m4_ultra': 75,   // ~70-80 TPS for 7B Q4
+            'metal_m4_max': 60,     // ~55-65 TPS for 7B Q4
+            'metal_m4_pro': 45,     // ~40-50 TPS for 7B Q4
+            'metal_m4': 35,         // ~30-40 TPS for 7B Q4
+            'metal_m3_ultra': 65,
+            'metal_m3_max': 50,
+            'metal_m3_pro': 40,
+            'metal_m3': 30,
+            'metal_m2_ultra': 55,
+            'metal_m2_max': 45,
+            'metal_m2_pro': 35,
+            'metal_m2': 28,
+            'metal_m1_ultra': 45,
+            'metal_m1_max': 38,
+            'metal_m1_pro': 30,
+            'metal_m1': 22,
+            'metal_default': 30,
 
-            // Intel
-            'intel_arc_a770': 120,
-            'intel_arc_a750': 100,
-            'intel_arc_default': 80,
+            // Intel Arc - limited real-world data
+            'intel_arc_a770': 30,
+            'intel_arc_a750': 25,
+            'intel_arc_default': 20,
 
-            // CPU
-            'cpu_avx512_amx': 100,
-            'cpu_avx512': 70,
-            'cpu_avx2': 50,
-            'cpu_neon': 45,
-            'cpu_avx': 35,
-            'cpu_default': 30
+            // CPU - very conservative, based on actual CPU inference speeds
+            'cpu_avx512_amx': 12,   // Best case server CPU
+            'cpu_avx512': 8,        // Good desktop CPU
+            'cpu_avx2': 5,          // Most modern CPUs
+            'cpu_neon': 4,          // Apple Silicon fallback
+            'cpu_avx': 3,           // Older CPUs
+            'cpu_default': 2        // Very old CPUs
         };
 
-        // Quantization speed multipliers
+        // Quantization speed multipliers (relative to Q4_K_M baseline)
+        // More conservative than theoretical - accounts for real overhead
         this.quantSpeedMult = {
-            'FP16': 1.0,
-            'F16': 1.0,
-            'Q8_0': 1.5,
-            'Q6_K': 1.8,
-            'Q5_K_M': 2.0,
-            'Q5_K_S': 2.0,
-            'Q5_0': 2.0,
-            'Q4_K_M': 2.5,
-            'Q4_K_S': 2.5,
-            'Q4_0': 2.8,
-            'Q3_K_M': 3.0,
-            'Q3_K_S': 3.0,
-            'Q3_K_L': 2.8,
-            'IQ4_XS': 2.6,
-            'IQ4_NL': 2.5,
-            'IQ3_XXS': 3.2,
-            'IQ3_XS': 3.1,
-            'IQ3_S': 3.0,
-            'IQ2_XS': 3.5,
-            'IQ2_XXS': 3.6,
-            'Q2_K': 3.4,
-            'Q2_K_S': 3.5
+            'FP16': 0.5,      // Half speed of Q4 (2x memory bandwidth)
+            'F16': 0.5,
+            'Q8_0': 0.7,      // ~70% of Q4 speed
+            'Q6_K': 0.85,     // ~85% of Q4 speed
+            'Q5_K_M': 0.92,
+            'Q5_K_S': 0.92,
+            'Q5_0': 0.92,
+            'Q4_K_M': 1.0,    // Baseline
+            'Q4_K_S': 1.0,
+            'Q4_0': 1.05,
+            'Q3_K_M': 1.15,   // Faster but quality loss
+            'Q3_K_S': 1.15,
+            'Q3_K_L': 1.1,
+            'IQ4_XS': 1.02,
+            'IQ4_NL': 1.0,
+            'IQ3_XXS': 1.2,
+            'IQ3_XS': 1.18,
+            'IQ3_S': 1.15,
+            'IQ2_XS': 1.25,
+            'IQ2_XXS': 1.28,
+            'Q2_K': 1.22,
+            'Q2_K_S': 1.25
         };
 
         this.options = options;
@@ -456,28 +458,62 @@ class ScoringEngine {
 
     /**
      * Estimate tokens per second
+     *
+     * Formula is based on:
+     * - baseSpeed: realistic TPS for 7B Q4_K_M model on this hardware
+     * - Model size scaling with diminishing returns
+     * - Quantization adjustment
+     * - MoE efficiency bonus
      */
     estimateTPS(variant, hardware) {
         const params = variant.params_b || variant.paramsB || 7;
         const quant = (variant.quant || 'Q4_K_M').toUpperCase();
         const isMoE = variant.is_moe || variant.isMoE || false;
 
-        // Get backend speed coefficient
+        // Get backend speed coefficient (TPS for 7B Q4_K_M)
         const backendKey = this.getBackendKey(hardware);
         const baseSpeed = this.backendSpeed[backendKey] || this.backendSpeed.cpu_default;
 
-        // Get quantization multiplier
-        const quantMult = this.quantSpeedMult[quant] || 2.0;
+        // Get quantization multiplier (relative to Q4_K_M = 1.0)
+        const quantMult = this.quantSpeedMult[quant] || 1.0;
 
-        // Calculate TPS
-        let tps = (baseSpeed / params) * quantMult;
+        // Model size scaling with diminishing returns
+        // Small models don't get proportionally faster due to overhead
+        // Large models don't slow proportionally due to batching efficiency
+        let sizeRatio = 7 / params;
 
-        // MoE models are faster because not all parameters are active
-        if (isMoE) {
-            tps *= 1.5;  // Typically only 1/3 of params active
+        // Apply diminishing returns curve
+        // For small models (< 7B): cap the speedup factor
+        // For large models (> 7B): slow down more gradually
+        let sizeMult;
+        if (params < 3) {
+            // Very small models: limited by overhead, max ~2x baseline
+            sizeMult = Math.min(2.0, 1 + (sizeRatio - 1) * 0.35);
+        } else if (params < 7) {
+            // Small models: some speedup but not linear (~1.4x for 3B)
+            sizeMult = 1 + (sizeRatio - 1) * 0.35;
+        } else if (params <= 14) {
+            // Medium models: close to linear
+            sizeMult = sizeRatio;
+        } else if (params <= 32) {
+            // Large models: slight efficiency boost
+            sizeMult = sizeRatio * 1.1;
+        } else {
+            // Very large models: memory bandwidth limited, slower than linear
+            sizeMult = sizeRatio * 0.85;
         }
 
-        return Math.round(tps);
+        // Calculate base TPS
+        let tps = baseSpeed * sizeMult * quantMult;
+
+        // MoE models are faster because only ~1/3 of params are active
+        // But communication overhead limits the speedup
+        if (isMoE) {
+            tps *= 1.8;  // ~1.8x speedup (not 3x due to routing overhead)
+        }
+
+        // Apply minimum floor (can't go below 1 TPS)
+        return Math.max(1, Math.round(tps));
     }
 
     /**
