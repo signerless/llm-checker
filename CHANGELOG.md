@@ -1,7 +1,7 @@
 Changelog
 =========
 
-3.0.6 — Fix TPS Estimation (2025-12-31)
+3.0.7 — Fix TPS Estimation (2025-12-31)
 ---------------------------------------
 
 - Fix: TPS was overestimated by 2-10x across all hardware
