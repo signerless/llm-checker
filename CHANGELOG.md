@@ -1,6 +1,17 @@
 Changelog
 =========
 
+3.0.6 — Fix TPS Estimation (2025-12-31)
+---------------------------------------
+
+- Fix: TPS was overestimated by 2-10x across all hardware
+- Updated speed coefficients to match real Ollama benchmarks:
+  - H100: 120 TPS (was 400), RTX 4090: 70 TPS (was 260)
+  - M4 Pro: 45 TPS (was 270), CPU: 5 TPS (was 50)
+- Changed quantization baseline from FP16 to Q4_K_M (the most common format)
+- Added diminishing returns for small models (1-3B don't scale linearly)
+- Added comprehensive hardware simulation test suite (17 test cases)
+
 2.7.2 — Security & Robustness (2025-09-08)
 ------------------------------------------
 
