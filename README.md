@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="llmlogo.jpg" alt="LLM Checker Logo" width="200">
+</p>
+
+<p align="center">
   <h1 align="center">LLM Checker</h1>
   <p align="center">
     <strong>Intelligent Ollama Model Selector</strong>
