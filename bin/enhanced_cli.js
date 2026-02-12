@@ -1071,94 +1071,42 @@ function displayModelsStats(originalCount, filteredCount, options) {
 
 async function displayTopRecommended(models, categoryFilter) {
     console.log('\n' + chalk.bgGreen.white.bold(' TOP 3 RECOMMENDED FOR YOUR HARDWARE '));
-    
+
     try {
-        // Usar la heurística matemática inteligente
-        const hardwareDetector = new (require('../src/hardware/detector.js'))();
-        const hardware = await hardwareDetector.getSystemInfo();
-        
-        const IntelligentModelRecommender = require('../src/models/intelligent-recommender.js');
-        const recommender = new IntelligentModelRecommender();
-        
-        // Filtrar modelos por la categoría específica usando el mismo criterio
-        const categoryModels = recommender.filterModelsByCategory(models, categoryFilter);
-        
-        // Aplicar scoring matemático inteligente
-        const scoredModels = recommender.scoreModelsForCategory(categoryModels, categoryFilter, hardware);
-        
-        // Ordenar por score de categoría
-        const sortedModels = scoredModels.sort((a, b) => b.categoryScore - a.categoryScore);
-        
-        // Expandir a variantes y calcular score individual para cada variante
-        const allVariants = [];
-        sortedModels.forEach(model => {
-            if (model.tags && model.tags.length > 0) {
-                model.tags.forEach(tag => {
-                    const tagSize = extractSizeFromIdentifier(tag) || 
-                                   model.main_size || 
-                                   (model.model_sizes && model.model_sizes[0]) || 
-                                   'Unknown';
-                    
-                    // Crear un modelo temporal para esta variante específica
-                    const variantModel = {
-                        ...model,
-                        model_identifier: tag,
-                        tags: [tag]
-                    };
-                    
-                    // Calcular score específico para esta variante
-                    const variantScored = recommender.scoreModelsForCategory([variantModel], categoryFilter, hardware)[0];
-                    
-                    allVariants.push({
-                        name: tag,
-                        size: tagSize,
-                        score: Math.round(variantScored.categoryScore),
-                        category: model.category || 'general',
-                        context: model.context_length || 'Unknown',
-                        input: (model.input_types && model.input_types.length > 0) ? 
-                               model.input_types.slice(0, 2).join(',') : 'text',
-                        reasoning: `Hardware: ${Math.round(variantScored.hardwareScore || 0)}/100, Specialization: ${Math.round(variantScored.specializationScore || 0)}/100, Popularity: ${Math.round(variantScored.popularityScore || 0)}/100`
-                    });
-                });
-            } else {
-                allVariants.push({
-                    name: model.model_name || model.model_identifier,
-                    size: model.main_size || 'Unknown',
-                    score: Math.round(model.categoryScore),
-                    category: model.category || 'general',
-                    context: model.context_length || 'Unknown',
-                    input: (model.input_types && model.input_types.length > 0) ? 
-                           model.input_types.slice(0, 2).join(',') : 'text',
-                    reasoning: `Hardware: ${Math.round(model.hardwareScore || 0)}/100, Specialization: ${Math.round(model.specializationScore || 0)}/100, Popularity: ${Math.round(model.popularityScore || 0)}/100`
-                });
-            }
+        const DeterministicModelSelector = require('../src/models/deterministic-selector.js');
+        const selector = new DeterministicModelSelector();
+
+        // Use deterministic selector to get top 3 for this category
+        const result = await selector.selectModels(categoryFilter || 'general', {
+            topN: 3,
+            enableProbe: false,
+            silent: true
         });
-        
-        // Ordenar variantes por score individual y tomar los top 3
-        const sortedVariants = allVariants.sort((a, b) => b.score - a.score);
-        const top3 = sortedVariants.slice(0, 3);
-        
+
+        const top3 = result.candidates.map(candidate => selector.mapCandidateToLegacyFormat(candidate));
+
         if (top3.length === 0) {
             console.log(chalk.green('│') + chalk.yellow(' No models found for this category with current hardware'));
             console.log(chalk.green('╰' + '─'.repeat(65)));
             return;
         }
-    
-        top3.forEach((variant, index) => {
+
+        top3.forEach((model, index) => {
             const rankEmoji = ['🥇', '🥈', '🥉'][index];
-            const categoryColor = getCategoryColor(variant.category);
-            const scoreColor = variant.score >= 80 ? chalk.green.bold : 
-                              variant.score >= 60 ? chalk.yellow : chalk.red;
-            
+            const categoryColor = getCategoryColor(model.category || categoryFilter || 'general');
+            const scoreColor = model.categoryScore >= 80 ? chalk.green.bold :
+                              model.categoryScore >= 60 ? chalk.yellow : chalk.red;
+            const size = model.size ? `${model.size}B` : 'Unknown';
+
             console.log(chalk.green('│'));
-            console.log(chalk.green('│') + ` ${rankEmoji} ${chalk.cyan.bold(variant.name)}`);
-            console.log(chalk.green('│') + `    Size: ${chalk.green(variant.size)} | Score: ${scoreColor(variant.score + '%')} | Category: ${categoryColor(variant.category)}`);
-            console.log(chalk.green('│') + `    Command: ${chalk.yellow.bold('ollama pull ' + variant.name)}`);
-            console.log(chalk.green('│') + `    ${chalk.gray(variant.reasoning)}`);
+            console.log(chalk.green('│') + ` ${rankEmoji} ${chalk.cyan.bold(model.model_identifier)}`);
+            console.log(chalk.green('│') + `    Size: ${chalk.green(size)} | Score: ${scoreColor(Math.round(model.categoryScore) + '%')} | Category: ${categoryColor(model.category || 'general')}`);
+            console.log(chalk.green('│') + `    Command: ${chalk.yellow.bold('ollama pull ' + model.model_identifier)}`);
+            console.log(chalk.green('│') + `    ${chalk.gray(`Hardware: ${Math.round(model.hardwareScore)}/100, Quality: ${Math.round(model.specializationScore)}/100, Speed: ${Math.round(model.efficiencyScore)}/100`)}`);
         });
-        
+
         console.log(chalk.green('╰' + '─'.repeat(65)));
-        
+
     } catch (error) {
         console.log(chalk.green('│') + chalk.red(' Error calculating intelligent recommendations: ' + error.message));
         console.log(chalk.green('╰' + '─'.repeat(65)));

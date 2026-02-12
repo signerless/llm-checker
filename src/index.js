@@ -1,7 +1,7 @@
 const path = require('path');
 const HardwareDetector = require('./hardware/detector');
 const ExpandedModelsDatabase = require('./models/expanded_database');
-const EnhancedModelSelector = require('./models/enhanced-selector');
+const DeterministicModelSelector = require('./models/deterministic-selector');
 const CompatibilityAnalyzer = require(path.join(__dirname, '..', 'analyzer', 'compatibility'));
 const PerformanceAnalyzer = require(path.join(__dirname, '..', 'analyzer', 'performance'));
 const OllamaClient = require('./ollama/client');
@@ -13,7 +13,7 @@ class LLMChecker {
     constructor(options = {}) {
         this.hardwareDetector = new HardwareDetector();
         this.expandedModelsDatabase = new ExpandedModelsDatabase();
-        this.intelligentRecommender = new EnhancedModelSelector();
+        this.intelligentRecommender = new DeterministicModelSelector();
         this.ollamaScraper = new OllamaNativeScraper();
         this.compatibilityAnalyzer = new CompatibilityAnalyzer();
         this.performanceAnalyzer = new PerformanceAnalyzer();

@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
 
 class DeterministicModelSelector {
     constructor() {
@@ -27,11 +28,17 @@ class DeterministicModelSelector {
         // Family quality bumps
         this.familyBumps = {
             'qwen2.5': 2,
+            'deepseek': 3,
             'mistral': 1,
             'llama3.1': 1,
-            'llama3.2': 1,
-            'gemma2': 0,
-            'phi-3': -2
+            'llama3.2': 2,
+            'gemma2': 1,
+            'phi-3': 0,
+            'granite': 0,
+            'solar': 0,
+            'starcoder': 1,
+            'minicpm': 0,
+            'llava': 0
         };
         
         // Quantization penalties
@@ -87,16 +94,8 @@ class DeterministicModelSelector {
             'embeddings': 512
         };
         
-        // Category scoring weights [Q, S, F, C]
-        this.categoryWeights = {
-            'general': [0.45, 0.35, 0.15, 0.05],
-            'coding': [0.55, 0.20, 0.15, 0.10],
-            'reasoning': [0.60, 0.10, 0.20, 0.10],
-            'multimodal': [0.50, 0.15, 0.20, 0.15],
-            'summarization': [0.40, 0.35, 0.15, 0.10],
-            'reading': [0.40, 0.35, 0.15, 0.10],
-            'embeddings': [0.30, 0.50, 0.20, 0.00]
-        };
+        // Category scoring weights [Q, S, F, C] from centralized config
+        this.categoryWeights = DETERMINISTIC_WEIGHTS;
     }
 
     // ============================================================================
@@ -357,14 +356,20 @@ class DeterministicModelSelector {
     extractFamily(modelName) {
         const name = modelName.toLowerCase();
         if (name.includes('qwen2.5')) return 'qwen2.5';
-        if (name.includes('qwen')) return 'qwen';
-        if (name.includes('llama3.2')) return 'llama3.2';
-        if (name.includes('llama3.1')) return 'llama3.1'; 
+        if (name.includes('qwen3')) return 'qwen2.5';
+        if (name.includes('qwen')) return 'qwen2.5';
+        if (name.includes('deepseek')) return 'deepseek';
+        if (name.includes('llama3.2') || name.includes('llama3.3')) return 'llama3.2';
+        if (name.includes('llama3.1')) return 'llama3.1';
         if (name.includes('llama')) return 'llama';
         if (name.includes('mistral')) return 'mistral';
         if (name.includes('gemma')) return 'gemma2';
         if (name.includes('phi')) return 'phi-3';
         if (name.includes('llava')) return 'llava';
+        if (name.includes('granite')) return 'granite';
+        if (name.includes('solar')) return 'solar';
+        if (name.includes('starcoder')) return 'starcoder';
+        if (name.includes('minicpm')) return 'minicpm';
         return 'unknown';
     }
 
@@ -628,31 +633,27 @@ class DeterministicModelSelector {
     }
 
     estimateRequiredGB(model, quant, ctx) {
-        // Estimate quantized model size (simplified)
-        const baseSize = model.sizeGB || (model.paramsB * 0.6); // Rough estimate
-        const quantMultiplier = this.getQuantSizeMultiplier(quant);
-        const modelMemGB = baseSize * quantMultiplier * 1.10; // 10% overhead
-        
-        // KV cache: ~0.125 MB per token per billion params  
-        const kvCacheGB = 0.000125 * model.paramsB * ctx;
-        
-        // Runtime overhead
-        const runtimeOverhead = 0.4;
-        
-        return modelMemGB + kvCacheGB + runtimeOverhead;
-    }
-
-    getQuantSizeMultiplier(quant) {
-        // Approximate size multipliers for quantization
-        const multipliers = {
-            'Q8_0': 1.0,
-            'Q6_K': 0.75,
-            'Q5_K_M': 0.625,
-            'Q4_K_M': 0.5,
-            'Q3_K': 0.375,
-            'Q2_K': 0.25
+        // Bytes per parameter by quantization level (calibrated to real Ollama sizes)
+        // 7B Q4_K_M=~4.5GB, 14B Q4_K_M=~9GB, 32B Q4_K_M=~19GB
+        const bytesPerParam = {
+            'Q8_0': 1.05,
+            'Q6_K': 0.80,
+            'Q5_K_M': 0.68,
+            'Q4_K_M': 0.58,
+            'Q3_K': 0.48,
+            'Q2_K': 0.37
         };
-        return multipliers[quant] || 0.5;
+        const bpp = bytesPerParam[quant] || 0.63;
+        const modelMemGB = model.paramsB * bpp;
+
+        // KV cache: ~2 * numLayers * hiddenDim * 2bytes * ctx / 1e9
+        // Simplified: ~0.000008 GB per billion params per context token
+        const kvCacheGB = 0.000008 * model.paramsB * ctx;
+
+        // Runtime overhead (Metal/CUDA context, buffers)
+        const runtimeOverhead = 0.5;
+
+        return modelMemGB + kvCacheGB + runtimeOverhead;
     }
 
     calculateQualityPrior(model, quant, category) {
@@ -913,6 +914,180 @@ class DeterministicModelSelector {
 
     getHardwareFingerprint(hardware) {
         return `${hardware.cpu.architecture}_${hardware.cpu.cores}c_${hardware.memory.totalGB}gb_${hardware.gpu.type}`;
+    }
+
+    // ============================================================================
+    // FORMAT HELPERS (migrated from enhanced-selector.js)
+    // ============================================================================
+
+    /**
+     * Map a candidate to the legacy format expected by callers
+     */
+    mapCandidateToLegacyFormat(candidate) {
+        return {
+            model_name: candidate.meta.name,
+            model_identifier: candidate.meta.model_identifier,
+            categoryScore: candidate.score,
+            hardwareScore: candidate.components ? candidate.components.F : 90,
+            specializationScore: candidate.components ? candidate.components.Q : 85,
+            popularityScore: candidate.components ? Math.min(100, (candidate.meta.pulls || 0) / 100000 * 100) : 10,
+            efficiencyScore: candidate.components ? candidate.components.S : 80,
+            pulls: candidate.meta.pulls || 0,
+            size: candidate.meta.paramsB,
+            family: candidate.meta.family,
+            category: this.inferCategoryFromModel(candidate.meta),
+            tags: candidate.meta.tags || [],
+            quantization: candidate.quant,
+            estimatedRAM: candidate.requiredGB,
+            reasoning: candidate.rationale
+        };
+    }
+
+    mapHardwareTier(hardware) {
+        let ram, cores;
+
+        if (hardware.memory && hardware.memory.totalGB) {
+            ram = hardware.memory.totalGB;
+        } else if (hardware.memory && hardware.memory.total) {
+            ram = hardware.memory.total;
+        } else if (hardware.total_ram_gb) {
+            ram = hardware.total_ram_gb;
+        } else {
+            ram = 8;
+        }
+
+        if (hardware.cpu && hardware.cpu.cores) {
+            cores = hardware.cpu.cores;
+        } else if (hardware.cpu_cores) {
+            cores = hardware.cpu_cores;
+        } else {
+            cores = 4;
+        }
+
+        if (ram >= 64 && cores >= 16) return 'extreme';
+        if (ram >= 32 && cores >= 12) return 'very_high';
+        if (ram >= 16 && cores >= 8) return 'high';
+        if (ram >= 8 && cores >= 4) return 'medium';
+        return 'low';
+    }
+
+    getCategoryInfo(category) {
+        const categoryData = {
+            coding: { weight: 1.0, keywords: ['code', 'programming', 'coder'] },
+            reasoning: { weight: 1.2, keywords: ['reasoning', 'logic', 'math'] },
+            multimodal: { weight: 1.1, keywords: ['vision', 'image', 'multimodal'] },
+            creative: { weight: 0.9, keywords: ['creative', 'writing', 'story'] },
+            talking: { weight: 1.0, keywords: ['chat', 'conversation', 'assistant'] },
+            reading: { weight: 1.0, keywords: ['reading', 'comprehension', 'text'] },
+            general: { weight: 1.0, keywords: ['general', 'assistant', 'helper'] }
+        };
+        return categoryData[category] || categoryData.general;
+    }
+
+    inferCategoryFromModel(model) {
+        const name = model.name.toLowerCase();
+        const tags = model.tags || [];
+
+        if (tags.includes('coder') || name.includes('code')) return 'coding';
+        if (tags.includes('vision') || (model.modalities && model.modalities.includes('vision'))) return 'multimodal';
+        if (tags.includes('embed')) return 'embeddings';
+        if (name.includes('creative') || name.includes('wizard')) return 'creative';
+
+        return 'general';
+    }
+
+    formatModelSize(model) {
+        if (model.paramsB) return `${model.paramsB}B`;
+        if (model.size) return `${model.size}B`;
+        return 'Unknown';
+    }
+
+    /**
+     * Generate recommendations by category (main API, replaces EnhancedModelSelector)
+     */
+    async getBestModelsForHardware(hardware, allModels) {
+        const categories = ['coding', 'reasoning', 'multimodal', 'creative', 'talking', 'reading', 'general'];
+        const recommendations = {};
+
+        for (const category of categories) {
+            try {
+                const result = await this.selectModels(category, {
+                    topN: 3,
+                    enableProbe: false,
+                    silent: true
+                });
+
+                recommendations[category] = {
+                    tier: this.mapHardwareTier(hardware),
+                    bestModels: result.candidates.map(candidate => this.mapCandidateToLegacyFormat(candidate)),
+                    totalEvaluated: result.total_evaluated,
+                    category: this.getCategoryInfo(category)
+                };
+            } catch (error) {
+                recommendations[category] = {
+                    tier: this.mapHardwareTier(hardware),
+                    bestModels: [],
+                    totalEvaluated: 0,
+                    category: this.getCategoryInfo(category)
+                };
+            }
+        }
+
+        return recommendations;
+    }
+
+    /**
+     * Generate recommendation summary
+     */
+    generateRecommendationSummary(recommendations, hardware) {
+        const summary = {
+            hardware_tier: this.mapHardwareTier(hardware),
+            total_categories: Object.keys(recommendations).length,
+            best_overall: null,
+            by_category: {},
+            quick_commands: []
+        };
+
+        let bestOverallScore = 0;
+        let bestOverallModel = null;
+        let bestOverallCategory = null;
+
+        Object.entries(recommendations).forEach(([category, data]) => {
+            const bestModel = data.bestModels[0];
+            if (bestModel) {
+                summary.by_category[category] = {
+                    name: bestModel.model_name || bestModel.name,
+                    identifier: bestModel.model_identifier,
+                    score: Math.round(bestModel.categoryScore || bestModel.score),
+                    command: `ollama pull ${bestModel.model_identifier}`,
+                    size: this.formatModelSize(bestModel),
+                    pulls: bestModel.pulls || 0
+                };
+
+                summary.quick_commands.push(`ollama pull ${bestModel.model_identifier}`);
+
+                const isGeneralCategory = ['general', 'coding', 'talking', 'reading'].includes(category);
+                const score = bestModel.categoryScore || bestModel.score || 0;
+
+                if (isGeneralCategory && (score > bestOverallScore || !bestOverallModel)) {
+                    bestOverallScore = score;
+                    bestOverallModel = bestModel;
+                    bestOverallCategory = category;
+                }
+            }
+        });
+
+        if (bestOverallModel) {
+            summary.best_overall = {
+                name: bestOverallModel.model_name || bestOverallModel.name,
+                identifier: bestOverallModel.model_identifier,
+                category: bestOverallCategory,
+                score: Math.round(bestOverallScore),
+                command: `ollama pull ${bestOverallModel.model_identifier}`
+            };
+        }
+
+        return summary;
     }
 
     // ============================================================================

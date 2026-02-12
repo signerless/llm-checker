@@ -10,20 +10,12 @@
  * FinalScore = Q × wQ + S × wS + F × wF + C × wC
  */
 
+const { SCORING_ENGINE_WEIGHTS } = require('./scoring-config');
+
 class ScoringEngine {
     constructor(options = {}) {
-        // Weight presets for different use cases
-        this.weightPresets = {
-            general: { Q: 0.40, S: 0.35, F: 0.15, C: 0.10 },
-            coding: { Q: 0.55, S: 0.20, F: 0.15, C: 0.10 },
-            reasoning: { Q: 0.60, S: 0.15, F: 0.10, C: 0.15 },
-            chat: { Q: 0.40, S: 0.40, F: 0.15, C: 0.05 },
-            creative: { Q: 0.50, S: 0.25, F: 0.15, C: 0.10 },
-            embeddings: { Q: 0.30, S: 0.50, F: 0.15, C: 0.05 },
-            vision: { Q: 0.50, S: 0.25, F: 0.15, C: 0.10 },
-            fast: { Q: 0.25, S: 0.55, F: 0.15, C: 0.05 },
-            quality: { Q: 0.65, S: 0.10, F: 0.15, C: 0.10 }
-        };
+        // Weight presets from centralized config
+        this.weightPresets = SCORING_ENGINE_WEIGHTS;
 
         // Model family quality rankings (0-100 base score)
         this.familyQuality = {

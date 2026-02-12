@@ -8,16 +8,12 @@
  * 4. Benchmark-based quality scoring
  */
 
+const { MULTI_OBJECTIVE_WEIGHTS } = require('../models/scoring-config');
+
 class MultiObjectiveSelector {
     constructor() {
-        // Performance weights by category - prioritize hardware match and quality over raw speed
-        this.categoryWeights = {
-            'general': { quality: 0.45, speed: 0.15, ttfb: 0.05, context: 0.05, hardwareMatch: 0.30 },
-            'coding': { quality: 0.45, speed: 0.15, ttfb: 0.05, context: 0.10, hardwareMatch: 0.25 },
-            'reasoning': { quality: 0.50, speed: 0.10, ttfb: 0.05, context: 0.15, hardwareMatch: 0.20 },
-            'multimodal': { quality: 0.40, speed: 0.10, ttfb: 0.05, context: 0.10, hardwareMatch: 0.35 },
-            'longctx': { quality: 0.30, speed: 0.10, ttfb: 0.05, context: 0.35, hardwareMatch: 0.20 }
-        };
+        // Performance weights from centralized config
+        this.categoryWeights = MULTI_OBJECTIVE_WEIGHTS;
 
         // Optimal model sizes by hardware tier (in billions of parameters)
         this.optimalSizes = {

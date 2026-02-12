@@ -26,8 +26,13 @@ class ModelDatabase {
             fs.mkdirSync(dbDir, { recursive: true });
         }
 
-        // Use sql.js (pure JavaScript, works with any Node version)
-        const initSqlJs = require('sql.js');
+        // Use sql.js (optional dependency)
+        let initSqlJs;
+        try {
+            initSqlJs = require('sql.js');
+        } catch (e) {
+            throw new Error('sql.js is not installed. Install it with: npm install sql.js');
+        }
         const SQL = await initSqlJs();
 
         // Load existing database or create new
