@@ -15,6 +15,7 @@ class OllamaClient {
         this.isAvailable = null;
         this.lastCheck = 0;
         this.cacheTimeout = 30000;
+        this._pendingCheck = null;
     }
 
     async checkOllamaAvailability() {
@@ -22,6 +23,21 @@ class OllamaClient {
         if (this.isAvailable !== null && Date.now() - this.lastCheck < this.cacheTimeout) {
             return this.isAvailable;
         }
+
+        // Prevent concurrent requests — reuse in-flight promise
+        if (this._pendingCheck) {
+            return this._pendingCheck;
+        }
+
+        this._pendingCheck = this._doAvailabilityCheck();
+        try {
+            return await this._pendingCheck;
+        } finally {
+            this._pendingCheck = null;
+        }
+    }
+
+    async _doAvailabilityCheck() {
 
         try {
             const controller = new AbortController();
@@ -117,13 +133,18 @@ class OllamaClient {
         }
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
             const response = await fetch(`${this.baseURL}/api/ps`, {
-                timeout: 10000,
-                headers: { 
+                signal: controller.signal,
+                headers: {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 }
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 return [];
@@ -150,9 +171,14 @@ class OllamaClient {
     async testConnection() {
         try {
             // Test 1: Version check
+            const versionController = new AbortController();
+            const versionTimeoutId = setTimeout(() => versionController.abort(), 5000);
+
             const versionResponse = await fetch(`${this.baseURL}/api/version`, {
-                timeout: 5000
+                signal: versionController.signal
             });
+
+            clearTimeout(versionTimeoutId);
             
             if (!versionResponse.ok) {
                 return {
@@ -165,9 +191,14 @@ class OllamaClient {
             const versionData = await versionResponse.json();
 
             // Test 2: Tags check
+            const tagsController = new AbortController();
+            const tagsTimeoutId = setTimeout(() => tagsController.abort(), 10000);
+
             const tagsResponse = await fetch(`${this.baseURL}/api/tags`, {
-                timeout: 10000
+                signal: tagsController.signal
             });
+
+            clearTimeout(tagsTimeoutId);
             
             if (!tagsResponse.ok) {
                 return {
@@ -269,6 +300,7 @@ class OllamaClient {
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
+            let receivedSuccess = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -291,12 +323,23 @@ class OllamaClient {
                         }
 
                         if (data.status === 'success') {
+                            receivedSuccess = true;
                             return { success: true, model: modelName };
                         }
+
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
                     } catch (e) {
-                        // Skip malformed JSON lines
+                        if (e.message && !e.message.includes('Unexpected')) {
+                            throw e; // Re-throw real errors, skip JSON parse errors
+                        }
                     }
                 }
+            }
+
+            if (!receivedSuccess) {
+                throw new Error('Stream ended without success confirmation');
             }
 
             return { success: true, model: modelName };
@@ -312,12 +355,17 @@ class OllamaClient {
         }
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
             const response = await fetch(`${this.baseURL}/api/delete`, {
                 method: 'DELETE',
-                timeout: 10000,
+                signal: controller.signal,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelName })
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Failed to delete model: HTTP ${response.status}`);
@@ -338,9 +386,12 @@ class OllamaClient {
         const startTime = Date.now();
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
             const response = await fetch(`${this.baseURL}/api/generate`, {
                 method: 'POST',
-                timeout: 30000,
+                signal: controller.signal,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: modelName,
@@ -351,6 +402,8 @@ class OllamaClient {
                     }
                 })
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Test failed: HTTP ${response.status}`);

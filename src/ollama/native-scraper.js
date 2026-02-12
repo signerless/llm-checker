@@ -58,7 +58,7 @@ class OllamaNativeScraper {
                         req.destroy(new Error('Response too large'));
                         return;
                     }
-                    data += chunk.toString('utf8');
+                    data += chunk;
                 });
 
                 res.on('end', () => {
@@ -83,7 +83,7 @@ class OllamaNativeScraper {
 
     parseModelFromHTML(html) {
         const models = [];
-        const pattern = /<a[^>]*href="\/library\/([^"]*)"[^>]*>[\s\S]*?<h3[^>]*>([^<]*)<\/h3>[\s\S]*?<p[^>]*>([^<]*)<\/p>[\s\S]*?(?:<span[^>]*>([^<]*)<\/span>)[\s\S]*?(?:(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls))[\s\S]*?(?:(\d+)\s*(?:Tags|tags))[\s\S]*?(?:Updated\s*(\d+\s*\w+\s*ago))?[\s\S]*?<\/a>/gi;
+        const pattern = /<a[^>]*href="\/library\/([^"]*)"[^>]*>[\s\S]{0,5000}?<h3[^>]*>([^<]*)<\/h3>[\s\S]{0,2000}?<p[^>]*>([^<]*)<\/p>[\s\S]{0,2000}?(?:<span[^>]*>([^<]*)<\/span>)[\s\S]{0,2000}?(?:(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls))[\s\S]{0,1000}?(?:(\d+)\s*(?:Tags|tags))[\s\S]{0,1000}?(?:Updated\s*(\d+\s*\w+\s*ago))?[\s\S]{0,500}?<\/a>/gi;
 
         let match;
         while ((match = pattern.exec(html)) !== null) {

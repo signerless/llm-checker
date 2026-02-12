@@ -40,13 +40,23 @@ class PluginManager {
         try {
             const pluginName = path.basename(pluginPath, path.extname(pluginPath));
 
+            // Security: Ensure plugin path is within the plugins directory
+            const resolvedPath = path.resolve(pluginPath);
+            const resolvedPluginsDir = path.resolve(this.pluginsDir);
+            if (!resolvedPath.startsWith(resolvedPluginsDir + path.sep)) {
+                this.logger.warn(`Blocked plugin outside plugins directory: ${pluginPath}`);
+                return false;
+            }
+
             // Load plugin configuration or code
+            // WARNING: Code plugins execute with full Node.js permissions.
+            // Only load plugins from trusted sources.
             let plugin;
             if (pluginPath.endsWith('.json')) {
                 plugin = JSON.parse(fs.readFileSync(pluginPath, 'utf8'));
                 plugin.type = 'config';
             } else {
-                plugin = require(pluginPath);
+                plugin = require(resolvedPath);
                 plugin.type = 'code';
             }
 

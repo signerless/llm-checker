@@ -1,0 +1,15 @@
+tests/
+scripts/
+ml-model/
+.git/
+.github/
+*.test.js
+*.spec.js
+coverage/
+.DS_Store
+debug-ollama.js
+llmlogo.jpg
+ADVANCED_USAGE.md
+CHANGELOG.md
+TECHNICAL_DOCS.md
+USAGE_GUIDE.md

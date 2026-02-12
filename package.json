@@ -1,13 +1,14 @@
 {
-  "name": "ollama-checker",
+  "name": "llm-checker",
   "version": "3.0.7",
   "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
+    "llm-checker": "bin/enhanced_cli.js",
     "ollama-checker": "bin/enhanced_cli.js"
   },
   "main": "src/index.js",
   "scripts": {
-    "test": "jest",
+    "test": "node tests/run-all-tests.js",
     "test:gpu": "node tests/gpu-detection/multi-gpu.test.js",
     "test:platform": "node tests/platform-tests/cross-platform.test.js",
     "test:ui": "node tests/ui-tests/interface.test.js",
@@ -87,10 +88,7 @@
     "bin/",
     "src/",
     "analyzer/",
-    "ml-model/",
     "README.md",
-    "USAGE_GUIDE.md",
-    "TECHNICAL_DOCS.md",
     "LICENSE"
   ]
 }

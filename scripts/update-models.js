@@ -162,10 +162,11 @@ class ModelDatabaseUpdater {
 
         let currentModels;
         try {
-            // Safely evaluate the models array
-            currentModels = eval(modelsMatch[1]);
+            // Parse the models array safely using Function constructor
+            // (avoids eval while handling JS object literals with unquoted keys)
+            currentModels = (new Function('return ' + modelsMatch[1]))();
         } catch (error) {
-            throw new Error('Could not parse current models array');
+            throw new Error('Could not parse current models array: ' + error.message);
         }
 
         // Merge new models (avoid duplicates)

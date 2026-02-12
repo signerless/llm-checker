@@ -59,9 +59,9 @@ class ConfigManager {
             },
             hardware: {
                 overrides: {
-                    ram: process.env.LLM_CHECKER_RAM_GB ? parseInt(process.env.LLM_CHECKER_RAM_GB) : null,
-                    vram: process.env.LLM_CHECKER_VRAM_GB ? parseInt(process.env.LLM_CHECKER_VRAM_GB) : null,
-                    cpuCores: process.env.LLM_CHECKER_CPU_CORES ? parseInt(process.env.LLM_CHECKER_CPU_CORES) : null,
+                    ram: process.env.LLM_CHECKER_RAM_GB ? (isNaN(parseInt(process.env.LLM_CHECKER_RAM_GB)) ? null : parseInt(process.env.LLM_CHECKER_RAM_GB)) : null,
+                    vram: process.env.LLM_CHECKER_VRAM_GB ? (isNaN(parseInt(process.env.LLM_CHECKER_VRAM_GB)) ? null : parseInt(process.env.LLM_CHECKER_VRAM_GB)) : null,
+                    cpuCores: process.env.LLM_CHECKER_CPU_CORES ? (isNaN(parseInt(process.env.LLM_CHECKER_CPU_CORES)) ? null : parseInt(process.env.LLM_CHECKER_CPU_CORES)) : null,
                     architecture: process.env.LLM_CHECKER_ARCHITECTURE || null
                 },
                 ignoreIntegratedGPU: process.env.LLM_CHECKER_NO_GPU === 'true',
@@ -161,15 +161,18 @@ class ConfigManager {
     applyEnvironmentOverrides() {
         if (!this.config) return;
 
-        // Hardware overrides
+        // Hardware overrides (validate parsed values are valid numbers)
         if (process.env.LLM_CHECKER_RAM_GB) {
-            this.config.hardware.overrides.ram = parseInt(process.env.LLM_CHECKER_RAM_GB);
+            const parsed = parseInt(process.env.LLM_CHECKER_RAM_GB);
+            if (!isNaN(parsed) && parsed > 0) this.config.hardware.overrides.ram = parsed;
         }
         if (process.env.LLM_CHECKER_VRAM_GB) {
-            this.config.hardware.overrides.vram = parseInt(process.env.LLM_CHECKER_VRAM_GB);
+            const parsed = parseInt(process.env.LLM_CHECKER_VRAM_GB);
+            if (!isNaN(parsed) && parsed > 0) this.config.hardware.overrides.vram = parsed;
         }
         if (process.env.LLM_CHECKER_CPU_CORES) {
-            this.config.hardware.overrides.cpuCores = parseInt(process.env.LLM_CHECKER_CPU_CORES);
+            const parsed = parseInt(process.env.LLM_CHECKER_CPU_CORES);
+            if (!isNaN(parsed) && parsed > 0) this.config.hardware.overrides.cpuCores = parsed;
         }
 
         // Ollama overrides

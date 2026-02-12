@@ -7,9 +7,9 @@ class HardwareDetector {
         this.cacheTime = 0;
     }
 
-    async getSystemInfo() {
+    async getSystemInfo(forceFresh = false) {
 
-        if (this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
+        if (!forceFresh && this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
             return this.cache;
         }
 

@@ -135,8 +135,8 @@ class EnhancedOllamaScraper {
             }
         }
 
-        // Pattern 2: Look for model cards with more info
-        const cardPattern = /<a[^>]*href="\/library\/([^"]+)"[^>]*>[\s\S]*?<\/a>/gi;
+        // Pattern 2: Look for model cards with more info (bounded match to prevent ReDoS)
+        const cardPattern = /<a[^>]*href="\/library\/([^"]+)"[^>]*>[\s\S]{0,5000}?<\/a>/gi;
         while ((match = cardPattern.exec(html)) !== null) {
             const id = match[1].toLowerCase().split('/')[0];
             if (!seen.has(id)) {
