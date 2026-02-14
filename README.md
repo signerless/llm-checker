@@ -118,6 +118,8 @@ Restart Claude Code and you're done.
 
 Once connected, Claude can use these tools:
 
+**Core Analysis:**
+
 | Tool | Description |
 |------|-------------|
 | `hw_detect` | Detect your hardware (CPU, GPU, RAM, acceleration backend) |
@@ -126,19 +128,38 @@ Once connected, Claude can use these tools:
 | `installed` | Rank your already-downloaded Ollama models |
 | `search` | Search the Ollama model catalog with filters |
 | `smart_recommend` | Advanced recommendations using the full scoring engine |
-| `ollama_list` | List all downloaded Ollama models |
+
+**Ollama Management:**
+
+| Tool | Description |
+|------|-------------|
+| `ollama_list` | List all downloaded models with params, quant, family, and size |
 | `ollama_pull` | Download a model from the Ollama registry |
-| `ollama_run` | Run a prompt against a local Ollama model |
+| `ollama_run` | Run a prompt against a local model (with tok/s metrics) |
+| `ollama_remove` | Delete a model to free disk space |
+
+**Advanced (MCP-exclusive):**
+
+| Tool | Description |
+|------|-------------|
+| `ollama_optimize` | Generate optimal Ollama env vars for your hardware (NUM_GPU, PARALLEL, FLASH_ATTENTION, etc.) |
+| `benchmark` | Benchmark a model with 3 standardized prompts — measures tok/s, load time, prompt eval |
+| `compare_models` | Head-to-head comparison of two models on the same prompt with speed + response side-by-side |
+| `cleanup_models` | Analyze installed models — find redundancies, cloud-only models, oversized models, and upgrade candidates |
+| `project_recommend` | Scan a project directory (languages, frameworks, size) and recommend the best model for that codebase |
+| `ollama_monitor` | Real-time system status: RAM usage, loaded models, memory headroom analysis |
 
 ### Example Prompts
 
 After setup, you can ask Claude things like:
 
 - *"What's the best coding model for my hardware?"*
-- *"What models do I have installed and how do they rank?"*
-- *"Pull the top reasoning model for my system"*
-- *"Search for multimodal models under 8GB"*
-- *"Run this prompt on qwen2.5-coder"*
+- *"Benchmark qwen2.5-coder and show me the tok/s"*
+- *"Compare llama3.2 vs codellama for coding tasks"*
+- *"Clean up my Ollama — what should I remove?"*
+- *"What model should I use for this Rust project?"*
+- *"Optimize my Ollama config for maximum performance"*
+- *"How much RAM is Ollama using right now?"*
 
 Claude will automatically call the right tools and give you actionable results.
 
