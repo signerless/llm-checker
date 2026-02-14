@@ -244,11 +244,17 @@ class HardwareDetector {
     isIntegratedGPU(model) {
         if (!model) return false;
         const modelLower = model.toLowerCase();
+
+        // Explicitly NOT integrated: dedicated AMD Radeon RX/Instinct cards
+        if (modelLower.includes('radeon rx') || modelLower.includes('radeon pro') ||
+            modelLower.includes('instinct') || modelLower.includes(' rx ')) {
+            return false;
+        }
+
         // Check if GPU is integrated (on-chip or shared memory, not discrete)
-        // Note: && has higher precedence than ||, each line is grouped with ()
         return (modelLower.includes('intel') && !modelLower.includes('arc')) ||
             (modelLower.includes('amd') && modelLower.includes('graphics') && !modelLower.includes(' rx ')) ||
-            (modelLower.includes('radeon') && modelLower.includes('graphics')) ||
+            (modelLower.includes('radeon') && modelLower.includes('graphics') && !modelLower.includes('rx')) ||
             modelLower.includes('iris') ||
             modelLower.includes('uhd') ||
             modelLower.includes('hd graphics') ||

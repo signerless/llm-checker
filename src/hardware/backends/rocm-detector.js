@@ -1,25 +1,75 @@
 /**
  * ROCm Detector
- * Detects AMD GPUs using rocm-smi
+ * Detects AMD GPUs using rocm-smi, rocminfo, lspci, and sysfs
  * Supports multi-GPU setups and ROCm capabilities
+ * Falls back to lspci/sysfs when ROCm tools are not installed
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 class ROCmDetector {
     constructor() {
         this.cache = null;
         this.isAvailable = null;
+        this.detectionMethod = null;  // 'rocm-smi', 'rocminfo', 'lspci', 'sysfs'
     }
 
+    // AMD PCI device IDs for model name resolution
+    static AMD_DEVICE_IDS = {
+        // RDNA 3 (RX 7000 series)
+        '744c': { name: 'AMD Radeon RX 7900 XTX', vram: 24 },
+        '7448': { name: 'AMD Radeon RX 7900 XT', vram: 20 },
+        '7460': { name: 'AMD Radeon RX 7900 GRE', vram: 16 },
+        '7480': { name: 'AMD Radeon RX 7800 XT', vram: 16 },
+        '7481': { name: 'AMD Radeon RX 7700 XT', vram: 12 },
+        '7483': { name: 'AMD Radeon RX 7600', vram: 8 },
+        '7484': { name: 'AMD Radeon RX 7600 XT', vram: 16 },
+        // RDNA 2 (RX 6000 series)
+        '73a5': { name: 'AMD Radeon RX 6950 XT', vram: 16 },
+        '73bf': { name: 'AMD Radeon RX 6900 XT', vram: 16 },
+        '73a3': { name: 'AMD Radeon RX 6800 XT', vram: 16 },
+        '73a2': { name: 'AMD Radeon RX 6800', vram: 16 },
+        '73df': { name: 'AMD Radeon RX 6700 XT', vram: 12 },
+        '73ff': { name: 'AMD Radeon RX 6600 XT', vram: 8 },
+        '73e3': { name: 'AMD Radeon RX 6600', vram: 8 },
+        // CDNA / Instinct
+        '740f': { name: 'AMD Instinct MI300X', vram: 192 },
+        '740c': { name: 'AMD Instinct MI300A', vram: 128 },
+        '7408': { name: 'AMD Instinct MI250X', vram: 128 },
+        '740a': { name: 'AMD Instinct MI250', vram: 64 },
+        '738c': { name: 'AMD Instinct MI210', vram: 64 },
+        '7388': { name: 'AMD Instinct MI100', vram: 32 },
+    };
+
     /**
-     * Check if ROCm is available
+     * Check if AMD GPU is available (ROCm tools, lspci, or sysfs)
      */
     checkAvailability() {
         if (this.isAvailable !== null) {
             return this.isAvailable;
         }
 
+        // Only check on Linux
+        if (process.platform !== 'linux') {
+            // On non-Linux, only ROCm tools matter
+            try {
+                execSync('rocm-smi --version', {
+                    encoding: 'utf8',
+                    timeout: 5000,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+                this.isAvailable = true;
+                this.detectionMethod = 'rocm-smi';
+                return true;
+            } catch (e) {
+                this.isAvailable = false;
+                return false;
+            }
+        }
+
+        // 1. Try rocm-smi
         try {
             execSync('rocm-smi --version', {
                 encoding: 'utf8',
@@ -27,21 +77,66 @@ class ROCmDetector {
                 stdio: ['pipe', 'pipe', 'pipe']
             });
             this.isAvailable = true;
+            this.detectionMethod = 'rocm-smi';
+            return true;
         } catch (e) {
-            // Try alternative rocminfo command
-            try {
-                execSync('rocminfo', {
-                    encoding: 'utf8',
-                    timeout: 5000,
-                    stdio: ['pipe', 'pipe', 'pipe']
-                });
-                this.isAvailable = true;
-            } catch (e2) {
-                this.isAvailable = false;
-            }
+            // Continue to next method
         }
 
-        return this.isAvailable;
+        // 2. Try rocminfo
+        try {
+            execSync('rocminfo', {
+                encoding: 'utf8',
+                timeout: 5000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            this.isAvailable = true;
+            this.detectionMethod = 'rocminfo';
+            return true;
+        } catch (e) {
+            // Continue to next method
+        }
+
+        // 3. Try lspci for AMD GPUs (vendor ID 1002)
+        try {
+            const lspci = execSync('lspci | grep -i "VGA\\|3D\\|Display" | grep -i "AMD\\|ATI\\|Radeon"', {
+                encoding: 'utf8',
+                timeout: 5000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            if (lspci.trim().length > 0) {
+                this.isAvailable = true;
+                this.detectionMethod = 'lspci';
+                return true;
+            }
+        } catch (e) {
+            // Continue to next method
+        }
+
+        // 4. Try sysfs for AMD GPUs (vendor 0x1002)
+        try {
+            const drmPath = '/sys/class/drm';
+            const entries = fs.readdirSync(drmPath);
+            const hasAMD = entries.some(node => {
+                try {
+                    const vendorPath = path.join(drmPath, node, 'device/vendor');
+                    const vendor = fs.readFileSync(vendorPath, 'utf8').trim();
+                    return vendor === '0x1002';  // AMD vendor ID
+                } catch (e) {
+                    return false;
+                }
+            });
+            if (hasAMD) {
+                this.isAvailable = true;
+                this.detectionMethod = 'sysfs';
+                return true;
+            }
+        } catch (e) {
+            // No sysfs access
+        }
+
+        this.isAvailable = false;
+        return false;
     }
 
     /**
@@ -66,7 +161,7 @@ class ROCmDetector {
     }
 
     /**
-     * Get detailed GPU information using rocm-smi
+     * Get detailed GPU information using best available method
      */
     getGPUInfo() {
         const result = {
@@ -78,6 +173,45 @@ class ROCmDetector {
             speedCoefficient: 0
         };
 
+        // Try methods in order of detail level
+        let detected = false;
+
+        // 1. Try rocm-smi (most detailed)
+        if (this.detectionMethod === 'rocm-smi' || !this.detectionMethod) {
+            detected = this._detectViaRocmSmi(result);
+        }
+
+        // 2. Try rocminfo
+        if (!detected && (this.detectionMethod === 'rocminfo' || !this.detectionMethod)) {
+            detected = this._detectViaRocmInfo(result);
+        }
+
+        // 3. Try lspci
+        if (!detected && (this.detectionMethod === 'lspci' || !this.detectionMethod)) {
+            detected = this._detectViaLspci(result);
+        }
+
+        // 4. Try sysfs
+        if (!detected && (this.detectionMethod === 'sysfs' || !this.detectionMethod)) {
+            detected = this._detectViaSysfs(result);
+        }
+
+        if (!detected || result.gpus.length === 0) {
+            return null;
+        }
+
+        result.isMultiGPU = result.gpus.length > 1;
+        result.speedCoefficient = result.gpus.length > 0
+            ? Math.max(...result.gpus.map(g => g.speedCoefficient))
+            : 0;
+
+        return result;
+    }
+
+    /**
+     * Detect GPUs via rocm-smi
+     */
+    _detectViaRocmSmi(result) {
         // Get ROCm version
         try {
             const versionOutput = execSync('rocm-smi --version', {
@@ -89,7 +223,7 @@ class ROCmDetector {
                 result.rocmVersion = match[1];
             }
         } catch (e) {
-            // Continue without version
+            return false;
         }
 
         try {
@@ -157,7 +291,7 @@ class ROCmDetector {
                     name: name,
                     memory: {
                         total: vram,
-                        free: vram,  // ROCm doesn't always report free memory
+                        free: vram,
                         used: 0
                     },
                     temperature: temps[i] || 0,
@@ -169,44 +303,231 @@ class ROCmDetector {
                 result.gpus.push(gpu);
                 result.totalVRAM += vram;
             }
+
+            return result.gpus.length > 0;
         } catch (e) {
-            // Fallback to rocminfo
-            try {
-                const rocmInfo = execSync('rocminfo', {
-                    encoding: 'utf8',
-                    timeout: 10000
-                });
+            return false;
+        }
+    }
 
-                // Parse AMD GPUs from rocminfo
-                const agentMatches = rocmInfo.matchAll(/Name:\s*(gfx\d+|AMD.*)/gi);
-                let idx = 0;
-                for (const match of agentMatches) {
-                    const name = match[1].trim();
-                    if (name.toLowerCase().includes('gfx') || name.toLowerCase().includes('amd')) {
-                        const vram = this.estimateVRAMFromGfxName(name);
+    /**
+     * Detect GPUs via rocminfo
+     */
+    _detectViaRocmInfo(result) {
+        try {
+            const rocmInfo = execSync('rocminfo', {
+                encoding: 'utf8',
+                timeout: 10000
+            });
 
-                        result.gpus.push({
-                            index: idx,
-                            name: name,
-                            memory: { total: vram, free: vram, used: 0 },
-                            capabilities: this.getGPUCapabilities(name),
-                            speedCoefficient: this.calculateSpeedCoefficient(name, vram)
-                        });
-                        result.totalVRAM += vram;
-                        idx++;
-                    }
+            const agentMatches = rocmInfo.matchAll(/Name:\s*(gfx\d+|AMD.*)/gi);
+            let idx = 0;
+            for (const match of agentMatches) {
+                const name = match[1].trim();
+                if (name.toLowerCase().includes('gfx') || name.toLowerCase().includes('amd')) {
+                    const vram = this.estimateVRAMFromGfxName(name);
+
+                    result.gpus.push({
+                        index: idx,
+                        name: name,
+                        memory: { total: vram, free: vram, used: 0 },
+                        capabilities: this.getGPUCapabilities(name),
+                        speedCoefficient: this.calculateSpeedCoefficient(name, vram)
+                    });
+                    result.totalVRAM += vram;
+                    idx++;
                 }
-            } catch (e2) {
-                return null;
             }
+
+            return result.gpus.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Detect GPUs via lspci (fallback when ROCm is not installed)
+     */
+    _detectViaLspci(result) {
+        try {
+            const lspciOutput = execSync('lspci -nn | grep -i "VGA\\|3D\\|Display"', {
+                encoding: 'utf8',
+                timeout: 10000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            const lines = lspciOutput.trim().split('\n');
+            let idx = 0;
+
+            for (const line of lines) {
+                // Match AMD/ATI VGA devices: "03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M] [1002:744c]"
+                const amdMatch = line.match(/\[(?:AMD|ATI)\].*?\[([0-9a-f]{4}):([0-9a-f]{4})\]/i) ||
+                                 line.match(/(?:AMD|ATI|Radeon).*?\[([0-9a-f]{4}):([0-9a-f]{4})\]/i);
+
+                if (!amdMatch) continue;
+
+                const vendorId = amdMatch[1].toLowerCase();
+                if (vendorId !== '1002') continue;  // Not AMD
+
+                const deviceId = amdMatch[2].toLowerCase();
+
+                // Try to get model name from device ID map
+                const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[deviceId];
+
+                // Also try to extract name from lspci line itself
+                let lspciName = null;
+                const nameMatch = line.match(/\[(?:AMD|ATI)\]\s*(.+?)\s*\[/);
+                if (nameMatch) {
+                    lspciName = nameMatch[1].trim();
+                }
+
+                const name = deviceInfo?.name || this._resolveAMDModelName(lspciName, deviceId) || `AMD GPU (${deviceId})`;
+                const vram = deviceInfo?.vram || this.estimateVRAMFromModel(name);
+
+                // Try to get VRAM from sysfs for this specific device
+                const sysfsVram = this._getVRAMFromSysfsForDevice(deviceId);
+
+                result.gpus.push({
+                    index: idx,
+                    name: name,
+                    memory: {
+                        total: sysfsVram || vram,
+                        free: sysfsVram || vram,
+                        used: 0
+                    },
+                    capabilities: this.getGPUCapabilities(name),
+                    speedCoefficient: this.calculateSpeedCoefficient(name, sysfsVram || vram)
+                });
+                result.totalVRAM += sysfsVram || vram;
+                idx++;
+            }
+
+            return result.gpus.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Detect GPUs via sysfs (last resort fallback)
+     */
+    _detectViaSysfs(result) {
+        try {
+            const drmPath = '/sys/class/drm';
+            const cards = fs.readdirSync(drmPath).filter(f => f.startsWith('card') && !f.includes('-'));
+            let idx = 0;
+
+            for (const card of cards) {
+                try {
+                    const vendorPath = path.join(drmPath, card, 'device/vendor');
+                    const vendor = fs.readFileSync(vendorPath, 'utf8').trim();
+                    if (vendor !== '0x1002') continue;  // Not AMD
+
+                    const devicePath = path.join(drmPath, card, 'device/device');
+                    const deviceId = fs.readFileSync(devicePath, 'utf8').trim().replace('0x', '').toLowerCase();
+
+                    const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[deviceId];
+                    const name = deviceInfo?.name || `AMD GPU (${deviceId})`;
+                    let vram = deviceInfo?.vram || 8;
+
+                    // Try to read VRAM from sysfs
+                    const vramPaths = [
+                        path.join(drmPath, card, 'device/mem_info_vram_total'),
+                        path.join(drmPath, card, 'device/resource'),
+                    ];
+
+                    for (const vramPath of vramPaths) {
+                        try {
+                            if (vramPath.endsWith('mem_info_vram_total')) {
+                                const bytes = parseInt(fs.readFileSync(vramPath, 'utf8').trim());
+                                if (bytes > 0) {
+                                    vram = Math.round(bytes / (1024 * 1024 * 1024));
+                                    break;
+                                }
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+
+                    result.gpus.push({
+                        index: idx,
+                        name: name,
+                        memory: { total: vram, free: vram, used: 0 },
+                        capabilities: this.getGPUCapabilities(name),
+                        speedCoefficient: this.calculateSpeedCoefficient(name, vram)
+                    });
+                    result.totalVRAM += vram;
+                    idx++;
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            return result.gpus.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Try to get VRAM from sysfs for a specific device ID
+     */
+    _getVRAMFromSysfsForDevice(deviceId) {
+        try {
+            const drmPath = '/sys/class/drm';
+            const cards = fs.readdirSync(drmPath).filter(f => f.startsWith('card') && !f.includes('-'));
+
+            for (const card of cards) {
+                try {
+                    const devPath = path.join(drmPath, card, 'device/device');
+                    const devId = fs.readFileSync(devPath, 'utf8').trim().replace('0x', '').toLowerCase();
+                    if (devId !== deviceId) continue;
+
+                    const vramPath = path.join(drmPath, card, 'device/mem_info_vram_total');
+                    const bytes = parseInt(fs.readFileSync(vramPath, 'utf8').trim());
+                    if (bytes > 0) {
+                        return Math.round(bytes / (1024 * 1024 * 1024));
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+        } catch (e) {
+            // sysfs not available
+        }
+        return null;
+    }
+
+    /**
+     * Resolve AMD model name from lspci description and device ID
+     */
+    _resolveAMDModelName(lspciName, deviceId) {
+        if (!lspciName) return null;
+
+        // lspci often shows names like "Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]"
+        // Extract the bracketed name if present
+        const bracketMatch = lspciName.match(/\[(.+?)\]/);
+        if (bracketMatch) {
+            const bracketName = bracketMatch[1];
+            // If it contains multiple variants separated by /, pick based on device ID
+            if (bracketName.includes('/')) {
+                const variants = bracketName.split('/').map(v => v.trim());
+                // Try to match device ID to specific variant
+                const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[deviceId];
+                if (deviceInfo) return deviceInfo.name;
+                // Default to first variant with "AMD Radeon" prefix
+                return `AMD Radeon ${variants[0]}`;
+            }
+            return `AMD Radeon ${bracketName}`;
         }
 
-        result.isMultiGPU = result.gpus.length > 1;
-        result.speedCoefficient = result.gpus.length > 0
-            ? Math.max(...result.gpus.map(g => g.speedCoefficient))
-            : 0;
+        // If name already looks like a GPU model, use it
+        if (lspciName.match(/R[X5-9]\s*\d+/i) || lspciName.match(/MI\d+/i)) {
+            return `AMD ${lspciName}`;
+        }
 
-        return result;
+        return null;
     }
 
     /**
