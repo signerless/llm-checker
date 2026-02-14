@@ -23,6 +23,7 @@
 <p align="center">
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#claude-code-mcp">Claude MCP</a> &bull;
   <a href="#commands">Commands</a> &bull;
   <a href="#scoring-system">Scoring</a> &bull;
   <a href="#supported-hardware">Hardware</a>
@@ -88,6 +89,58 @@ llm-checker recommend
 llm-checker sync
 llm-checker search qwen --use-case coding
 ```
+
+---
+
+## Claude Code MCP
+
+LLM Checker includes a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server, allowing **Claude Code** and other MCP-compatible AI assistants to analyze your hardware and manage local models directly.
+
+### Setup (One Command)
+
+```bash
+# Install globally first
+npm install -g llm-checker
+
+# Add to Claude Code
+claude mcp add llm-checker -- llm-checker-mcp
+```
+
+Or with npx (no global install needed):
+
+```bash
+claude mcp add llm-checker -- npx llm-checker-mcp
+```
+
+Restart Claude Code and you're done.
+
+### Available MCP Tools
+
+Once connected, Claude can use these tools:
+
+| Tool | Description |
+|------|-------------|
+| `hw_detect` | Detect your hardware (CPU, GPU, RAM, acceleration backend) |
+| `check` | Full compatibility analysis with all models ranked by score |
+| `recommend` | Top model picks by category (coding, reasoning, multimodal, etc.) |
+| `installed` | Rank your already-downloaded Ollama models |
+| `search` | Search the Ollama model catalog with filters |
+| `smart_recommend` | Advanced recommendations using the full scoring engine |
+| `ollama_list` | List all downloaded Ollama models |
+| `ollama_pull` | Download a model from the Ollama registry |
+| `ollama_run` | Run a prompt against a local Ollama model |
+
+### Example Prompts
+
+After setup, you can ask Claude things like:
+
+- *"What's the best coding model for my hardware?"*
+- *"What models do I have installed and how do they rank?"*
+- *"Pull the top reasoning model for my system"*
+- *"Search for multimodal models under 8GB"*
+- *"Run this prompt on qwen2.5-coder"*
+
+Claude will automatically call the right tools and give you actionable results.
 
 ---
 

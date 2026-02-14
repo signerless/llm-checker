@@ -1,10 +1,11 @@
 {
   "name": "llm-checker",
-  "version": "3.0.7",
+  "version": "3.1.0",
   "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
     "llm-checker": "bin/enhanced_cli.js",
-    "ollama-checker": "bin/enhanced_cli.js"
+    "ollama-checker": "bin/enhanced_cli.js",
+    "llm-checker-mcp": "bin/mcp-server.mjs"
   },
   "main": "src/index.js",
   "scripts": {
@@ -27,13 +28,15 @@
     "postinstall": "echo 'LLM Checker installed. Run: llm-checker hw-detect'"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "inquirer": "^8.2.6",
     "node-fetch": "^2.7.0",
     "ora": "^5.4.1",
     "systeminformation": "^5.21.0",
-    "table": "^6.8.1"
+    "table": "^6.8.1",
+    "zod": "^3.23.0"
   },
   "optionalDependencies": {
     "sql.js": "^1.14.0"
@@ -63,7 +66,10 @@
     "performance",
     "benchmark",
     "apple-silicon",
-    "memory-optimization"
+    "memory-optimization",
+    "mcp",
+    "claude",
+    "model-context-protocol"
   ],
   "author": "Pavelevich (https://github.com/Pavelevich)",
   "license": "MIT",
