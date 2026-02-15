@@ -16,6 +16,14 @@ function getLLMChecker() {
 const { getLogger } = require('../src/utils/logger');
 const fs = require('fs');
 const path = require('path');
+const {
+    SUPPORTED_RUNTIMES,
+    normalizeRuntime,
+    runtimeSupportedOnHardware,
+    getRuntimeDisplayName,
+    getRuntimeCommandSet
+} = require('../src/runtime/runtime-support');
+const SpeculativeDecodingEstimator = require('../src/models/speculative-decoding-estimator');
 
 // ASCII Art for each command - Large text banners
 const ASCII_ART = {
@@ -1458,10 +1466,18 @@ function displaySimplifiedSystemInfo(hardware) {
     console.log(`Hardware Tier: ${tierColor.bold(tier)}`);
 }
 
-async function displayModelRecommendations(analysis, hardware, useCase = 'general', limit = 1) {
+async function displayModelRecommendations(analysis, hardware, useCase = 'general', limit = 1, runtime = 'ollama') {
     const title = limit === 1 ? 'RECOMMENDED MODEL' : `TOP ${limit} COMPATIBLE MODELS`;
     console.log(chalk.green.bold(`\n${title}`));
     console.log(chalk.gray('─'.repeat(50)));
+
+    const selectedRuntime = normalizeRuntime(runtime);
+    const runtimeLabel = getRuntimeDisplayName(selectedRuntime);
+    const speculativeEstimator = new SpeculativeDecodingEstimator();
+    const speculativeCandidatePool = [
+        ...(analysis?.compatible || []),
+        ...(analysis?.marginal || [])
+    ];
     
     // Find the best models from compatible models considering use case
     let selectedModels = [];
@@ -1812,42 +1828,75 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
             if (model.performanceEstimate) {
                 console.log(`Estimated Speed: ${chalk.yellow(model.performanceEstimate.estimatedTokensPerSecond || 'N/A')} tokens/sec`);
             }
-            
-            // Check if it's already installed by comparing with Ollama integration
+
+            console.log(`Runtime: ${chalk.white(runtimeLabel)}`);
+            const runtimeCommands = getRuntimeCommandSet(model, selectedRuntime);
+
+            // Check installation only when using Ollama runtime.
             let isInstalled = false;
-            try {
-                isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
-                if (isInstalled) {
-                    console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
-                } else if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
-                    console.log(`Status: ${chalk.gray('Available for installation')}`);
-                } else {
-                    console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+            if (selectedRuntime === 'ollama') {
+                try {
+                    isInstalled = await checkIfModelInstalled(model, analysis.ollamaInfo);
+                    if (isInstalled) {
+                        console.log(`Status: ${chalk.green('Already installed in Ollama')}`);
+                    } else if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
+                        console.log(`Status: ${chalk.gray('Available for installation')}`);
+                    } else {
+                        console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+                    }
+                } catch (installCheckError) {
+                    if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
+                        console.log(`Status: ${chalk.gray('Available for installation')}`);
+                    } else {
+                        console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+                    }
                 }
-            } catch (installCheckError) {
-                // If checking installation status fails, show based on Ollama availability
-                if (analysis.ollamaInfo && analysis.ollamaInfo.available) {
-                    console.log(`Status: ${chalk.gray('Available for installation')}`);
-                } else {
-                    console.log(`Status: ${chalk.yellow('Requires Ollama (not detected)')}`);
+
+                const ollamaCommand = getOllamaInstallCommand(model);
+                if (ollamaCommand) {
+                    const modelName = extractModelName(ollamaCommand);
+                    if (isInstalled) {
+                        console.log(`\nRun: ${chalk.cyan.bold(`ollama run ${modelName}`)}`);
+                    } else {
+                        console.log(`\nPull: ${chalk.cyan.bold(ollamaCommand)}`);
+                    }
+                } else if (model.ollamaTag || model.ollamaId) {
+                    const tag = model.ollamaTag || model.ollamaId;
+                    if (isInstalled) {
+                        console.log(`\nRun: ${chalk.cyan.bold(`ollama run ${tag}`)}`);
+                    } else {
+                        console.log(`\nPull: ${chalk.cyan.bold(`ollama pull ${tag}`)}`);
+                    }
+                }
+            } else {
+                console.log(`Status: ${chalk.gray(`${runtimeLabel} runtime selected`)}`);
+                console.log(`\nRun: ${chalk.cyan.bold(runtimeCommands.run)}`);
+                if (index === 0) {
+                    console.log(`Install runtime: ${chalk.cyan.bold(runtimeCommands.install)}`);
+                    console.log(`Fetch model: ${chalk.cyan.bold(runtimeCommands.pull)}`);
                 }
             }
 
-            // Show pull/run command directly in each model block (Issue #3)
-            const ollamaCommand = getOllamaInstallCommand(model);
-            if (ollamaCommand) {
-                const modelName = extractModelName(ollamaCommand);
-                if (isInstalled) {
-                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama run ${modelName}`)}`);
-                } else {
-                    console.log(`\nCommand: ${chalk.cyan.bold(ollamaCommand)}`);
-                }
-            } else if (model.ollamaTag || model.ollamaId) {
-                const tag = model.ollamaTag || model.ollamaId;
-                if (isInstalled) {
-                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama run ${tag}`)}`);
-                } else {
-                    console.log(`\nCommand: ${chalk.cyan.bold(`ollama pull ${tag}`)}`);
+            const speculativeInfo =
+                model.speculativeDecoding ||
+                speculativeEstimator.estimate({
+                    model,
+                    candidates: speculativeCandidatePool,
+                    hardware,
+                    runtime: selectedRuntime
+                });
+
+            if (speculativeInfo && speculativeInfo.runtime === selectedRuntime) {
+                if (speculativeInfo.enabled) {
+                    console.log(
+                        `SpecDec: ${chalk.green(`+${speculativeInfo.estimatedThroughputGainPct}%`)} ` +
+                        `(${chalk.gray(`draft: ${speculativeInfo.draftModel}`)})`
+                    );
+                } else if (speculativeInfo.estimatedSpeedup) {
+                    const suggested = speculativeInfo.suggestedDraftModel ? ` with ${speculativeInfo.suggestedDraftModel}` : '';
+                    console.log(
+                        `SpecDec estimate: ${chalk.yellow(`+${speculativeInfo.estimatedThroughputGainPct}%`)}${chalk.gray(suggested)}`
+                    );
                 }
             }
         }
@@ -1859,9 +1908,12 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
     return selectedModels;
 }
 
-async function displayQuickStartCommands(analysis, recommendedModel = null, allRecommended = null) {
+async function displayQuickStartCommands(analysis, recommendedModel = null, allRecommended = null, runtime = 'ollama') {
     console.log(chalk.yellow.bold('\nQUICK START'));
     console.log(chalk.gray('─'.repeat(50)));
+
+    const selectedRuntime = normalizeRuntime(runtime);
+    const runtimeLabel = getRuntimeDisplayName(selectedRuntime);
     
     // Use the first model from allRecommended if available, otherwise fallback to recommendedModel
     let bestModel = (allRecommended && allRecommended.length > 0) ? allRecommended[0] : recommendedModel;
@@ -1876,6 +1928,33 @@ async function displayQuickStartCommands(analysis, recommendedModel = null, allR
         }
     }
     
+    if (selectedRuntime !== 'ollama') {
+        if (!bestModel) {
+            console.log(`1. Try expanding search: ${chalk.cyan('llm-checker check --include-cloud')}`);
+            return;
+        }
+
+        const runtimeCommands = getRuntimeCommandSet(bestModel, selectedRuntime);
+        console.log(`1. Install ${runtimeLabel}:`);
+        console.log(`   ${chalk.cyan.bold(runtimeCommands.install)}`);
+        console.log(`2. Fetch model weights:`);
+        console.log(`   ${chalk.cyan.bold(runtimeCommands.pull)}`);
+        console.log(`3. Run model:`);
+        console.log(`   ${chalk.cyan.bold(runtimeCommands.run)}`);
+
+        const speculative = bestModel.speculativeDecoding;
+        if (speculative && speculative.enabled) {
+            console.log(`4. SpecDec suggestion (${chalk.green(`+${speculative.estimatedThroughputGainPct}%`)}):`);
+            if (selectedRuntime === 'vllm') {
+                console.log(`   ${chalk.cyan.bold(`${runtimeCommands.run} --speculative-model '${speculative.draftModelRef || speculative.draftModel}'`)}`);
+            } else if (selectedRuntime === 'mlx') {
+                console.log(`   ${chalk.gray(`Use draft model ${speculative.draftModelRef || speculative.draftModel} when enabling speculative decoding in MLX-LM`)}`);
+            }
+        }
+
+        return;
+    }
+
     if (analysis.ollamaInfo && !analysis.ollamaInfo.available) {
         console.log(`1. Install Ollama: ${chalk.underline('https://ollama.ai')}`);
         console.log(`2. Come back and run this command again`);
@@ -2044,6 +2123,7 @@ program
     .option('--min-size <size>', 'Minimum model size to consider (e.g., "7B" or "7GB")')
     .option('--include-cloud', 'Include cloud models in analysis')
     .option('--ollama-only', 'Only show models available in Ollama')
+    .option('--runtime <runtime>', `Inference runtime (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
     .option('--performance-test', 'Run performance benchmarks')
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
@@ -2060,6 +2140,16 @@ program
             }
 
             const hardware = await checker.getSystemInfo();
+            let selectedRuntime = normalizeRuntime(options.runtime);
+            if (!runtimeSupportedOnHardware(selectedRuntime, hardware)) {
+                const runtimeLabel = getRuntimeDisplayName(selectedRuntime);
+                console.log(
+                    chalk.yellow(
+                        `\nWarning: ${runtimeLabel} is not supported on this hardware. Falling back to Ollama.`
+                    )
+                );
+                selectedRuntime = 'ollama';
+            }
             
             // Normalize and fix use-case typos
             const normalizeUseCase = (useCase = '') => {
@@ -2101,7 +2191,8 @@ program
                 performanceTest: options.performanceTest,
                 limit: parseInt(options.limit) || 10,
                 maxSize: maxSize,
-                minSize: minSize
+                minSize: minSize,
+                runtime: selectedRuntime
             });
 
             if (!verboseEnabled) {
@@ -2110,8 +2201,14 @@ program
 
             // Simplified output - show only essential information
             displaySimplifiedSystemInfo(hardware);
-            const recommendedModels = await displayModelRecommendations(analysis, hardware, normalizedUseCase, parseInt(options.limit) || 1);
-            await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels);
+            const recommendedModels = await displayModelRecommendations(
+                analysis,
+                hardware,
+                normalizedUseCase,
+                parseInt(options.limit) || 1,
+                selectedRuntime
+            );
+            await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels, selectedRuntime);
 
         } catch (error) {
             console.error(chalk.red('\nError:'), error.message);

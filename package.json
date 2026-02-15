@@ -11,6 +11,7 @@
     "test:gpu": "node tests/gpu-detection/multi-gpu.test.js",
     "test:platform": "node tests/platform-tests/cross-platform.test.js",
     "test:ui": "node tests/ui-tests/interface.test.js",
+    "test:runtime": "node tests/runtime-specdec-tests.js",
     "test:all": "node tests/run-all-tests.js",
     "build": "echo 'No build needed'",
     "dev": "node bin/enhanced_cli.js",

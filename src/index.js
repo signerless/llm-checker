@@ -8,6 +8,12 @@ const OllamaClient = require('./ollama/client');
 const { getLogger } = require('./utils/logger');
 const { getOllamaModelsIntegration, OllamaNativeScraper } = require('./ollama/native-scraper');
 const VerboseProgress = require('./utils/verbose-progress');
+const SpeculativeDecodingEstimator = require('./models/speculative-decoding-estimator');
+const {
+    normalizeRuntime,
+    getRuntimePullCommand,
+    getRuntimeRunCommand
+} = require('./runtime/runtime-support');
 
 class LLMChecker {
     constructor(options = {}) {
@@ -17,6 +23,7 @@ class LLMChecker {
         this.ollamaScraper = new OllamaNativeScraper();
         this.compatibilityAnalyzer = new CompatibilityAnalyzer();
         this.performanceAnalyzer = new PerformanceAnalyzer();
+        this.speculativeDecodingEstimator = new SpeculativeDecodingEstimator();
         this.ollamaClient = new OllamaClient();
         this.logger = getLogger().createChild('LLMChecker');
         this.verbose = options.verbose !== false; // Default to verbose unless explicitly disabled
@@ -429,7 +436,7 @@ class LLMChecker {
         if (platform === 'apple_silicon') {
             return await this.analyzeWithAppleSiliconHeuristics(hardware, staticModels, ollamaIntegration, options);
         } else {
-            return await this.analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration);
+            return await this.analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration, options);
         }
     }
 
@@ -510,7 +517,12 @@ class LLMChecker {
             }))
         };
         
-        return mappedResults;
+        return this.attachSpeculativeDecodingEstimates(
+            mappedResults,
+            [...mappedResults.compatible, ...mappedResults.marginal],
+            hardware,
+            options.runtime
+        );
     }
 
     async integrateOllamaModels(hardware, availableModels) {
@@ -616,7 +628,7 @@ class LLMChecker {
         return integration;
     }
 
-    async analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration) {
+    async analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration, options = {}) {
         this.logger.info('Using mathematical heuristics combining database + local models');
         
         try {
@@ -737,8 +749,13 @@ class LLMChecker {
             });
             
             this.logger.info(`Mathematical heuristic results: ${compatibility.compatible.length} compatible, ${compatibility.marginal.length} marginal, ${compatibility.incompatible.length} incompatible`);
-            
-            return compatibility;
+
+            return this.attachSpeculativeDecodingEstimates(
+                compatibility,
+                allUniqueModels,
+                hardware,
+                options.runtime
+            );
             
         } catch (error) {
             this.logger.error('Mathematical heuristic analysis failed, using fallback', { error: error.message });
@@ -858,6 +875,7 @@ class LLMChecker {
         return {
             ...existingModel,
             ollamaId: ollamaModel.model_identifier,
+            frameworks: Array.from(new Set([...(existingModel.frameworks || []), 'ollama', 'vllm', 'mlx'])),
             pulls: ollamaModel.pulls,
             lastUpdated: ollamaModel.last_updated,
             description: ollamaModel.description || existingModel.description,
@@ -869,7 +887,7 @@ class LLMChecker {
             },
             installation: {
                 ...existingModel.installation,
-                ollama: `ollama pull ${ollamaModel.model_identifier}`
+                ...this.createRuntimeInstallationCommands(ollamaModel.model_identifier, ollamaModel.model_name || existingModel.name)
             }
         };
     }
@@ -929,7 +947,7 @@ class LLMChecker {
             type: 'local',
             category: category,
             specialization: specialization,
-            frameworks: ['ollama'],
+            frameworks: ['ollama', 'vllm', 'mlx'],
             requirements: {
                 ram: Math.ceil(sizeNum * 0.6) || 2,
                 vram: Math.ceil(sizeNum * 0.4) || 0,
@@ -937,7 +955,7 @@ class LLMChecker {
                 storage: realStorageSize || Math.ceil(sizeNum * 0.7) || 1
             },
             installation: {
-                ollama: `ollama pull ${ollamaModel.model_identifier}`,
+                ...this.createRuntimeInstallationCommands(ollamaModel.model_identifier, ollamaModel.model_name),
                 description: ollamaModel.description || 'Available in Ollama library'
             },
             description: ollamaModel.description || `${ollamaModel.model_name} from Ollama`,
@@ -1062,7 +1080,7 @@ class LLMChecker {
             type: 'local',
             category: category,
             specialization: specialization,
-            frameworks: ['ollama'],
+            frameworks: ['ollama', 'vllm', 'mlx'],
             requirements: {
                 ram: Math.ceil((parseFloat(size) || 4) * 0.6),
                 vram: Math.ceil((parseFloat(size) || 4) * 0.4),
@@ -1070,7 +1088,7 @@ class LLMChecker {
                 storage: Math.ceil((parseFloat(size) || 4) * 0.7)
             },
             installation: {
-                ollama: `ollama pull ${cloudModel.model_identifier}`,
+                ...this.createRuntimeInstallationCommands(cloudModel.model_identifier, cloudModel.model_name),
                 description: cloudModel.description || 'Model from Ollama library'
             },
             year: 2024,
@@ -1111,6 +1129,54 @@ class LLMChecker {
                 keyword.length > 2 && modelName.includes(keyword)
             );
         });
+    }
+
+    createRuntimeInstallationCommands(modelIdentifier, modelName) {
+        const identifier = String(modelIdentifier || modelName || 'model').trim();
+        const runtimeModel = {
+            model_identifier: identifier,
+            ollamaId: identifier,
+            name: modelName || identifier
+        };
+
+        return {
+            ollama: `ollama pull ${identifier}`,
+            vllm: getRuntimeRunCommand(runtimeModel, 'vllm'),
+            vllmPull: getRuntimePullCommand(runtimeModel, 'vllm'),
+            mlx: getRuntimeRunCommand(runtimeModel, 'mlx'),
+            mlxPull: getRuntimePullCommand(runtimeModel, 'mlx')
+        };
+    }
+
+    attachSpeculativeDecodingEstimates(resultGroups, candidates, hardware, runtime = 'ollama') {
+        const selectedRuntime = normalizeRuntime(runtime);
+        const candidatePool = Array.isArray(candidates) ? candidates : [];
+
+        const withEstimate = (items = []) =>
+            items.map((model) => {
+                const estimate = this.speculativeDecodingEstimator.estimate({
+                    model,
+                    candidates: candidatePool,
+                    hardware,
+                    runtime: selectedRuntime
+                });
+
+                if (!estimate) {
+                    return model;
+                }
+
+                return {
+                    ...model,
+                    speculativeDecoding: estimate
+                };
+            });
+
+        return {
+            ...resultGroups,
+            compatible: withEstimate(resultGroups.compatible),
+            marginal: withEstimate(resultGroups.marginal),
+            incompatible: withEstimate(resultGroups.incompatible)
+        };
     }
 
     async generateOllamaRecommendations(hardware, availableModels, installedModels) {
