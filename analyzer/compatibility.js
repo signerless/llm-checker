@@ -1,4 +1,10 @@
 const { getLogger } = require('../src/utils/logger');
+const {
+    normalizeRuntime,
+    getRuntimeDisplayName,
+    runtimeSupportedOnHardware,
+    runtimeSupportsSpeculativeDecoding
+} = require('../src/runtime/runtime-support');
 
 class CompatibilityAnalyzer {
     constructor() {
@@ -451,6 +457,7 @@ class CompatibilityAnalyzer {
 
     generateRecommendations(hardware, results, options = {}) {
         const recommendations = [];
+        const runtime = normalizeRuntime(options.runtime || 'ollama');
         const tier = this.getHardwareTier(hardware);
 
         if (hardware.memory.total < 16) {
@@ -508,6 +515,19 @@ class CompatibilityAnalyzer {
                 if (ollamaCmd) {
                     recommendations.push(`Try: ${ollamaCmd}`);
                 }
+            }
+        }
+
+        if (runtime !== 'ollama') {
+            const runtimeLabel = getRuntimeDisplayName(runtime);
+            if (runtimeSupportedOnHardware(runtime, hardware)) {
+                recommendations.push(`Runtime selected: ${runtimeLabel}`);
+            } else {
+                recommendations.push(`${runtimeLabel} is not recommended on this hardware (fallback to Ollama).`);
+            }
+
+            if (runtimeSupportsSpeculativeDecoding(runtime)) {
+                recommendations.push(`Enable speculative decoding in ${runtimeLabel} for higher throughput.`);
             }
         }
 
