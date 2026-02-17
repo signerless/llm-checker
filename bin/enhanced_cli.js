@@ -33,6 +33,10 @@ const {
     evaluatePolicyCandidates,
     resolvePolicyEnforcement
 } = require('../src/policy/cli-policy');
+const {
+    buildComplianceReport,
+    serializeComplianceReport
+} = require('../src/policy/audit-reporter');
 const policyManager = new PolicyManager();
 
 // ASCII Art for each command - Large text banners
@@ -2086,6 +2090,77 @@ function loadPolicyConfiguration(policyFile) {
     };
 }
 
+function parseSizeFilterInput(sizeStr) {
+    if (!sizeStr) return null;
+    const match = String(sizeStr)
+        .toUpperCase()
+        .trim()
+        .match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|GB)?$/);
+    if (!match) return null;
+
+    const value = Number.parseFloat(match[1]);
+    const unit = match[2] || 'B';
+
+    // Convert to "B params" approximation used by existing check flow
+    return unit === 'GB' ? value / 0.5 : value;
+}
+
+function normalizeUseCaseInput(useCase = '') {
+    const alias = String(useCase || '')
+        .toLowerCase()
+        .trim();
+
+    const useCaseMap = {
+        embed: 'embeddings',
+        embedding: 'embeddings',
+        embeddings: 'embeddings',
+        embedings: 'embeddings',
+        talk: 'chat',
+        talking: 'chat',
+        conversation: 'chat',
+        chat: 'chat'
+    };
+
+    return useCaseMap[alias] || alias || 'general';
+}
+
+function resolveAuditFormats(formatOption, policy) {
+    const requested = String(formatOption || 'json').trim().toLowerCase();
+    const allowed = new Set(['json', 'csv', 'sarif']);
+
+    if (requested === 'all') {
+        const configured = Array.isArray(policy?.reporting?.formats)
+            ? policy.reporting.formats
+                  .map((entry) => String(entry || '').trim().toLowerCase())
+                  .filter((entry) => allowed.has(entry))
+            : [];
+
+        return configured.length > 0 ? configured : ['json', 'csv', 'sarif'];
+    }
+
+    if (!allowed.has(requested)) {
+        throw new Error('Invalid format. Use one of: json, csv, sarif, all');
+    }
+
+    return [requested];
+}
+
+function toAuditOutputPath({ outputPath, outputDir, commandName, format, timestamp }) {
+    if (outputPath) {
+        return path.resolve(outputPath);
+    }
+
+    const safeTimestamp = timestamp.replace(/[:.]/g, '-');
+    const extension = format === 'sarif' ? 'sarif.json' : format;
+    const fileName = `${commandName}-policy-audit-${safeTimestamp}.${extension}`;
+    return path.resolve(outputDir || 'audit-reports', fileName);
+}
+
+function writeReportFile(filePath, content) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+}
+
 function displayPolicySummary(commandName, policyConfig, evaluation, enforcement) {
     if (!policyConfig || !evaluation || !enforcement) return;
 
@@ -2098,6 +2173,12 @@ function displayPolicySummary(commandName, policyConfig, evaluation, enforcement
     );
     console.log(chalk.magenta('│') + ` Total checked: ${chalk.white.bold(evaluation.totalChecked)}`);
     console.log(chalk.magenta('│') + ` Pass: ${chalk.green.bold(evaluation.passCount)} | Fail: ${chalk.red.bold(evaluation.failCount)}`);
+    console.log(
+        chalk.magenta('│') +
+            ` Suppressed: ${chalk.yellow.bold(evaluation.suppressedViolationCount || 0)} | Exceptions: ${chalk.cyan.bold(
+                evaluation.exceptionsAppliedCount || 0
+            )}`
+    );
 
     if (evaluation.topViolations.length === 0) {
         console.log(chalk.magenta('│') + ` Top violations: ${chalk.green('none')}`);
@@ -2205,6 +2286,151 @@ policyCommand
 
 policyCommand.action(() => {
     policyCommand.outputHelp();
+});
+
+const auditCommand = program
+    .command('audit')
+    .description('Run policy audits and export compliance reports')
+    .showHelpAfterError();
+
+auditCommand
+    .command('export')
+    .description('Evaluate policy compliance and export JSON/CSV/SARIF reports')
+    .requiredOption('--policy <file>', 'Policy file path')
+    .option('--command <name>', 'Evaluation source: check | recommend', 'check')
+    .option('--format <format>', 'Report format: json | csv | sarif | all', 'json')
+    .option('--out <path>', 'Output file path (single-format export only)')
+    .option('--out-dir <path>', 'Output directory when --out is omitted', 'audit-reports')
+    .option('-u, --use-case <case>', 'Use case when --command check is selected', 'general')
+    .option('-c, --category <category>', 'Category hint when --command recommend is selected')
+    .option('--runtime <runtime>', `Runtime for check mode (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
+    .option('--include-cloud', 'Include cloud models in check-mode analysis')
+    .option('--max-size <size>', 'Maximum model size for check mode (e.g., "24B" or "12GB")')
+    .option('--min-size <size>', 'Minimum model size for check mode (e.g., "3B" or "2GB")')
+    .option('-l, --limit <number>', 'Model analysis limit for check mode', '25')
+    .option('--no-verbose', 'Disable verbose progress while collecting audit inputs')
+    .action(async (options) => {
+        try {
+            const policyConfig = loadPolicyConfiguration(options.policy);
+            const selectedCommand = String(options.command || 'check')
+                .toLowerCase()
+                .trim();
+
+            if (!['check', 'recommend'].includes(selectedCommand)) {
+                throw new Error('Invalid --command value. Use "check" or "recommend".');
+            }
+
+            const exportFormats = resolveAuditFormats(options.format, policyConfig.policy);
+            if (options.out && exportFormats.length > 1) {
+                throw new Error('--out can only be used with a single export format.');
+            }
+
+            const verboseEnabled = options.verbose !== false;
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            const hardware = await checker.getSystemInfo();
+
+            let runtimeBackend = 'ollama';
+            let policyCandidates = [];
+            let analysisResult = null;
+            let recommendationResult = null;
+
+            if (selectedCommand === 'check') {
+                let selectedRuntime = normalizeRuntime(options.runtime);
+                if (!runtimeSupportedOnHardware(selectedRuntime, hardware)) {
+                    selectedRuntime = 'ollama';
+                }
+
+                const maxSize = parseSizeFilterInput(options.maxSize);
+                const minSize = parseSizeFilterInput(options.minSize);
+                const normalizedUseCase = normalizeUseCaseInput(options.useCase);
+
+                analysisResult = await checker.analyze({
+                    useCase: normalizedUseCase,
+                    includeCloud: Boolean(options.includeCloud),
+                    limit: Number.parseInt(options.limit, 10) || 25,
+                    maxSize,
+                    minSize,
+                    runtime: selectedRuntime
+                });
+
+                runtimeBackend = selectedRuntime;
+                policyCandidates = collectCandidatesFromAnalysis(analysisResult);
+            } else {
+                recommendationResult = await checker.generateIntelligentRecommendations(hardware);
+                if (!recommendationResult) {
+                    throw new Error('Unable to generate recommendation data for policy audit export.');
+                }
+
+                runtimeBackend = normalizeRuntime(options.runtime || 'ollama');
+                policyCandidates = collectCandidatesFromRecommendationData(recommendationResult);
+            }
+
+            const policyContext = buildPolicyRuntimeContext({
+                hardware,
+                runtimeBackend
+            });
+
+            const policyEvaluation = evaluatePolicyCandidates(
+                policyConfig.policyEngine,
+                policyCandidates,
+                policyContext,
+                policyConfig.policy
+            );
+            const policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
+
+            const report = buildComplianceReport({
+                commandName: selectedCommand,
+                policyPath: policyConfig.policyPath,
+                policy: policyConfig.policy,
+                evaluation: policyEvaluation,
+                enforcement: policyEnforcement,
+                runtimeContext: policyContext,
+                options: {
+                    format: exportFormats,
+                    runtime: runtimeBackend,
+                    use_case: selectedCommand === 'check' ? normalizeUseCaseInput(options.useCase) : null,
+                    category: selectedCommand === 'recommend' ? options.category || null : null,
+                    include_cloud: Boolean(options.includeCloud)
+                },
+                hardware
+            });
+
+            const generatedAt = report.generated_at || new Date().toISOString();
+            const writtenFiles = [];
+            exportFormats.forEach((format) => {
+                const filePath = toAuditOutputPath({
+                    outputPath: options.out,
+                    outputDir: options.outDir,
+                    commandName: selectedCommand,
+                    format,
+                    timestamp: generatedAt
+                });
+                const content = serializeComplianceReport(report, format);
+                writeReportFile(filePath, content);
+                writtenFiles.push({ format, filePath });
+            });
+
+            displayPolicySummary(`audit ${selectedCommand}`, policyConfig, policyEvaluation, policyEnforcement);
+
+            console.log('\n' + chalk.bgBlue.white.bold(' AUDIT EXPORT '));
+            writtenFiles.forEach((entry) => {
+                console.log(`${chalk.cyan(entry.format.toUpperCase())}: ${chalk.white(entry.filePath)}`);
+            });
+
+            if (policyEnforcement.shouldBlock) {
+                process.exit(policyEnforcement.exitCode);
+            }
+        } catch (error) {
+            console.error(chalk.red(`Audit export failed: ${error.message}`));
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
+
+auditCommand.action(() => {
+    auditCommand.outputHelp();
 });
 
 program
@@ -2320,7 +2546,8 @@ Policy scope:
                 policyEvaluation = evaluatePolicyCandidates(
                     policyConfig.policyEngine,
                     policyCandidates,
-                    policyContext
+                    policyContext,
+                    policyConfig.policy
                 );
                 policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
             }
@@ -2616,7 +2843,8 @@ Enterprise policy examples:
                 policyEvaluation = evaluatePolicyCandidates(
                     policyConfig.policyEngine,
                     policyCandidates,
-                    policyContext
+                    policyContext,
+                    policyConfig.policy
                 );
                 policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
             }

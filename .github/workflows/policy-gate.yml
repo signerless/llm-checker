@@ -1,0 +1,50 @@
+name: Policy Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  policy-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create and validate policy template
+        run: |
+          mkdir -p .ci-policy
+          node bin/enhanced_cli.js policy init --file .ci-policy/policy.yaml
+          node bin/enhanced_cli.js policy validate --file .ci-policy/policy.yaml
+
+      - name: Run policy tests
+        run: |
+          npm run test:policy-engine
+          npm run test:policy-cli
+          npm run test:policy
+          npm run test:policy-e2e
+
+      - name: Generate policy audit reports
+        run: |
+          node -e "const fs=require('fs');const YAML=require('yaml');const policyPath='.ci-policy/policy.yaml';const policy=YAML.parse(fs.readFileSync(policyPath,'utf8'));policy.mode='audit';fs.writeFileSync(policyPath,YAML.stringify(policy));"
+          node bin/enhanced_cli.js audit export --policy .ci-policy/policy.yaml --command check --format all --runtime ollama --no-verbose --out-dir .ci-policy/reports
+
+      - name: Upload policy audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: policy-audit-reports
+          path: .ci-policy/reports
+          if-no-files-found: error

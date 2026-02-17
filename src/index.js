@@ -14,6 +14,10 @@ const {
     getRuntimePullCommand,
     getRuntimeRunCommand
 } = require('./runtime/runtime-support');
+const {
+    attachModelProvenance,
+    attachProvenanceToCollection
+} = require('./provenance/model-provenance');
 
 class LLMChecker {
     constructor(options = {}) {
@@ -275,9 +279,9 @@ class LLMChecker {
 
         return {
             hardware,
-            compatible: enrichedResults.compatible,
-            marginal: enrichedResults.marginal,
-            incompatible: enrichedResults.incompatible,
+            compatible: attachProvenanceToCollection(enrichedResults.compatible),
+            marginal: attachProvenanceToCollection(enrichedResults.marginal),
+            incompatible: attachProvenanceToCollection(enrichedResults.incompatible),
             recommendations,
             intelligentRecommendations,
             ollamaInfo: ollamaIntegration.ollamaInfo,
@@ -499,11 +503,17 @@ class LLMChecker {
             
             // Agregar modelos estáticos
             staticModels.forEach(model => {
-                allModelsMap.set(model.name, {
-                    ...model,
-                    source: 'static_database',
-                    isOllamaInstalled: false
-                });
+                allModelsMap.set(
+                    model.name,
+                    attachModelProvenance(
+                        {
+                            ...model,
+                            source: 'static_database',
+                            isOllamaInstalled: false
+                        },
+                        { source: 'static_database' }
+                    )
+                );
             });
             
             // Agregar modelos de Ollama (con prioridad si ya existen)
@@ -513,14 +523,26 @@ class LLMChecker {
                 if (modelKey) {
                     // Mejorar modelo existente con datos de Ollama
                     const existing = allModelsMap.get(modelKey);
-                    allModelsMap.set(modelKey, {
-                        ...existing,
-                        ...this.createEnhancedModelFromOllama(ollamaModel, existing),
-                        source: 'enhanced_with_ollama'
-                    });
+                    allModelsMap.set(
+                        modelKey,
+                        attachModelProvenance(
+                            {
+                                ...existing,
+                                ...this.createEnhancedModelFromOllama(ollamaModel, existing),
+                                source: 'enhanced_with_ollama'
+                            },
+                            { source: 'enhanced_with_ollama' }
+                        )
+                    );
                 } else {
                     // Crear nuevo modelo desde datos de Ollama
-                    const newModel = this.createModelFromOllamaData(ollamaModel);
+                    const newModel = attachModelProvenance(
+                        {
+                            ...this.createModelFromOllamaData(ollamaModel),
+                            source: 'ollama_database'
+                        },
+                        { source: 'ollama_database' }
+                    );
                     allModelsMap.set(newModel.name, {
                         ...newModel,
                         source: 'ollama_database'
@@ -703,6 +725,8 @@ class LLMChecker {
     createEnhancedModelFromOllama(ollamaModel, existingModel) {
         // Extract real file size from variants if available
         let realStorageSize = null;
+        let selectedTag = ollamaModel.model_identifier;
+        let selectedDigest = null;
         if (ollamaModel.variants && ollamaModel.variants.length > 0) {
             // Try to match based on the existing model size
             let mainVariant = null;
@@ -727,9 +751,13 @@ class LLMChecker {
             if (mainVariant && mainVariant.real_size_gb) {
                 realStorageSize = mainVariant.real_size_gb;
             }
+            if (mainVariant && mainVariant.tag) {
+                selectedTag = mainVariant.tag;
+            }
+            selectedDigest = mainVariant?.digest || mainVariant?.sha256 || null;
         }
 
-        return {
+        const model = {
             ...existingModel,
             ollamaId: ollamaModel.model_identifier,
             frameworks: Array.from(new Set([...(existingModel.frameworks || []), 'ollama', 'vllm', 'mlx'])),
@@ -745,8 +773,18 @@ class LLMChecker {
             installation: {
                 ...existingModel.installation,
                 ...this.createRuntimeInstallationCommands(ollamaModel.model_identifier, ollamaModel.model_name || existingModel.name)
-            }
+            },
+            source: 'enhanced_with_ollama',
+            registry: 'ollama.com',
+            version: selectedTag,
+            license: ollamaModel.license || existingModel.license,
+            digest: selectedDigest || existingModel.digest
         };
+
+        return attachModelProvenance(model, {
+            source: 'enhanced_with_ollama',
+            registry: 'ollama.com'
+        });
     }
     
     createModelFromOllamaData(ollamaModel) {
@@ -774,6 +812,8 @@ class LLMChecker {
         
         // Extract real file size from variants if available
         let realStorageSize = null;
+        let selectedTag = ollamaModel.model_identifier;
+        let selectedDigest = null;
         if (ollamaModel.variants && ollamaModel.variants.length > 0) {
             // Find the main variant (usually the first one or one matching the base model name)
             const mainVariant = ollamaModel.variants.find(v => 
@@ -784,6 +824,10 @@ class LLMChecker {
             if (mainVariant && mainVariant.real_size_gb) {
                 realStorageSize = mainVariant.real_size_gb;
             }
+            if (mainVariant && mainVariant.tag) {
+                selectedTag = mainVariant.tag;
+            }
+            selectedDigest = mainVariant?.digest || mainVariant?.sha256 || null;
         }
         
         let category = 'medium';
@@ -797,7 +841,7 @@ class LLMChecker {
         if (id.includes('code')) specialization = 'code';
         else if (id.includes('embed')) specialization = 'embeddings';
         
-        return {
+        const model = {
             name: ollamaModel.model_name,
             ollamaId: ollamaModel.model_identifier,
             size: size,
@@ -819,8 +863,18 @@ class LLMChecker {
             pulls: ollamaModel.pulls,
             lastUpdated: ollamaModel.last_updated,
             year: 2024,
-            ollamaAvailable: true
+            ollamaAvailable: true,
+            source: 'ollama_database',
+            registry: 'ollama.com',
+            version: selectedTag,
+            license: ollamaModel.license,
+            digest: selectedDigest
         };
+
+        return attachModelProvenance(model, {
+            source: 'ollama_database',
+            registry: 'ollama.com'
+        });
     }
     
     checkIfModelInstalled(model, ollamaIntegration) {
@@ -931,7 +985,7 @@ class LLMChecker {
         else if (id.includes('chat')) specialization = 'chat';
         else if (id.includes('embed')) specialization = 'embeddings';
 
-        return {
+        const model = {
             name: cloudModel.model_name,
             size: size,
             type: 'local',
@@ -955,8 +1009,18 @@ class LLMChecker {
                 url: cloudModel.url,
                 model_type: cloudModel.model_type,
                 identifier: cloudModel.model_identifier
-            }
+            },
+            source: 'ollama_registry',
+            registry: 'ollama.com',
+            version: cloudModel.model_identifier,
+            license: cloudModel.license,
+            digest: cloudModel.digest || cloudModel.sha256
         };
+
+        return attachModelProvenance(model, {
+            source: 'ollama_registry',
+            registry: 'ollama.com'
+        });
     }
 
     findMatchingModel(ollamaModel, availableModels) {

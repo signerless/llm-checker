@@ -88,7 +88,11 @@ function toPolicyCandidateFromSummary(modelSummary) {
         size: modelSummary.size || null,
         params_b: paramsB,
         quant: quant || undefined,
-        source: 'local'
+        source: modelSummary.source || 'local',
+        license: modelSummary.license,
+        version: modelSummary.version,
+        digest: modelSummary.digest,
+        provenance: modelSummary.provenance
     };
 }
 
@@ -132,12 +136,195 @@ function buildPolicyRuntimeContext({ hardware, runtimeBackend } = {}) {
     };
 }
 
-function evaluatePolicyCandidates(policyEngine, candidates, context = {}) {
+function getCandidateTargets(model) {
+    if (!isPlainObject(model)) return [];
+
+    const targets = [
+        model.model_identifier,
+        model.modelIdentifier,
+        model.identifier,
+        model.tag,
+        model.model_id,
+        model.modelId,
+        model.name,
+        model.model_name
+    ]
+        .map((entry) => toLowerString(entry))
+        .filter(Boolean);
+
+    return Array.from(new Set(targets));
+}
+
+function patternToRegex(pattern) {
+    const escaped = String(pattern || '')
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*');
+
+    return new RegExp(`^${escaped}$`, 'i');
+}
+
+function parseExceptionExpiry(expiresAt) {
+    if (!expiresAt) return null;
+
+    const raw = String(expiresAt).trim();
+    if (!raw) return null;
+
+    const hasTime = /t|\d{2}:\d{2}/i.test(raw);
+    const candidate = hasTime ? raw : `${raw}T23:59:59.999Z`;
+    const parsed = new Date(candidate);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isExceptionEntryActive(entry, now) {
+    const expiry = parseExceptionExpiry(entry?.expires_at);
+    if (!expiry) return true;
+    return expiry.getTime() >= now.getTime();
+}
+
+function findMatchingException(policy, model, now = new Date()) {
+    if (policy?.enforcement?.allow_exceptions !== true) return null;
+    if (!Array.isArray(policy?.exceptions) || policy.exceptions.length === 0) return null;
+
+    const targets = getCandidateTargets(model);
+    if (targets.length === 0) return null;
+
+    for (const entry of policy.exceptions) {
+        if (!isPlainObject(entry)) continue;
+        const pattern = String(entry.model || '').trim();
+        if (!pattern) continue;
+        if (!isExceptionEntryActive(entry, now)) continue;
+
+        const matcher = patternToRegex(pattern);
+        if (targets.some((target) => matcher.test(target))) {
+            return {
+                model: pattern,
+                reason: entry.reason || '',
+                approver: entry.approver || '',
+                expires_at: entry.expires_at || '',
+                matched_target: targets.find((target) => matcher.test(target)) || targets[0]
+            };
+        }
+    }
+
+    return null;
+}
+
+function applyPolicyExceptions(policy, evaluated) {
+    const now = new Date();
+    let exceptionsAppliedCount = 0;
+    let suppressedViolationCount = 0;
+
+    const updated = (Array.isArray(evaluated) ? evaluated : []).map((item) => {
+        if (!isPlainObject(item)) return item;
+
+        const policyResult = isPlainObject(item.policyResult) ? item.policyResult : null;
+        const violations = Array.isArray(policyResult?.violations) ? policyResult.violations : [];
+
+        if (!policyResult || violations.length === 0) {
+            return item;
+        }
+
+        const matchedException = findMatchingException(policy, item, now);
+        if (!matchedException) {
+            return item;
+        }
+
+        exceptionsAppliedCount += 1;
+        suppressedViolationCount += violations.length;
+
+        const rationale = Array.isArray(policyResult.rationale) ? [...policyResult.rationale] : [];
+        rationale.push(
+            `EXCEPTION_APPLIED: ${matchedException.model}` +
+                (matchedException.reason ? ` (${matchedException.reason})` : '')
+        );
+
+        return {
+            ...item,
+            policyResult: {
+                ...policyResult,
+                pass: true,
+                violationCount: 0,
+                violations: [],
+                suppressedViolations: violations,
+                exceptionApplied: matchedException,
+                rationale
+            }
+        };
+    });
+
+    return {
+        evaluated: updated,
+        exceptionsAppliedCount,
+        suppressedViolationCount
+    };
+}
+
+function flattenFindings(evaluated) {
+    const findings = [];
+
+    (Array.isArray(evaluated) ? evaluated : []).forEach((item) => {
+        if (!isPlainObject(item)) return;
+
+        const modelIdentifier =
+            item.model_identifier ||
+            item.modelIdentifier ||
+            item.identifier ||
+            item.tag ||
+            item.model_id ||
+            item.modelId ||
+            item.name ||
+            item.model_name ||
+            'unknown:model';
+
+        const modelName = item.name || item.model_name || modelIdentifier;
+        const policyResult = isPlainObject(item.policyResult) ? item.policyResult : {};
+        const activeViolations = Array.isArray(policyResult.violations) ? policyResult.violations : [];
+        const suppressedViolations = Array.isArray(policyResult.suppressedViolations)
+            ? policyResult.suppressedViolations
+            : [];
+
+        const baseFinding = {
+            model_identifier: modelIdentifier,
+            model_name: modelName,
+            source: item.source || item?.provenance?.source || 'unknown',
+            registry: item.registry || item?.provenance?.registry || 'unknown',
+            version: item.version || item?.provenance?.version || 'unknown',
+            license: item.license || item?.provenance?.license || 'unknown',
+            digest: item.digest || item?.provenance?.digest || 'unknown',
+            exception: policyResult.exceptionApplied || null
+        };
+
+        activeViolations.forEach((violation) => {
+            findings.push({
+                ...baseFinding,
+                status: 'active',
+                violation
+            });
+        });
+
+        suppressedViolations.forEach((violation) => {
+            findings.push({
+                ...baseFinding,
+                status: 'suppressed',
+                violation
+            });
+        });
+    });
+
+    return findings;
+}
+
+function evaluatePolicyCandidates(policyEngine, candidates, context = {}, policy = null) {
     if (!policyEngine || typeof policyEngine.evaluateModels !== 'function') {
         throw new Error('Invalid policy engine instance.');
     }
 
-    const evaluated = policyEngine.evaluateModels(Array.isArray(candidates) ? candidates : [], context);
+    const evaluatedRaw = policyEngine.evaluateModels(Array.isArray(candidates) ? candidates : [], context);
+    const activePolicy = isPlainObject(policy) ? policy : policyEngine.policy;
+
+    const exceptionResult = applyPolicyExceptions(activePolicy, evaluatedRaw);
+    const evaluated = exceptionResult.evaluated;
+
     const totalChecked = evaluated.length;
     const passCount = evaluated.filter((item) => item?.policyResult?.pass === true).length;
     const failCount = totalChecked - passCount;
@@ -158,12 +345,17 @@ function evaluatePolicyCandidates(policyEngine, candidates, context = {}) {
             return a.code.localeCompare(b.code);
         });
 
+    const findings = flattenFindings(evaluated);
+
     return {
         evaluated,
+        findings,
         totalChecked,
         passCount,
         failCount,
-        topViolations
+        topViolations,
+        exceptionsAppliedCount: exceptionResult.exceptionsAppliedCount,
+        suppressedViolationCount: exceptionResult.suppressedViolationCount
     };
 }
 

@@ -232,6 +232,7 @@ Claude will automatically call the right tools and give you actionable results.
 |---------|-------------|
 | `policy init` | Generate a `policy.yaml` template for enterprise governance |
 | `policy validate` | Validate a policy file and return non-zero on schema errors |
+| `audit export` | Evaluate policy outcomes and export compliance reports (`json`, `csv`, `sarif`) |
 
 ### Policy Enforcement in `check` and `recommend`
 
@@ -248,6 +249,34 @@ llm-checker check --policy ./policy.yaml
 llm-checker check --policy ./policy.yaml --use-case coding --runtime vllm
 llm-checker recommend --policy ./policy.yaml --category coding
 ```
+
+### Policy Audit Export
+
+Use `audit export` when you need machine-readable compliance evidence for CI/CD gates, governance reviews, or security tooling.
+
+```bash
+# Single report format
+llm-checker audit export --policy ./policy.yaml --command check --format json --out ./reports/check-policy.json
+
+# Export all configured formats (json, csv, sarif)
+llm-checker audit export --policy ./policy.yaml --command check --format all --out-dir ./reports
+```
+
+- `--command check|recommend` chooses the candidate source.
+- `--format all` honors `reporting.formats` in your policy (falls back to `json,csv,sarif`).
+- In `enforce` mode with blocking violations, reports are still written before non-zero exit.
+
+### Provenance Fields in Reports
+
+Each finding includes normalized model provenance fields:
+
+- `source`
+- `registry`
+- `version`
+- `license`
+- `digest`
+
+If a field is unavailable from model metadata, reports use `"unknown"` instead of omitting the field. This keeps downstream parsers deterministic.
 
 ### AI Commands
 

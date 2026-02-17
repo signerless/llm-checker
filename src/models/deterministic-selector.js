@@ -205,7 +205,20 @@ class DeterministicModelSelector {
                     parsed.push({
                         ...details,
                         installed: true,
-                        installedSize: size
+                        installedSize: size,
+                        source: 'ollama_local',
+                        registry: details.registry || 'ollama.com',
+                        version: details.version || modelName,
+                        license: details.license || 'unknown',
+                        digest: details.digest || 'unknown',
+                        provenance: {
+                            ...(details.provenance || {}),
+                            source: 'ollama_local',
+                            registry: details.registry || 'ollama.com',
+                            version: details.version || modelName,
+                            license: details.license || 'unknown',
+                            digest: details.digest || 'unknown'
+                        }
                     });
                 } catch (error) {
                     console.warn(`Failed to get details for ${modelName}:`, error.message);
@@ -233,7 +246,19 @@ class DeterministicModelSelector {
             sizeGB: this.extractSizeGB(details),
             modalities: this.extractModalities(details),
             tags: this.extractTags(details),
-            model_identifier: modelName
+            model_identifier: modelName,
+            source: 'ollama_local',
+            registry: 'ollama.com',
+            version: modelName,
+            license: this.extractLicense(details),
+            digest: this.extractDigest(details)
+        };
+        meta.provenance = {
+            source: meta.source,
+            registry: meta.registry,
+            version: meta.version,
+            license: meta.license,
+            digest: meta.digest
         };
         
             return meta;
@@ -249,6 +274,18 @@ class DeterministicModelSelector {
                 modalities: ['text'],
                 tags: [],
                 model_identifier: modelName,
+                source: 'ollama_local',
+                registry: 'ollama.com',
+                version: modelName,
+                license: 'unknown',
+                digest: 'unknown',
+                provenance: {
+                    source: 'ollama_local',
+                    registry: 'ollama.com',
+                    version: modelName,
+                    license: 'unknown',
+                    digest: 'unknown'
+                },
                 error: error.message
             };
         }
@@ -269,7 +306,19 @@ class DeterministicModelSelector {
             
             return catalog.models.map(model => ({
                 ...model,
-                installed: false
+                installed: false,
+                source: model.source || 'static_catalog',
+                registry: model.registry || 'ollama.com',
+                version: model.version || model.model_identifier || model.name || 'unknown',
+                license: model.license || 'unknown',
+                digest: model.digest || 'unknown',
+                provenance: {
+                    source: model.source || 'static_catalog',
+                    registry: model.registry || 'ollama.com',
+                    version: model.version || model.model_identifier || model.name || 'unknown',
+                    license: model.license || 'unknown',
+                    digest: model.digest || 'unknown'
+                }
             }));
         } catch (error) {
             console.warn('Failed to load catalog:', error.message);
@@ -421,6 +470,16 @@ class DeterministicModelSelector {
             lowerDetails.includes('all-minilm')) tags.push('embedding');
         
         return tags;
+    }
+
+    extractLicense(details) {
+        const match = details.match(/license\s+([^\n\r]+)/i);
+        return match ? match[1].trim().toLowerCase() : 'unknown';
+    }
+
+    extractDigest(details) {
+        const match = details.match(/digest\s+([a-f0-9:]+)/i);
+        return match ? match[1].trim().toLowerCase() : 'unknown';
     }
 
     async runOllamaCommand(args) {
@@ -924,6 +983,14 @@ class DeterministicModelSelector {
      * Map a candidate to the legacy format expected by callers
      */
     mapCandidateToLegacyFormat(candidate) {
+        const provenance = candidate.meta.provenance || {
+            source: candidate.meta.source || 'unknown',
+            registry: candidate.meta.registry || 'unknown',
+            version: candidate.meta.version || 'unknown',
+            license: candidate.meta.license || 'unknown',
+            digest: candidate.meta.digest || 'unknown'
+        };
+
         return {
             model_name: candidate.meta.name,
             model_identifier: candidate.meta.model_identifier,
@@ -939,7 +1006,13 @@ class DeterministicModelSelector {
             tags: candidate.meta.tags || [],
             quantization: candidate.quant,
             estimatedRAM: candidate.requiredGB,
-            reasoning: candidate.rationale
+            reasoning: candidate.rationale,
+            source: provenance.source,
+            registry: provenance.registry,
+            version: provenance.version,
+            license: provenance.license,
+            digest: provenance.digest,
+            provenance
         };
     }
 
@@ -1061,7 +1134,19 @@ class DeterministicModelSelector {
                     score: Math.round(bestModel.categoryScore || bestModel.score),
                     command: `ollama pull ${bestModel.model_identifier}`,
                     size: this.formatModelSize(bestModel),
-                    pulls: bestModel.pulls || 0
+                    pulls: bestModel.pulls || 0,
+                    source: bestModel.source || bestModel.provenance?.source || 'unknown',
+                    registry: bestModel.registry || bestModel.provenance?.registry || 'unknown',
+                    version: bestModel.version || bestModel.provenance?.version || 'unknown',
+                    license: bestModel.license || bestModel.provenance?.license || 'unknown',
+                    digest: bestModel.digest || bestModel.provenance?.digest || 'unknown',
+                    provenance: bestModel.provenance || {
+                        source: bestModel.source || 'unknown',
+                        registry: bestModel.registry || 'unknown',
+                        version: bestModel.version || 'unknown',
+                        license: bestModel.license || 'unknown',
+                        digest: bestModel.digest || 'unknown'
+                    }
                 };
 
                 summary.quick_commands.push(`ollama pull ${bestModel.model_identifier}`);
@@ -1083,7 +1168,19 @@ class DeterministicModelSelector {
                 identifier: bestOverallModel.model_identifier,
                 category: bestOverallCategory,
                 score: Math.round(bestOverallScore),
-                command: `ollama pull ${bestOverallModel.model_identifier}`
+                command: `ollama pull ${bestOverallModel.model_identifier}`,
+                source: bestOverallModel.source || bestOverallModel.provenance?.source || 'unknown',
+                registry: bestOverallModel.registry || bestOverallModel.provenance?.registry || 'unknown',
+                version: bestOverallModel.version || bestOverallModel.provenance?.version || 'unknown',
+                license: bestOverallModel.license || bestOverallModel.provenance?.license || 'unknown',
+                digest: bestOverallModel.digest || bestOverallModel.provenance?.digest || 'unknown',
+                provenance: bestOverallModel.provenance || {
+                    source: bestOverallModel.source || 'unknown',
+                    registry: bestOverallModel.registry || 'unknown',
+                    version: bestOverallModel.version || 'unknown',
+                    license: bestOverallModel.license || 'unknown',
+                    digest: bestOverallModel.digest || 'unknown'
+                }
             };
         }
 
