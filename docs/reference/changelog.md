@@ -1,6 +1,22 @@
 Changelog
 =========
 
+3.4.0 — Ollama Runtime Capacity Planner (2026-02-17)
+-----------------------------------------------------
+
+- Added new `ollama-plan` command to generate safe Ollama runtime settings from local models + detected hardware.
+- Added planner output for:
+  - recommended `OLLAMA_NUM_CTX`
+  - recommended `OLLAMA_NUM_PARALLEL`
+  - recommended `OLLAMA_MAX_LOADED_MODELS`
+  - queue/keep-alive/flash-attention environment variables
+  - fallback profile and memory risk scoring
+- Added model selection handling by exact tag/family/partial match for planning input.
+- Added planner unit coverage:
+  - `tests/ollama-capacity-planner.test.js`
+- Extended CLI smoke coverage to include `ollama-plan --help`.
+- Added `ollama-plan` to command documentation table in `README.md`.
+
 3.3.0 — Calibration Docs + E2E Coverage (2026-02-17)
 ----------------------------------------------------
 
