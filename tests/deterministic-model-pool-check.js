@@ -437,6 +437,36 @@ async function runDenseMemoryPathUsesDenseParams() {
     assert.strictEqual(breakdown.parameterProfile.effectiveParamsB, 46, 'Dense estimator should use paramsB directly');
 }
 
+async function runConvertedVariantCarriesExplicitMoEMetadataSchemaFields() {
+    const selector = new DeterministicModelSelector();
+    const converted = selector.convertOllamaModelToDeterministicModels({
+        model_identifier: 'mixtral-test',
+        model_name: 'mixtral-test',
+        variants: [{
+            tag: 'mixtral-test:46b-q4_k_m',
+            quantization: 'Q4_K_M',
+            total_params_b: '46b',
+            active_params_b: '12b',
+            expert_count: 8,
+            experts_active_per_token: 2
+        }]
+    });
+
+    assert.ok(converted.length > 0, 'Expected at least one converted variant');
+    const variant = converted[0];
+
+    assert.strictEqual(variant.isMoE, true, 'Converted variant should be marked as MoE');
+    assert.strictEqual(variant.is_moe, true, 'Converted variant should expose snake_case is_moe');
+    assert.strictEqual(variant.total_params_b, 46, 'Converted variant should expose total_params_b metadata');
+    assert.strictEqual(variant.active_params_b, 12, 'Converted variant should expose active_params_b metadata');
+    assert.strictEqual(variant.expert_count, 8, 'Converted variant should expose expert_count metadata');
+    assert.strictEqual(
+        variant.experts_active_per_token,
+        2,
+        'Converted variant should expose experts_active_per_token metadata'
+    );
+}
+
 async function runMoECompleteMetadataUsesActiveParams() {
     const selector = new DeterministicModelSelector();
     const denseEquivalent = { paramsB: 46 };
@@ -455,6 +485,42 @@ async function runMoECompleteMetadataUsesActiveParams() {
     assert.strictEqual(moeBreakdown.parameterProfile.assumptionSource, 'moe_active_metadata', 'Complete MoE metadata should use active-param path');
     assert.strictEqual(moeBreakdown.parameterProfile.effectiveParamsB, 12, 'Active params should drive MoE effective memory footprint');
     assert.ok(moeBreakdown.requiredGB < denseRequired, 'MoE active-param estimate should be smaller than dense equivalent');
+}
+
+async function runMoEActivePathOverridesObservedArtifactSize() {
+    const selector = new DeterministicModelSelector();
+    const denseEquivalent = {
+        paramsB: 46,
+        quant: 'Q4_K_M',
+        sizeByQuant: { Q4_K_M: 27.2 }
+    };
+    const moeModel = {
+        paramsB: 46,
+        quant: 'Q4_K_M',
+        sizeByQuant: { Q4_K_M: 27.2 },
+        isMoE: true,
+        totalParamsB: 46,
+        activeParamsB: 12,
+        expertCount: 8,
+        expertsActivePerToken: 2
+    };
+
+    const denseBreakdown = selector.estimateMemoryBreakdown(denseEquivalent, 'Q4_K_M', 8192);
+    const moeBreakdown = selector.estimateMemoryBreakdown(moeModel, 'Q4_K_M', 8192);
+
+    assert.strictEqual(
+        moeBreakdown.memorySource,
+        'moe_sparse_inference_params',
+        'Complete MoE metadata should prioritize sparse inference params over artifact-size fallback'
+    );
+    assert.ok(
+        moeBreakdown.modelMemGB < denseBreakdown.modelMemGB,
+        'MoE model memory should be lower than dense equivalent even when artifact size metadata exists'
+    );
+    assert.ok(
+        moeBreakdown.requiredGB < denseBreakdown.requiredGB,
+        'MoE required memory should remain below dense equivalent when active metadata is available'
+    );
 }
 
 async function runMoEPartialMetadataFallsBackDeterministically() {
@@ -568,7 +634,9 @@ async function runAll() {
     await runUnified24GbIncludesMidTierWhenFeasible();
     await runM4ProMultimodalIncludesMidTierWhenFeasible();
     await runDenseMemoryPathUsesDenseParams();
+    await runConvertedVariantCarriesExplicitMoEMetadataSchemaFields();
     await runMoECompleteMetadataUsesActiveParams();
+    await runMoEActivePathOverridesObservedArtifactSize();
     await runMoEPartialMetadataFallsBackDeterministically();
     await runMoERuntimeProfilesChangeSpeedEstimate();
     await runRuntimePropagationInCategoryRecommendations();

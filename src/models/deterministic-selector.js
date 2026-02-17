@@ -818,10 +818,15 @@ class DeterministicModelSelector {
                 family: this.extractFamily(baseIdentifier),
                 paramsB,
                 isMoE: Boolean(moeMetadata.isMoE),
+                is_moe: Boolean(moeMetadata.isMoE),
                 totalParamsB: normalizedTotalParamsB,
                 activeParamsB: normalizedActiveParamsB,
                 expertCount: normalizedExpertCount,
                 expertsActivePerToken: normalizedExpertsActive,
+                total_params_b: normalizedTotalParamsB,
+                active_params_b: normalizedActiveParamsB,
+                expert_count: normalizedExpertCount,
+                experts_active_per_token: normalizedExpertsActive,
                 ctxMax: contextLength,
                 quant,
                 sizeGB: variantSizeGB,
@@ -1400,6 +1405,7 @@ class DeterministicModelSelector {
                 modelMemGB: Math.round(memoryEstimate.modelMemGB * 100) / 100,
                 kvCacheGB: Math.round(memoryEstimate.kvCacheGB * 100) / 100,
                 runtimeOverheadGB: Math.round(memoryEstimate.runtimeOverheadGB * 100) / 100,
+                memorySource: memoryEstimate.memorySource,
                 assumptionSource: memoryEstimate.parameterProfile.assumptionSource,
                 isMoE: memoryEstimate.parameterProfile.isMoE,
                 effectiveParamsB: Math.round(memoryEstimate.parameterProfile.effectiveParamsB * 1000) / 1000
@@ -1510,7 +1516,16 @@ class DeterministicModelSelector {
             : (Number.isFinite(directVariantMatch) && directVariantMatch > 0 ? directVariantMatch : null);
 
         const parameterProfile = this.resolveMemoryParameterProfile(model);
-        const modelMemGB = observedWeightGB ?? (parameterProfile.effectiveParamsB * bpp);
+        const modeledWeightGB = parameterProfile.effectiveParamsB * bpp;
+        const preferSparseInferenceParams =
+            parameterProfile.isMoE &&
+            (parameterProfile.assumptionSource === 'moe_active_metadata' ||
+                parameterProfile.assumptionSource === 'moe_derived_expert_ratio');
+        const useObservedArtifactSize =
+            !preferSparseInferenceParams &&
+            Number.isFinite(observedWeightGB) &&
+            observedWeightGB > 0;
+        const modelMemGB = useObservedArtifactSize ? observedWeightGB : modeledWeightGB;
         const effectiveCtx = Number.isFinite(Number(ctx)) && Number(ctx) > 0 ? Number(ctx) : 4096;
 
         // KV cache: ~2 * numLayers * hiddenDim * 2bytes * ctx / 1e9
@@ -1518,10 +1533,14 @@ class DeterministicModelSelector {
         const kvCacheGB = 0.000008 * parameterProfile.effectiveParamsB * effectiveCtx;
 
         // Runtime overhead (Metal/CUDA context, buffers)
-        const runtimeOverhead = observedWeightGB ? 0.35 : 0.5;
+        const runtimeOverhead = useObservedArtifactSize ? 0.35 : 0.5;
+        const memorySource = useObservedArtifactSize
+            ? 'observed_artifact_size'
+            : (preferSparseInferenceParams ? 'moe_sparse_inference_params' : 'estimated_from_params');
 
         return {
             parameterProfile,
+            memorySource,
             modelMemGB,
             kvCacheGB,
             runtimeOverheadGB: runtimeOverhead,

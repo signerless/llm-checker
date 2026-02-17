@@ -472,6 +472,9 @@ For MoE models, deterministic memory estimation supports explicit sparse metadat
 - `expert_count`
 - `experts_active_per_token`
 
+Normalized recommendation variants expose both snake_case and camelCase metadata aliases
+(for example: `total_params_b` + `totalParamsB`) when available.
+
 MoE parameter path selection is deterministic and uses this fallback order:
 
 1. `active_params_b` (assumption source: `moe_active_metadata`)
@@ -480,6 +483,9 @@ MoE parameter path selection is deterministic and uses this fallback order:
 4. Model `paramsB` fallback (assumption source: `moe_fallback_model_params`)
 
 Dense models continue to use the dense parameter path (`dense_params`) unchanged.
+
+When `active_params_b` (or a derived active-ratio path) is available, inference memory
+uses the sparse-active parameter estimate even if artifact size metadata is present.
 
 ### Runtime-Aware MoE Speed Estimation
 
