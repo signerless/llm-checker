@@ -1,6 +1,21 @@
 Changelog
 =========
 
+3.4.1 — Jetson/CUDA Output + Packaging Channel Clarification (2026-02-17)
+--------------------------------------------------------------------------
+
+- Fixed Jetson/CUDA driver display fallback:
+  - `hw-detect` now reports `Driver: unknown` instead of `Driver: null` when driver metadata is unavailable.
+- Hardened Jetson driver version detection:
+  - probes additional driver sources and parsing patterns (`/proc/driver/nvidia/version`, `/sys/module/nvidia/version`).
+- Fixed CUDA hardware fingerprint normalization:
+  - prevents malformed fingerprints containing duplicate hyphens (for example `cuda--jetson-orin-nano-6gb`).
+- Added Jetson regression coverage:
+  - driver fallback assertion and fingerprint sanitization checks in `tests/cuda-jetson-detection.test.js`.
+- Updated install channel docs:
+  - npm unscoped package (`llm-checker`) is explicitly marked as the recommended latest channel.
+  - scoped GitHub Packages channel is marked legacy/may-lag with recovery steps for stale installs.
+
 3.4.0 — Ollama Runtime Capacity Planner (2026-02-17)
 -----------------------------------------------------
 
