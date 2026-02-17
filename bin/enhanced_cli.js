@@ -23,6 +23,8 @@ const {
     getRuntimeDisplayName,
     getRuntimeCommandSet
 } = require('../src/runtime/runtime-support');
+const { CalibrationManager } = require('../src/calibration/calibration-manager');
+const { SUPPORTED_CALIBRATION_OBJECTIVES } = require('../src/calibration/schemas');
 const SpeculativeDecodingEstimator = require('../src/models/speculative-decoding-estimator');
 const PolicyManager = require('../src/policy/policy-manager');
 const PolicyEngine = require('../src/policy/policy-engine');
@@ -38,6 +40,7 @@ const {
     serializeComplianceReport
 } = require('../src/policy/audit-reporter');
 const policyManager = new PolicyManager();
+const calibrationManager = new CalibrationManager();
 
 // ASCII Art for each command - Large text banners
 const ASCII_ART = {
@@ -2440,6 +2443,122 @@ auditCommand
 auditCommand.action(() => {
     auditCommand.outputHelp();
 });
+
+program
+    .command('calibrate')
+    .description('Generate calibration contract artifacts from a JSONL prompt suite')
+    .requiredOption('--suite <file>', 'Prompt suite path in JSONL format')
+    .requiredOption(
+        '--models <identifiers...>',
+        'Model identifiers to include (repeat flag and/or comma-separate values)'
+    )
+    .requiredOption(
+        '--output <file>',
+        'Calibration result output path (.json, .yaml, or .yml)'
+    )
+    .option(
+        '--runtime <runtime>',
+        `Inference runtime (${SUPPORTED_RUNTIMES.join('|')})`,
+        'ollama'
+    )
+    .option(
+        '--mode <mode>',
+        'Execution mode (dry-run|contract-only|full). Default: contract-only'
+    )
+    .option(
+        '--objective <objective>',
+        `Calibration objective (${SUPPORTED_CALIBRATION_OBJECTIVES.join('|')})`,
+        'balanced'
+    )
+    .option(
+        '--policy-out <file>',
+        'Optional calibration policy output path (.json, .yaml, or .yml)'
+    )
+    .option('--warmup <count>', 'Warmup runs per prompt in full mode', '1')
+    .option('--iterations <count>', 'Measured iterations per prompt in full mode', '2')
+    .option('--timeout-ms <ms>', 'Per-prompt timeout in full mode', '120000')
+    .option('--dry-run', 'Produce draft artifacts without benchmark execution')
+    .addHelpText(
+        'after',
+        `
+Examples:
+  $ llm-checker calibrate --suite ./prompts.jsonl --models qwen2.5-coder:7b llama3.2:3b --output ./calibration.json
+  $ llm-checker calibrate --suite ./prompts.jsonl --models qwen2.5-coder:7b --mode full --iterations 3 --output ./calibration.json --policy-out ./routing.yaml
+  $ llm-checker calibrate --suite ./prompts.jsonl --models qwen2.5-coder:7b,llama3.2:3b --output ./calibration.yaml --policy-out ./routing.yaml --dry-run
+`
+    )
+    .action((options) => {
+        try {
+            const runtime = calibrationManager.validateRuntime(options.runtime);
+            const objective = calibrationManager.validateObjective(options.objective);
+            const executionMode = calibrationManager.resolveExecutionMode({
+                mode: options.mode,
+                dryRun: Boolean(options.dryRun)
+            });
+            const models = calibrationManager.parseModelIdentifiers(options.models);
+            const suite = calibrationManager.parsePromptSuite(options.suite);
+
+            let calibrationResult = null;
+            if (executionMode === 'full') {
+                calibrationResult = calibrationManager.runFullCalibration({
+                    models,
+                    suite,
+                    runtime,
+                    objective,
+                    benchmarkConfig: {
+                        warmupRuns: Number.parseInt(options.warmup, 10),
+                        measuredIterations: Number.parseInt(options.iterations, 10),
+                        timeoutMs: Number.parseInt(options.timeoutMs, 10)
+                    }
+                });
+            } else {
+                calibrationResult = calibrationManager.buildDraftCalibrationResult({
+                    models,
+                    suiteMetadata: suite.metadata,
+                    runtime,
+                    objective,
+                    executionMode
+                });
+            }
+
+            const resultPath = calibrationManager.writeArtifact(options.output, calibrationResult);
+
+            let policyPath = null;
+            if (options.policyOut) {
+                const calibrationPolicy = calibrationManager.buildDraftCalibrationPolicy({
+                    calibrationResult,
+                    calibrationResultPath: resultPath
+                });
+                policyPath = calibrationManager.writeArtifact(options.policyOut, calibrationPolicy);
+            }
+
+            console.log('\n' + chalk.bgBlue.white.bold(' CALIBRATION ARTIFACTS GENERATED '));
+            console.log(chalk.blue('╭' + '─'.repeat(72)));
+            console.log(chalk.blue('│') + ` Suite: ${chalk.white(suite.path)}`);
+            console.log(chalk.blue('│') + ` Runtime: ${chalk.cyan(runtime)} | Objective: ${chalk.cyan(objective)}`);
+            console.log(chalk.blue('│') + ` Models: ${chalk.white(String(models.length))}`);
+            console.log(chalk.blue('│') + ` Execution mode: ${chalk.yellow(executionMode)}`);
+            if (executionMode === 'full') {
+                console.log(
+                    chalk.blue('│') +
+                        ` Successful: ${chalk.green(
+                            String(calibrationResult.summary.successful_models)
+                        )} | Failed: ${chalk.red(String(calibrationResult.summary.failed_models))}`
+                );
+            }
+            console.log(chalk.blue('│') + ` Result: ${chalk.green(resultPath)}`);
+            if (policyPath) {
+                console.log(chalk.blue('│') + ` Policy: ${chalk.green(policyPath)}`);
+            }
+            console.log(chalk.blue('╰' + '─'.repeat(72)));
+        } catch (error) {
+            console.error(chalk.red(`Calibration failed: ${error.message}`));
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
 
 program
     .command('check')

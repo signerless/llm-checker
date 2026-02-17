@@ -23,12 +23,20 @@ function run() {
     assert.strictEqual(help.status, 0, stripAnsi(help.stderr || help.stdout));
     assert.ok(stripAnsi(help.stdout).includes('Usage: llm-checker'), 'top-level help should include CLI usage');
     assert.ok(stripAnsi(help.stdout).includes('recommend'), 'top-level help should list recommend command');
+    assert.ok(stripAnsi(help.stdout).includes('calibrate'), 'top-level help should list calibrate command');
 
     const recommendHelp = runCli(['recommend', '--help']);
     assert.strictEqual(recommendHelp.status, 0, stripAnsi(recommendHelp.stderr || recommendHelp.stdout));
     assert.ok(
         stripAnsi(recommendHelp.stdout).includes('Get intelligent model recommendations for your hardware'),
         'recommend help should describe command purpose'
+    );
+
+    const calibrateHelp = runCli(['calibrate', '--help']);
+    assert.strictEqual(calibrateHelp.status, 0, stripAnsi(calibrateHelp.stderr || calibrateHelp.stdout));
+    assert.ok(
+        stripAnsi(calibrateHelp.stdout).includes('Generate calibration contract artifacts from a JSONL prompt suite'),
+        'calibrate help should describe command purpose'
     );
 
     console.log('ui-cli-smoke.test.js: OK');
