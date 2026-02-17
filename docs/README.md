@@ -6,6 +6,7 @@ Central documentation index for this project.
 
 - [Usage Guide](guides/usage-guide.md)
 - [Advanced Usage](guides/advanced-usage.md)
+- [Ollama Critical Needs Roadmap](guides/ollama-critical-needs-roadmap.md)
 
 ## Reference
 
