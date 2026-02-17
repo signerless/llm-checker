@@ -141,7 +141,8 @@ class ModelTrainer:
     
     def __init__(self, data_path: str = "data/processed/benchmarks.parquet"):
         self.data_path = Path(data_path)
-        self.model_dir = Path("ml-model/trained")
+        # Keep artifacts in ml-model/trained regardless of invocation from repo root or ml-model cwd.
+        self.model_dir = Path(__file__).resolve().parents[1] / "trained"
         self.model_dir.mkdir(parents=True, exist_ok=True)
         
         # Feature definitions

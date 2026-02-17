@@ -22,10 +22,11 @@
 </p>
 
 <p align="center">
+  <a href="#start-here-2-minutes">Start Here</a> &bull;
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#calibration-quick-start-10-minutes">Calibration Quick Start</a> &bull;
-  <a href="docs/README.md">Docs</a> &bull;
+  <a href="https://github.com/Pavelevich/llm-checker/tree/main/docs">Docs</a> &bull;
   <a href="#claude-code-mcp">Claude MCP</a> &bull;
   <a href="#commands">Commands</a> &bull;
   <a href="#scoring-system">Scoring</a> &bull;
@@ -58,12 +59,12 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 
 ## Documentation
 
-- [Docs Hub](docs/README.md)
-- [Usage Guide](docs/guides/usage-guide.md)
-- [Advanced Usage](docs/guides/advanced-usage.md)
-- [Technical Reference](docs/reference/technical-docs.md)
-- [Changelog](docs/reference/changelog.md)
-- [Calibration Fixtures](docs/fixtures/calibration/README.md)
+- [Docs Hub](https://github.com/Pavelevich/llm-checker/tree/main/docs)
+- [Usage Guide](https://github.com/Pavelevich/llm-checker/blob/main/docs/guides/usage-guide.md)
+- [Advanced Usage](https://github.com/Pavelevich/llm-checker/blob/main/docs/guides/advanced-usage.md)
+- [Technical Reference](https://github.com/Pavelevich/llm-checker/blob/main/docs/reference/technical-docs.md)
+- [Changelog](https://github.com/Pavelevich/llm-checker/blob/main/docs/reference/changelog.md)
+- [Calibration Fixtures](https://github.com/Pavelevich/llm-checker/tree/main/docs/fixtures/calibration)
 
 ---
 
@@ -102,6 +103,32 @@ npm install sql.js
 
 ---
 
+## Start Here (2 Minutes)
+
+If you are new, use this exact flow:
+
+```bash
+# 1) Install
+npm install -g llm-checker
+
+# 2) Detect your hardware
+llm-checker hw-detect
+
+# 3) Get recommendations by category
+llm-checker recommend --category coding
+
+# 4) Run with auto-selection
+llm-checker ai-run --category coding --prompt "Write a hello world in Python"
+```
+
+If you already calibrated routing:
+
+```bash
+llm-checker ai-run --calibrated --category coding --prompt "Refactor this function"
+```
+
+---
+
 ## Distribution
 
 LLM Checker is published in all primary channels:
@@ -110,23 +137,16 @@ LLM Checker is published in all primary channels:
 - GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
-### v3.2.8 Highlights
+### v3.3.0 Highlights
 
-- Fixed multimodal recommendation false positives from noisy metadata.
-- Coding-only models with incidental `input_types: image` flags are no longer treated as vision models.
-- Added regression tests to keep multimodal category picks aligned with true vision-capable models.
-
-### v3.2.7 Highlights
-
-- License updated to **NPDL-1.0**: paid redistribution and paid hosted/API delivery now require a separate commercial license.
-
-- Recommendation engine now enforces feasible 30B-class coverage on high-capacity discrete multi-GPU setups (for non-speed objectives).
-- Heterogeneous GPU inventories are preserved in output summaries and downstream recommendation inputs.
-- Added and validated fallback mappings/paths for:
-  - AMD Radeon AI PRO R9700 (PCI ID `7551`)
-  - NVIDIA GTX 1070 Ti (device `1b82`)
-  - Linux RX 7900 XTX detection via non-ROCm fallbacks (`lspci`/`sysfs`)
-- Expanded deterministic and hardware regression coverage for multi-GPU and unified-memory edge cases.
+- Calibrated routing is now first-class in `recommend` and `ai-run`:
+  - `--calibrated [file]` support with default discovery path.
+  - clear precedence: `--policy` > `--calibrated` > deterministic fallback.
+  - routing provenance output (source, route, selected model).
+- New calibration fixtures and end-to-end tests for:
+  - `calibrate --policy-out ...` → `recommend --calibrated ...`
+- Hardened Jetson CUDA detection to avoid false CPU-only fallback.
+- Documentation reorganized under `docs/` with clearer onboarding paths.
 
 ### Optional: Install from GitHub Packages
 
@@ -803,7 +823,7 @@ LLM Checker is licensed under **NPDL-1.0** (No Paid Distribution License).
 - Free use, modification, and redistribution are allowed.
 - Selling the software or offering it as a paid hosted/API service is not allowed without a separate commercial license.
 
-See [LICENSE](LICENSE) for full terms.
+See [LICENSE](https://github.com/Pavelevich/llm-checker/blob/main/LICENSE) for full terms.
 
 ---
 

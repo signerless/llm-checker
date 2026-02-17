@@ -18,6 +18,8 @@ Changelog
 - Added command documentation updates for calibration artifacts:
   - `calibration-result.json`
   - `calibration-policy.yaml`
+- Updated `ml-model/README.md` to align commands with current CLI/scripts (`ai-check`, `ai-run`, benchmark/train flow) and improve quick-start clarity.
+- Fixed training artifact output path to reliably write into `ml-model/trained` regardless of current working directory.
 - Hardened Jetson CUDA detection to prevent CPU-only fallback on valid Jetson/L4T systems:
   - Expanded Jetson platform markers (`/etc/nv_tegra_release`, device-tree compatible IDs, kernel/utility hints).
   - Expanded Jetson CUDA runtime hints (`/etc/nv_tegra_release`, tegra runtime paths/tools).

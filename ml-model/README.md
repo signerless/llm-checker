@@ -16,26 +16,34 @@ The AI selector uses a small (<150KB) quantized ONNX model trained on hardware s
 
 ## 🚀 Quick Start
 
-### 1. Check AI Model Status
+### 1. Run AI Evaluation
 ```bash
-npm run ai-check -- --status
+npm run ai-check
+npm run ai-check -- --category coding --top 12
 ```
 
-### 2. Collect Benchmark Data (Optional)
+### 2. Smart Select + Run
+```bash
+npm run ai-run -- --prompt "Explain machine learning"
+npm run ai-run -- --models llama2:7b mistral:7b --prompt "Summarize this file"
+```
+
+### 3. Collect Benchmark Data (Optional)
 ```bash
 npm run benchmark
 ```
 
-### 3. Train AI Model (Optional)
+### 4. Train AI Model (Optional)
 ```bash
 npm run train-ai
 ```
 
-### 4. Use AI Selection
+If your environment does not expose `python` (only `python3`), run:
+
 ```bash
-npm run ai-check
-npm run ai-check -- --models llama2:7b mistral:7b phi3:mini
-npm run ai-check -- --prompt "Explain machine learning"
+cd ml-model
+python3 python/benchmark_collector.py
+python3 python/train_model.py
 ```
 
 ## 📊 Architecture
@@ -116,7 +124,7 @@ const selector = new AIModelSelector();
 await selector.initialize();
 
 // Select best model
-const result = await selector.selectBestModel(
+const result = await selector.predictBestModel(
   ['llama2:7b', 'mistral:7b'], 
   systemSpecs
 );
@@ -128,23 +136,21 @@ const fallback = selector.selectModelHeuristic(models, specs);
 ### CLI Commands
 
 ```bash
-# AI-powered selection
+# AI-powered meta evaluation
 llm-checker ai-check
 
-# With specific models
-llm-checker ai-check -m llama2:7b mistral:7b
+# Category-driven evaluation
+llm-checker ai-check --category coding --top 12
 
-# With prompt
-llm-checker ai-check --prompt "Hello world"
+# Smart model selection + run
+llm-checker ai-run --prompt "Hello world"
 
-# Check training status
-llm-checker ai-check --status
+# Restrict ai-run candidates
+llm-checker ai-run --models llama2:7b mistral:7b --prompt "Refactor this"
 
-# Collect benchmarks
-llm-checker ai-check --benchmark
-
-# Train model
-llm-checker ai-check --train
+# Training utilities
+npm run benchmark
+npm run train-ai
 ```
 
 ## 🔍 Troubleshooting
@@ -158,6 +164,7 @@ llm-checker ai-check --train
 2. **"Python not found"**
    - Install Python ≥3.10
    - Install required packages: `pip install -r requirements.txt`
+   - If `python` is unavailable, use `python3`
 
 3. **"No models found"**
    - Install Ollama models: `ollama pull llama2:7b`
@@ -166,9 +173,10 @@ llm-checker ai-check --train
    - Collect more diverse benchmark data
    - Run benchmarks on different hardware configurations
 
-### Debug Mode
+### Verbose Diagnostics
 ```bash
-llm-checker ai-check --debug
+llm-checker ai-check --verbose
+llm-checker ai-run --prompt "test" --verbose
 ```
 
 ## 📝 File Structure
@@ -182,7 +190,6 @@ ml-model/
 │   ├── dataset_aggregator.py
 │   └── train_model.py
 ├── js/                       # JavaScript runtime
-│   ├── package.json
 │   ├── index.js
 │   ├── cli.js
 │   └── test.js
