@@ -101,13 +101,89 @@ function nsToSec(ns) {
   return (ns / 1e9).toFixed(2);
 }
 
+function tryParseJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function formatExportBlock(envObject) {
+  if (!envObject || typeof envObject !== "object") return "";
+  const entries = Object.entries(envObject).filter(([, value]) => value !== undefined && value !== null);
+  if (entries.length === 0) return "";
+  return entries
+    .map(([key, value]) => `export ${key}="${String(value)}"`)
+    .join("\n");
+}
+
+function summarizeOllamaPlan(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const plan = payload.plan;
+  if (!plan || typeof plan !== "object") return null;
+
+  const selectedModels = Array.isArray(plan.models)
+    ? plan.models.map((model) => model?.name).filter(Boolean)
+    : [];
+  const hardware = plan.hardware || {};
+  const memory = plan.memory || {};
+  const recommendation = plan.recommendation || {};
+  const risk = plan.risk || {};
+
+  const lines = [
+    "OLLAMA CAPACITY PLAN",
+    `Hardware: ${hardware.backendName || hardware.backend || "unknown"}`,
+    `Models: ${selectedModels.length > 0 ? selectedModels.join(", ") : "none selected"}`,
+    "",
+    "Recommended envelope:",
+    `  Context: ${plan.envelope?.context?.recommended ?? "?"}`,
+    `  Parallel: ${plan.envelope?.parallel?.recommended ?? "?"}`,
+    `  Loaded models: ${plan.envelope?.loaded_models?.recommended ?? "?"}`,
+    `  Estimated memory: ${memory.recommendedEstimatedGB ?? "?"}GB / ${memory.budgetGB ?? "?"}GB (${memory.utilizationPercent ?? "?"}%)`,
+    `  Risk: ${(risk.level || "unknown").toUpperCase()} (${risk.score ?? "?"}/100)`,
+  ];
+
+  if (recommendation && Object.keys(recommendation).length > 0) {
+    lines.push("");
+    lines.push("Recommended env vars:");
+    if (recommendation.num_ctx !== undefined) lines.push(`  export OLLAMA_NUM_CTX="${recommendation.num_ctx}"`);
+    if (recommendation.num_parallel !== undefined) lines.push(`  export OLLAMA_NUM_PARALLEL="${recommendation.num_parallel}"`);
+    if (recommendation.max_loaded_models !== undefined) lines.push(`  export OLLAMA_MAX_LOADED_MODELS="${recommendation.max_loaded_models}"`);
+    if (recommendation.max_queue !== undefined) lines.push(`  export OLLAMA_MAX_QUEUE="${recommendation.max_queue}"`);
+    if (recommendation.keep_alive !== undefined) lines.push(`  export OLLAMA_KEEP_ALIVE="${recommendation.keep_alive}"`);
+    if (recommendation.flash_attention !== undefined) lines.push(`  export OLLAMA_FLASH_ATTENTION="${recommendation.flash_attention}"`);
+  }
+
+  return lines.join("\n");
+}
+
+const ALLOWED_CLI_COMMANDS = new Set([
+  "policy",
+  "audit",
+  "calibrate",
+  "check",
+  "ollama",
+  "installed",
+  "ollama-plan",
+  "recommend",
+  "list-models",
+  "ai-check",
+  "ai-run",
+  "demo",
+  "sync",
+  "search",
+  "smart-recommend",
+  "hw-detect",
+]);
+
 // ============================================================================
 // MCP SERVER
 // ============================================================================
 
 const server = new McpServer({
   name: "llm-checker",
-  version: "3.2.0",
+  version: "3.4.0",
 });
 
 // ============================================================================
@@ -195,6 +271,352 @@ server.tool(
     if (use_case) args.push("--use-case", use_case);
     const result = await run(args, 180000);
     return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "ollama_plan",
+  "Build an Ollama capacity plan for selected local models and return recommended context/parallel/memory settings",
+  {
+    models: z
+      .array(z.string())
+      .optional()
+      .describe("Optional list of model tags/families to include (default: all local models)"),
+    ctx: z.number().int().positive().optional().describe("Target context window in tokens"),
+    concurrency: z.number().int().positive().optional().describe("Target parallel request count"),
+    objective: z
+      .enum(["latency", "balanced", "throughput"])
+      .optional()
+      .describe("Optimization objective"),
+    reserve_gb: z.number().min(0).optional().describe("Memory reserve in GB for OS/background workloads"),
+  },
+  async ({ models, ctx, concurrency, objective, reserve_gb }) => {
+    const args = ["ollama-plan", "--json"];
+    if (Array.isArray(models) && models.length > 0) args.push("--models", ...models);
+    if (ctx !== undefined) args.push("--ctx", String(ctx));
+    if (concurrency !== undefined) args.push("--concurrency", String(concurrency));
+    if (objective) args.push("--objective", objective);
+    if (reserve_gb !== undefined) args.push("--reserve-gb", String(reserve_gb));
+
+    const result = await run(args, 180000);
+    const payload = tryParseJSON(result);
+
+    if (!payload) {
+      return {
+        content: [{ type: "text", text: result }],
+      };
+    }
+
+    const summary = summarizeOllamaPlan(payload);
+    const output = summary
+      ? `${summary}\n\nRAW JSON:\n${JSON.stringify(payload, null, 2)}`
+      : JSON.stringify(payload, null, 2);
+
+    return {
+      content: [{ type: "text", text: output }],
+    };
+  }
+);
+
+server.tool(
+  "ollama_plan_env",
+  "Return shell export commands from an Ollama capacity plan (recommended or fallback profile)",
+  {
+    profile: z
+      .enum(["recommended", "fallback"])
+      .optional()
+      .describe("Which profile to return (default: recommended)"),
+    models: z
+      .array(z.string())
+      .optional()
+      .describe("Optional list of model tags/families to include (default: all local models)"),
+    ctx: z.number().int().positive().optional().describe("Target context window in tokens"),
+    concurrency: z.number().int().positive().optional().describe("Target parallel request count"),
+    objective: z
+      .enum(["latency", "balanced", "throughput"])
+      .optional()
+      .describe("Optimization objective"),
+    reserve_gb: z.number().min(0).optional().describe("Memory reserve in GB for OS/background workloads"),
+  },
+  async ({ profile, models, ctx, concurrency, objective, reserve_gb }) => {
+    const args = ["ollama-plan", "--json"];
+    if (Array.isArray(models) && models.length > 0) args.push("--models", ...models);
+    if (ctx !== undefined) args.push("--ctx", String(ctx));
+    if (concurrency !== undefined) args.push("--concurrency", String(concurrency));
+    if (objective) args.push("--objective", objective);
+    if (reserve_gb !== undefined) args.push("--reserve-gb", String(reserve_gb));
+
+    const result = await run(args, 180000);
+    const payload = tryParseJSON(result);
+    if (!payload?.plan) {
+      return {
+        content: [{ type: "text", text: `Failed to parse ollama-plan output:\n${result}` }],
+        isError: true,
+      };
+    }
+
+    const selectedProfile = profile || "recommended";
+    const plan = payload.plan;
+    let envValues = null;
+
+    if (selectedProfile === "fallback") {
+      const fallback = plan.fallback || {};
+      envValues = {
+        OLLAMA_NUM_CTX: fallback.num_ctx,
+        OLLAMA_NUM_PARALLEL: fallback.num_parallel,
+        OLLAMA_MAX_LOADED_MODELS: fallback.max_loaded_models,
+      };
+    } else {
+      envValues = plan.shell?.env || null;
+      if (!envValues) {
+        const recommendation = plan.recommendation || {};
+        envValues = {
+          OLLAMA_NUM_CTX: recommendation.num_ctx,
+          OLLAMA_NUM_PARALLEL: recommendation.num_parallel,
+          OLLAMA_MAX_LOADED_MODELS: recommendation.max_loaded_models,
+          OLLAMA_MAX_QUEUE: recommendation.max_queue,
+          OLLAMA_KEEP_ALIVE: recommendation.keep_alive,
+          OLLAMA_FLASH_ATTENTION: recommendation.flash_attention,
+        };
+      }
+    }
+
+    const exports = formatExportBlock(envValues);
+    if (!exports) {
+      return {
+        content: [{ type: "text", text: "No environment values available for this plan/profile." }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: [`PROFILE: ${selectedProfile.toUpperCase()}`, "", exports].join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+server.tool(
+  "cli_help",
+  "List all llm-checker CLI commands exposed via cli_exec",
+  {},
+  async () => {
+    const commands = [...ALLOWED_CLI_COMMANDS].sort();
+    const lines = [
+      "Available commands for cli_exec:",
+      ...commands.map((command) => `  - ${command}`),
+      "",
+      "Examples:",
+      '  cli_exec command="ollama-plan" args=["--json"]',
+      '  cli_exec command="policy" args=["validate","--file","policy.yaml","--json"]',
+      '  cli_exec command="search" args=["qwen","--use-case","coding","--limit","5"]',
+    ];
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  }
+);
+
+server.tool(
+  "cli_exec",
+  "Execute any supported llm-checker CLI command (allowlisted) with custom arguments",
+  {
+    command: z.string().describe("Top-level command (use cli_help to list allowed commands)"),
+    args: z
+      .array(z.string())
+      .optional()
+      .describe("Additional CLI args, exactly as used in terminal (without shell quoting)"),
+    timeout_ms: z.number().int().min(1000).max(600000).optional().describe("Execution timeout in milliseconds"),
+  },
+  async ({ command, args, timeout_ms }) => {
+    const trimmedCommand = String(command || "").trim();
+    if (!ALLOWED_CLI_COMMANDS.has(trimmedCommand)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Unsupported command "${trimmedCommand}". Use cli_help to list allowed commands.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const safeArgs = Array.isArray(args) ? args : [];
+    if (safeArgs.length > 100) {
+      return {
+        content: [{ type: "text", text: "Too many arguments. Limit is 100." }],
+        isError: true,
+      };
+    }
+
+    const result = await run([trimmedCommand, ...safeArgs], timeout_ms || 180000);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "policy_validate",
+  "Validate a policy file against the v1 schema and return structured validation output",
+  {
+    file: z.string().optional().describe("Policy file path (default: policy.yaml)"),
+  },
+  async ({ file }) => {
+    const args = ["policy", "validate", "--json"];
+    if (file) args.push("--file", file);
+
+    const result = await run(args, 120000);
+    const payload = tryParseJSON(result);
+    if (!payload) {
+      return {
+        content: [{ type: "text", text: result }],
+      };
+    }
+
+    const status = payload.valid ? "VALID" : "INVALID";
+    const header = [
+      `POLICY VALIDATION: ${status}`,
+      `File: ${payload.file || file || "policy.yaml"}`,
+      `Errors: ${payload.errorCount ?? (Array.isArray(payload.errors) ? payload.errors.length : 0)}`,
+    ].join("\n");
+
+    return {
+      content: [{ type: "text", text: `${header}\n\n${JSON.stringify(payload, null, 2)}` }],
+      isError: !payload.valid,
+    };
+  }
+);
+
+server.tool(
+  "audit_export",
+  "Run policy compliance audit export (json/csv/sarif/all) for check/recommend flows",
+  {
+    policy: z.string().describe("Policy file path"),
+    command: z
+      .enum(["check", "recommend"])
+      .optional()
+      .describe("Evaluation source (default: check)"),
+    format: z
+      .enum(["json", "csv", "sarif", "all"])
+      .optional()
+      .describe("Export format (default: json)"),
+    out: z.string().optional().describe("Output file path (single format only)"),
+    out_dir: z.string().optional().describe("Output directory when --out is omitted"),
+    use_case: z.string().optional().describe("Use case when command=check"),
+    category: z.string().optional().describe("Category hint when command=recommend"),
+    optimize: z
+      .enum(["balanced", "speed", "quality", "context", "coding"])
+      .optional()
+      .describe("Optimization profile when command=recommend"),
+    runtime: z
+      .enum(["ollama", "vllm", "mlx"])
+      .optional()
+      .describe("Runtime backend for check mode"),
+    include_cloud: z.boolean().optional().describe("Include cloud models in check-mode analysis"),
+    max_size: z.string().optional().describe('Maximum model size for check mode (example: "24B" or "12GB")'),
+    min_size: z.string().optional().describe('Minimum model size for check mode (example: "3B" or "2GB")'),
+    limit: z.number().int().positive().optional().describe("Model analysis limit for check mode"),
+    verbose: z.boolean().optional().describe("Enable verbose progress (default: true)"),
+  },
+  async ({
+    policy,
+    command,
+    format,
+    out,
+    out_dir,
+    use_case,
+    category,
+    optimize,
+    runtime,
+    include_cloud,
+    max_size,
+    min_size,
+    limit,
+    verbose,
+  }) => {
+    const args = ["audit", "export", "--policy", policy];
+    if (command) args.push("--command", command);
+    if (format) args.push("--format", format);
+    if (out) args.push("--out", out);
+    if (out_dir) args.push("--out-dir", out_dir);
+    if (use_case) args.push("--use-case", use_case);
+    if (category) args.push("--category", category);
+    if (optimize) args.push("--optimize", optimize);
+    if (runtime) args.push("--runtime", runtime);
+    if (include_cloud) args.push("--include-cloud");
+    if (max_size) args.push("--max-size", max_size);
+    if (min_size) args.push("--min-size", min_size);
+    if (limit !== undefined) args.push("--limit", String(limit));
+    if (verbose === false) args.push("--no-verbose");
+
+    const result = await run(args, 300000);
+    const hadFailure =
+      /audit export failed:/i.test(result) ||
+      /blocking violations detected/i.test(result) ||
+      /enforcement result:\s*blocking/i.test(result);
+    return {
+      content: [{ type: "text", text: result }],
+      isError: hadFailure,
+    };
+  }
+);
+
+server.tool(
+  "calibrate",
+  "Generate calibration artifacts from a JSONL prompt suite (dry-run, contract-only, or full benchmark mode)",
+  {
+    suite: z.string().describe("Prompt suite path in JSONL format"),
+    models: z.array(z.string()).describe("Model identifiers to include"),
+    output: z.string().describe("Calibration result output path (.json/.yaml/.yml)"),
+    runtime: z
+      .enum(["ollama", "vllm", "mlx"])
+      .optional()
+      .describe("Inference runtime backend"),
+    mode: z
+      .enum(["dry-run", "contract-only", "full"])
+      .optional()
+      .describe("Execution mode"),
+    objective: z
+      .enum(["speed", "quality", "balanced"])
+      .optional()
+      .describe("Calibration objective"),
+    policy_out: z.string().optional().describe("Optional calibration policy output path"),
+    warmup: z.number().int().positive().optional().describe("Warmup runs per prompt in full mode"),
+    iterations: z.number().int().positive().optional().describe("Measured iterations per prompt in full mode"),
+    timeout_ms: z.number().int().positive().optional().describe("Per-prompt timeout in full mode (ms)"),
+    dry_run: z.boolean().optional().describe("Shortcut flag for dry-run mode"),
+  },
+  async ({
+    suite,
+    models,
+    output,
+    runtime,
+    mode,
+    objective,
+    policy_out,
+    warmup,
+    iterations,
+    timeout_ms,
+    dry_run,
+  }) => {
+    const args = ["calibrate", "--suite", suite, "--models", ...models, "--output", output];
+    if (runtime) args.push("--runtime", runtime);
+    if (mode) args.push("--mode", mode);
+    if (objective) args.push("--objective", objective);
+    if (policy_out) args.push("--policy-out", policy_out);
+    if (warmup !== undefined) args.push("--warmup", String(warmup));
+    if (iterations !== undefined) args.push("--iterations", String(iterations));
+    if (timeout_ms !== undefined) args.push("--timeout-ms", String(timeout_ms));
+    if (dry_run) args.push("--dry-run");
+
+    const result = await run(args, 600000);
+    const hadFailure = /calibration failed:/i.test(result);
+    return {
+      content: [{ type: "text", text: result }],
+      isError: hadFailure,
+    };
   }
 );
 

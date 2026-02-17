@@ -261,6 +261,11 @@ Once connected, Claude can use these tools:
 | `installed` | Rank your already-downloaded Ollama models |
 | `search` | Search the Ollama model catalog with filters |
 | `smart_recommend` | Advanced recommendations using the full scoring engine |
+| `ollama_plan` | Build a capacity plan for local models with recommended context/parallel/memory settings |
+| `ollama_plan_env` | Return ready-to-paste `export ...` env vars from the recommended or fallback plan profile |
+| `policy_validate` | Validate a policy file against the v1 schema and return structured validation output |
+| `audit_export` | Run policy compliance export (`json`/`csv`/`sarif`/`all`) for `check` or `recommend` flows |
+| `calibrate` | Generate calibration artifacts from a prompt suite with typed MCP inputs |
 
 **Ollama Management:**
 
@@ -281,6 +286,8 @@ Once connected, Claude can use these tools:
 | `cleanup_models` | Analyze installed models — find redundancies, cloud-only models, oversized models, and upgrade candidates |
 | `project_recommend` | Scan a project directory (languages, frameworks, size) and recommend the best model for that codebase |
 | `ollama_monitor` | Real-time system status: RAM usage, loaded models, memory headroom analysis |
+| `cli_help` | List all allowlisted CLI commands exposed through MCP |
+| `cli_exec` | Execute any allowlisted `llm-checker` CLI command with custom args (policy/audit/calibrate/sync/ai-run/etc.) |
 
 ### Example Prompts
 
