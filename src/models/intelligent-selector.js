@@ -4,14 +4,25 @@
  * Provides smart recommendations based on use case, hardware, and preferences
  */
 
+const fs = require('fs');
+const path = require('path');
 const ScoringEngine = require('./scoring-engine');
 const UnifiedDetector = require('../hardware/unified-detector');
+const PolicyManager = require('../policy/policy-manager');
+const PolicyEngine = require('../policy/policy-engine');
+
+function isPlainObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 class IntelligentSelector {
     constructor(options = {}) {
         this.scoring = new ScoringEngine(options.scoring || {});
         this.detector = options.detector || new UnifiedDetector();
         this.database = options.database || null;
+        this.policyManager = options.policyManager || new PolicyManager();
+        this.policyEngine = options.policyEngine || null;
+        this.defaultPolicyFile = options.policyFile || 'policy.yaml';
 
         // Default preferences
         this.defaults = {
@@ -25,6 +36,7 @@ class IntelligentSelector {
             excludeFamilies: [],
             includeVision: false,
             includeEmbeddings: false,
+            policyFile: this.defaultPolicyFile,
             limit: 10
         };
     }
@@ -61,24 +73,34 @@ class IntelligentSelector {
             headroom: opts.headroom || 2
         });
 
+        const policyEngine = this.resolvePolicyEngine(opts);
+        const scoredWithPolicy = policyEngine.evaluateScoredVariants(
+            scored,
+            this.buildPolicyContext(hardware, opts)
+        );
+
         // Categorize scores
-        const categories = this.scoring.categorizeScores(scored);
+        const categories = this.scoring.categorizeScores(scoredWithPolicy);
 
         // Get top picks
-        const topPicks = this.selectTopPicks(scored, opts);
+        const topPicks = this.selectTopPicks(scoredWithPolicy, opts);
 
         // Generate insights
-        const insights = this.generateInsights(scored, hardware, opts);
+        const insights = this.generateInsights(scoredWithPolicy, hardware, opts);
 
         return {
             topPicks,
             categories,
-            all: scored.slice(0, opts.limit),
+            all: scoredWithPolicy.slice(0, opts.limit),
             hardware: {
                 description: this.detector.getHardwareDescription(),
                 tier: this.detector.getHardwareTier(),
                 maxSize: this.detector.getMaxModelSize(),
                 backend: hardware.summary.bestBackend
+            },
+            policy: {
+                mode: policyEngine.getMode(),
+                active: policyEngine.hasActiveRules()
             },
             insights,
             meta: {
@@ -87,6 +109,69 @@ class IntelligentSelector {
                 useCase: opts.useCase
             }
         };
+    }
+
+    /**
+     * Resolve policy engine from explicit options, in-memory policy, or policy file.
+     */
+    resolvePolicyEngine(opts = {}) {
+        const explicitEngine = opts.policyEngine || this.policyEngine;
+        if (
+            explicitEngine &&
+            typeof explicitEngine.evaluateScoredVariants === 'function' &&
+            typeof explicitEngine.getMode === 'function'
+        ) {
+            return explicitEngine;
+        }
+
+        if (isPlainObject(opts.policy)) {
+            return new PolicyEngine(opts.policy);
+        }
+
+        const policyFile = opts.policyFile || this.defaultPolicyFile;
+        if (!policyFile) {
+            return new PolicyEngine(null);
+        }
+
+        const policyPath = path.isAbsolute(policyFile)
+            ? policyFile
+            : path.resolve(process.cwd(), policyFile);
+
+        if (!fs.existsSync(policyPath)) {
+            return new PolicyEngine(null);
+        }
+
+        const validation = this.policyManager.validatePolicyFile(policyPath);
+        if (!validation.valid) {
+            const details = validation.errors
+                .map((error) => `${error.path}: ${error.message}`)
+                .join('; ');
+            throw new Error(`Invalid policy file at ${policyPath}. ${details}`);
+        }
+
+        return new PolicyEngine(validation.policy);
+    }
+
+    /**
+     * Build runtime context for policy checks.
+     */
+    buildPolicyContext(hardware, opts = {}) {
+        const summary = hardware?.summary || {};
+        const systemRAM = typeof summary.systemRAM === 'number' ? summary.systemRAM : null;
+
+        const context = {
+            backend: summary.bestBackend || null,
+            runtimeBackend: summary.bestBackend || null,
+            ramGB: systemRAM,
+            totalRamGB: systemRAM,
+            hardware
+        };
+
+        if (typeof opts.isLocal === 'boolean') {
+            context.isLocal = opts.isLocal;
+        }
+
+        return context;
     }
 
     /**
