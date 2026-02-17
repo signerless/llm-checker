@@ -38,6 +38,8 @@ test/
 __tests__/
 jest.config.js
 coverage/
+!tests/**/*.test.js
+!tests/**/*.spec.js
 
 # System
 .DS_Store
