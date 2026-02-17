@@ -45,7 +45,7 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 
 | | Feature | Description |
 |:---:|---|---|
-| **35+** | Curated Models | Hand-picked catalog covering all major families and sizes (1B-32B) |
+| **200+** | Dynamic Model Pool | Uses full scraped Ollama catalog/variants when available (with curated fallback) |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
@@ -357,7 +357,9 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 ## Model Catalog
 
-The built-in catalog includes 35+ models from the most popular Ollama families:
+LLM Checker prioritizes the full scraped Ollama model cache (all families/sizes/variants) and falls back to a built-in curated catalog when cache is unavailable.
+
+The curated fallback catalog includes 35+ models from the most popular Ollama families:
 
 | Family | Models | Best For |
 |--------|--------|----------|
@@ -371,7 +373,7 @@ The built-in catalog includes 35+ models from the most popular Ollama families:
 | **LLaVA** | 7B, 13B | Vision |
 | **Embeddings** | nomic-embed-text, mxbai-embed-large, bge-m3, all-minilm | RAG, search |
 
-Models are automatically combined with any locally installed Ollama models for scoring.
+All available models are automatically combined with locally installed Ollama models for scoring.
 
 ---
 
@@ -498,7 +500,7 @@ The selector automatically picks the best quantization that fits your available 
 
 **Selector Pipeline:**
 1. **Hardware profiling** &mdash; CPU, GPU, RAM, acceleration backend
-2. **Model pool** &mdash; Merge catalog + installed Ollama models (deduped)
+2. **Model pool** &mdash; Merge full Ollama scraped pool (or curated fallback) + installed models (deduped)
 3. **Category filter** &mdash; Keep models relevant to the use case
 4. **Quantization selection** &mdash; Best quant that fits in memory budget
 5. **4D scoring** &mdash; Q, S, F, C with category-specific weights
@@ -557,7 +559,7 @@ src/
     deterministic-selector.js  # Primary selection algorithm
     scoring-config.js          # Centralized scoring weights
     scoring-engine.js          # Advanced scoring (smart-recommend)
-    catalog.json               # Curated model catalog (35+ models)
+    catalog.json               # Curated fallback catalog (35+ models)
   ai/
     multi-objective-selector.js  # Multi-objective optimization
     ai-check-selector.js        # LLM-based evaluation

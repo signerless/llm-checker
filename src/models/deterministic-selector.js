@@ -7,13 +7,18 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
 
 class DeterministicModelSelector {
     constructor() {
         this.catalogPath = path.join(__dirname, 'catalog.json');
-        this.benchCachePath = path.join(require('os').homedir(), '.llm-checker', 'bench.json');
+        this.benchCachePath = path.join(os.homedir(), '.llm-checker', 'bench.json');
+        this.ollamaCachePaths = [
+            path.join(os.homedir(), '.llm-checker', 'cache', 'ollama', 'ollama-detailed-models.json'),
+            path.join(__dirname, '../ollama/.cache/ollama-detailed-models.json')
+        ];
         
         // Quality priors table
         this.baseQualityByParams = {
@@ -398,6 +403,273 @@ class DeterministicModelSelector {
         fs.writeFileSync(this.catalogPath, JSON.stringify(defaultCatalog, null, 2));
     }
 
+    /**
+     * Full model pool loader:
+     * 1) Prefer complete Ollama scraped cache (all families/sizes)
+     * 2) Fallback to static curated catalog
+     */
+    async loadModelPool() {
+        const cacheModels = await this.loadOllamaCacheModels();
+        if (cacheModels.length > 0) {
+            return cacheModels;
+        }
+        return this.loadCatalog();
+    }
+
+    async loadOllamaCacheModels() {
+        for (const cachePath of this.ollamaCachePaths) {
+            try {
+                if (!fs.existsSync(cachePath)) continue;
+                const raw = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+                const sourceModels = Array.isArray(raw) ? raw : (raw.models || []);
+                const normalized = this.normalizeExternalModels(sourceModels);
+                if (normalized.length > 0) return normalized;
+            } catch (error) {
+                // Ignore broken cache files and keep trying fallbacks
+            }
+        }
+        return [];
+    }
+
+    normalizeExternalModels(models = []) {
+        const normalized = [];
+
+        for (const model of models) {
+            if (!model || typeof model !== 'object') continue;
+
+            const alreadyNormalized =
+                typeof model.paramsB === 'number' &&
+                typeof model.ctxMax === 'number' &&
+                model.model_identifier;
+
+            if (alreadyNormalized) {
+                normalized.push({
+                    ...model,
+                    tags: Array.isArray(model.tags) ? model.tags : [],
+                    modalities: Array.isArray(model.modalities) ? model.modalities : ['text'],
+                    installed: Boolean(model.installed),
+                    source: model.source || 'ollama_database',
+                    registry: model.registry || 'ollama.com',
+                    version: model.version || model.model_identifier,
+                    license: model.license || 'unknown',
+                    digest: model.digest || 'unknown',
+                    provenance: model.provenance || {
+                        source: model.source || 'ollama_database',
+                        registry: model.registry || 'ollama.com',
+                        version: model.version || model.model_identifier,
+                        license: model.license || 'unknown',
+                        digest: model.digest || 'unknown'
+                    }
+                });
+                continue;
+            }
+
+            const converted = this.convertOllamaModelToDeterministicModels(model);
+            normalized.push(...converted);
+        }
+
+        const deduped = new Map();
+        for (const model of normalized) {
+            const key = model.model_identifier || model.name;
+            if (!key || deduped.has(key)) continue;
+            deduped.set(key, model);
+        }
+
+        return [...deduped.values()];
+    }
+
+    convertOllamaModelToDeterministicModels(ollamaModel) {
+        const baseIdentifier = ollamaModel.model_identifier || ollamaModel.model_name || 'unknown';
+        const fallbackTag = `${baseIdentifier}:latest`;
+        const variants = Array.isArray(ollamaModel.variants) && ollamaModel.variants.length > 0
+            ? ollamaModel.variants
+            : [{ tag: ollamaModel.model_identifier || fallbackTag }];
+
+        const contextLength = this.parseContextLength(
+            ollamaModel.context_length ||
+            ollamaModel.contextLength ||
+            ollamaModel.ctxMax
+        );
+
+        const baseText = [
+            ollamaModel.model_identifier,
+            ollamaModel.model_name,
+            ollamaModel.description,
+            ollamaModel.detailed_description,
+            ollamaModel.primary_category,
+            ...(Array.isArray(ollamaModel.use_cases) ? ollamaModel.use_cases : []),
+            ...(Array.isArray(ollamaModel.categories) ? ollamaModel.categories : [])
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        const derivedTags = new Set();
+        if (baseText.includes('code') || baseText.includes('coder')) derivedTags.add('coder');
+        if (baseText.includes('instruct')) derivedTags.add('instruct');
+        if (baseText.includes('chat') || baseText.includes('assistant') || baseText.includes('conversation')) derivedTags.add('chat');
+        if (baseText.includes('embed')) derivedTags.add('embedding');
+        if (baseText.includes('vision') || baseText.includes('vl') || baseText.includes('multimodal') || baseText.includes('image')) derivedTags.add('vision');
+        if (baseText.includes('reason') || baseText.includes('math') || baseText.includes('logic')) derivedTags.add('reasoning');
+        if (baseText.includes('creative') || baseText.includes('story') || baseText.includes('roleplay')) derivedTags.add('creative');
+
+        if (ollamaModel.primary_category === 'coding') derivedTags.add('coder');
+        if (ollamaModel.primary_category === 'chat') derivedTags.add('chat');
+        if (ollamaModel.primary_category === 'embeddings') derivedTags.add('embedding');
+        if (ollamaModel.primary_category === 'multimodal') derivedTags.add('vision');
+        if (ollamaModel.primary_category === 'reasoning') derivedTags.add('reasoning');
+        if (ollamaModel.primary_category === 'creative') derivedTags.add('creative');
+
+        return variants.map((variant) => {
+            const variantTag = variant.tag || fallbackTag;
+            const paramsB = this.extractParamsFromString(
+                variant.size,
+                variantTag,
+                ollamaModel.main_size,
+                ollamaModel.model_identifier
+            );
+            const quant = this.normalizeQuantization(
+                variant.quantization ||
+                this.extractQuantizationFromTag(variantTag) ||
+                'Q4_K_M'
+            );
+
+            const variantSizeGB = this.extractVariantSizeGB(variant, paramsB);
+            const modalities = this.inferModalities(ollamaModel, variantTag);
+            const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
+
+            const source = ollamaModel.source || 'ollama_database';
+            const registry = ollamaModel.registry || 'ollama.com';
+            const version = ollamaModel.version || variantTag;
+            const license = ollamaModel.license || 'unknown';
+            const digest = ollamaModel.digest || 'unknown';
+
+            return {
+                name: variantTag,
+                family: this.extractFamily(baseIdentifier),
+                paramsB,
+                ctxMax: contextLength,
+                quant,
+                sizeGB: variantSizeGB,
+                modalities,
+                tags: modelTags,
+                model_identifier: variantTag,
+                installed: false,
+                pulls: ollamaModel.actual_pulls || ollamaModel.pulls || 0,
+                source,
+                registry,
+                version,
+                license,
+                digest,
+                provenance: {
+                    source,
+                    registry,
+                    version,
+                    license,
+                    digest
+                }
+            };
+        });
+    }
+
+    parseContextLength(contextValue) {
+        if (typeof contextValue === 'number' && Number.isFinite(contextValue) && contextValue > 0) {
+            return Math.round(contextValue);
+        }
+
+        if (typeof contextValue === 'string') {
+            const match = contextValue.match(/(\d+\.?\d*)\s*([KkMm]?)/);
+            if (match) {
+                const value = parseFloat(match[1]);
+                const unit = (match[2] || '').toUpperCase();
+                if (unit === 'M') return Math.round(value * 1024 * 1024);
+                if (unit === 'K') return Math.round(value * 1024);
+                return Math.round(value);
+            }
+        }
+
+        return 4096;
+    }
+
+    extractParamsFromString(...values) {
+        for (const value of values) {
+            if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+                return value;
+            }
+            if (typeof value !== 'string') continue;
+
+            const match = value.match(/(\d+\.?\d*)\s*([BbMm])/);
+            if (!match) continue;
+            const n = parseFloat(match[1]);
+            const unit = match[2].toUpperCase();
+            return unit === 'M' ? n / 1000 : n;
+        }
+
+        return 7;
+    }
+
+    extractQuantizationFromTag(tag = '') {
+        const match = String(tag).match(/\b(q\d+[_\w]*)\b/i);
+        return match ? match[1].toUpperCase() : null;
+    }
+
+    normalizeQuantization(quant = 'Q4_K_M') {
+        const q = String(quant).toUpperCase();
+        if (q.startsWith('Q8')) return 'Q8_0';
+        if (q.startsWith('Q6')) return 'Q6_K';
+        if (q.startsWith('Q5')) return 'Q5_K_M';
+        if (q.startsWith('Q4')) return 'Q4_K_M';
+        if (q.startsWith('Q3')) return 'Q3_K';
+        if (q.startsWith('Q2')) return 'Q2_K';
+        return 'Q4_K_M';
+    }
+
+    extractVariantSizeGB(variant, paramsB) {
+        const candidate = Number(variant.real_size_gb ?? variant.estimated_size_gb ?? NaN);
+        if (Number.isFinite(candidate) && candidate > 0) return candidate;
+        return Math.max(0.5, Math.round((paramsB * 0.58 + 0.5) * 10) / 10);
+    }
+
+    inferModalities(model, variantTag = '') {
+        const inputTypes = Array.isArray(model.input_types) ? model.input_types.map((x) => String(x).toLowerCase()) : [];
+        const text = [
+            model.model_identifier,
+            model.model_name,
+            model.description,
+            model.detailed_description,
+            variantTag
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        const hasVision = inputTypes.includes('image') ||
+            inputTypes.includes('vision') ||
+            /vision|vl\b|llava|pixtral|moondream|image|multimodal/.test(text);
+
+        return hasVision ? ['text', 'vision'] : ['text'];
+    }
+
+    inferTagsForVariant(baseTags, variant, variantTag = '') {
+        const tags = new Set(baseTags);
+
+        if (Array.isArray(variant.categories)) {
+            for (const cat of variant.categories) {
+                const c = String(cat).toLowerCase();
+                if (c.includes('code')) tags.add('coder');
+                if (c.includes('chat')) tags.add('chat');
+                if (c.includes('embed')) tags.add('embedding');
+                if (c.includes('vision') || c.includes('multimodal')) tags.add('vision');
+                if (c.includes('reason')) tags.add('reasoning');
+                if (c.includes('creative')) tags.add('creative');
+            }
+        }
+
+        const lowerTag = String(variantTag).toLowerCase();
+        if (lowerTag.includes('code') || lowerTag.includes('coder')) tags.add('coder');
+        if (lowerTag.includes('instruct')) tags.add('instruct');
+        if (lowerTag.includes('chat')) tags.add('chat');
+        if (lowerTag.includes('embed')) tags.add('embedding');
+        if (lowerTag.includes('vision') || lowerTag.includes('vl')) tags.add('vision');
+        if (lowerTag.includes('reason') || lowerTag.includes('math')) tags.add('reasoning');
+
+        return [...tags];
+    }
+
     // ============================================================================
     // HELPER METHODS FOR PARSING OLLAMA OUTPUT  
     // ============================================================================
@@ -524,10 +796,13 @@ class DeterministicModelSelector {
      */
     async selectModels(category = 'general', options = {}) {
         const {
-            targetCtx = this.targetContexts[category],
+            targetCtx = this.targetContexts[category] || this.targetContexts.general,
             topN = 5,
             enableProbe = false,
-            silent = false
+            silent = false,
+            hardware: providedHardware = null,
+            installedModels = null,
+            modelPool = null
         } = options;
 
         if (!silent) {
@@ -535,17 +810,20 @@ class DeterministicModelSelector {
         }
         
         // Phase 0: Gather data
-        const hardware = await this.getHardware();
-        const installed = await this.getInstalledModels();
-        const catalog = await this.loadCatalog();
+        const hardware = providedHardware || await this.getHardware();
+        const installed = Array.isArray(installedModels) ? installedModels : await this.getInstalledModels();
+        const externalPool = Array.isArray(modelPool) && modelPool.length > 0
+            ? this.normalizeExternalModels(modelPool)
+            : await this.loadModelPool();
         
         if (!silent) {
-            console.log(`Found ${installed.length} installed, ${catalog.length} catalog models`);
-            console.log(`Hardware: ${hardware.cpu.cores} cores, ${hardware.memory.totalGB}GB RAM, ${hardware.gpu.type}`);
+            const memoryGB = hardware?.memory?.totalGB ?? hardware?.memory?.total ?? 0;
+            console.log(`Found ${installed.length} installed, ${externalPool.length} available models`);
+            console.log(`Hardware: ${hardware.cpu.cores} cores, ${memoryGB}GB RAM, ${hardware.gpu.type}`);
         }
         
         // Combine and dedupe models (prefer installed versions)
-        const pool = this.combineModels(installed, catalog);
+        const pool = this.combineModels(installed, externalPool);
         const filtered = this.filterByCategory(pool, category);
         
         if (!silent) {
@@ -554,8 +832,13 @@ class DeterministicModelSelector {
         
         // Phase 1: Estimation filter
         const candidates = [];
-        const budget = hardware.gpu.unified ? hardware.usableMemGB : 
-                      (hardware.gpu.vramGB || hardware.usableMemGB);
+        const totalMem = hardware?.memory?.totalGB ?? hardware?.memory?.total ?? 8;
+        const usableMem = typeof hardware.usableMemGB === 'number'
+            ? hardware.usableMemGB
+            : Math.max(1, Math.min(0.8 * totalMem, totalMem - 2));
+        const isUnified = Boolean(hardware?.gpu?.unified) || hardware?.gpu?.type === 'apple_silicon';
+        const vram = hardware?.gpu?.vramGB ?? hardware?.gpu?.vram ?? 0;
+        const budget = isUnified ? usableMem : (vram || usableMem);
 
         for (const model of filtered) {
             const result = this.evaluateModel(model, hardware, category, targetCtx, budget);
@@ -651,7 +934,7 @@ class DeterministicModelSelector {
         const C = this.calculateContextScore(model, targetCtx);
 
         // 4. Calculate final weighted score
-        const weights = this.categoryWeights[category];
+        const weights = this.categoryWeights[category] || this.categoryWeights.general;
         const score = Math.round((Q * weights[0] + S * weights[1] + F * weights[2] + C * weights[3]) * 10) / 10;
 
         // 5. Build rationale
@@ -802,7 +1085,7 @@ class DeterministicModelSelector {
         if (hardware.acceleration.supports_metal || hardware.acceleration.supports_cuda) base *= 1.2;
         
         // Normalize to 0-100 score
-        const target = this.targetSpeeds[category];
+        const target = this.targetSpeeds[category] || this.targetSpeeds.general;
         return Math.min(100, Math.round((100 * base / target) * 10) / 10);
     }
 
@@ -939,7 +1222,7 @@ class DeterministicModelSelector {
     }
 
     normalizeTPSToScore(tps, category) {
-        const target = this.targetSpeeds[category];
+        const target = this.targetSpeeds[category] || this.targetSpeeds.general;
         return Math.min(100, Math.round((100 * tps / target) * 10) / 10);
     }
 
@@ -1081,13 +1364,17 @@ class DeterministicModelSelector {
     async getBestModelsForHardware(hardware, allModels) {
         const categories = ['coding', 'reasoning', 'multimodal', 'creative', 'talking', 'reading', 'general'];
         const recommendations = {};
+        const normalizedPool = this.normalizeExternalModels(Array.isArray(allModels) ? allModels : []);
+        const installedModels = await this.getInstalledModels();
 
         for (const category of categories) {
             try {
                 const result = await this.selectModels(category, {
                     topN: 3,
                     enableProbe: false,
-                    silent: true
+                    silent: true,
+                    installedModels,
+                    modelPool: normalizedPool
                 });
 
                 recommendations[category] = {

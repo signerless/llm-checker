@@ -14,6 +14,7 @@
     "test:platform": "node tests/platform-tests/cross-platform.test.js",
     "test:ui": "node tests/ui-tests/interface.test.js",
     "test:runtime": "node tests/runtime-specdec-tests.js",
+    "test:deterministic-pool": "node tests/deterministic-model-pool-check.js",
     "test:policy": "node tests/policy-commands.test.js",
     "test:policy-cli": "node tests/policy-cli-enforcement.js",
     "test:policy-engine": "node tests/policy-engine.test.js",
