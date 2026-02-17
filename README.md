@@ -520,30 +520,66 @@ The selector automatically picks the best quantization that fits your available 
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Hardware       │────>│  Model          │────>│  Deterministic  │
-│  Detection      │     │  Catalog Pool    │     │  Selector       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │                       │
-   Detects GPU/CPU         Dynamic + fallback       4D scoring
-   Memory / Backend        Installed models         Per-category weights
-   Usable memory calc      Auto-dedup               Memory calibration
-                                                        │
-                                                        v
-                                               ┌─────────────────┐
-                                               │  Ranked         │
-                                               │  Recommendations│
-                                               └─────────────────┘
+LLM Checker uses a deterministic pipeline so the same inputs produce the same ranked output, with explicit policy outcomes for governance workflows.
+
+```mermaid
+flowchart LR
+  subgraph Inputs
+    HW["Hardware detector<br/>CPU/GPU/RAM/backend"]
+    REG["Dynamic Ollama catalog<br/>(curated fallback if unavailable)"]
+    LOCAL["Installed local models"]
+    FLAGS["CLI options<br/>use-case/runtime/limits/policy"]
+  end
+
+  subgraph Pipeline["Selection Pipeline"]
+    NORMALIZE["Normalize and deduplicate model pool"]
+    PROFILE["Hardware profile and memory budget"]
+    FILTER["Use-case/category filtering"]
+    QUANT["Quantization fit selection"]
+    SCORE["Deterministic 4D scoring<br/>Q/S/F/C"]
+    POLICY["Policy evaluation (optional)<br/>audit or enforce"]
+    RANK["Rank and explain candidates"]
+  end
+
+  subgraph Outputs
+    REC["check / recommend output"]
+    AUDIT["audit export<br/>JSON / CSV / SARIF"]
+    RUN["pull/run-ready commands"]
+  end
+
+  REG --> NORMALIZE
+  LOCAL --> NORMALIZE
+  HW --> PROFILE
+  FLAGS --> FILTER
+  FLAGS --> POLICY
+  NORMALIZE --> FILTER
+  PROFILE --> QUANT
+  FILTER --> QUANT
+  QUANT --> SCORE
+  SCORE --> POLICY
+  SCORE --> RANK
+  POLICY --> RANK
+  RANK --> REC
+  POLICY --> AUDIT
+  RANK --> RUN
 ```
 
-**Selector Pipeline:**
-1. **Hardware profiling** &mdash; CPU, GPU, RAM, acceleration backend
-2. **Model pool** &mdash; Merge full Ollama scraped pool (or curated fallback) + installed models (deduped)
-3. **Category filter** &mdash; Keep models relevant to the use case
-4. **Quantization selection** &mdash; Best quant that fits in memory budget
-5. **4D scoring** &mdash; Q, S, F, C with category-specific weights
-6. **Ranking** &mdash; Top N candidates returned
+### Component Responsibilities
+
+- **Input layer**: Collects runtime constraints from hardware detection, local inventory, dynamic registry data, and CLI flags.
+- **Normalization layer**: Deduplicates identifiers/tags and builds a canonical candidate set.
+- **Selection layer**: Filters by use case, selects the best fitting quantization, and computes deterministic Q/S/F/C scores.
+- **Governance layer**: Applies policy rules in `audit` or `enforce` mode and records explicit violation metadata.
+- **Output layer**: Returns ranked recommendations plus machine-readable compliance artifacts when requested.
+
+### Execution Stages
+
+1. **Hardware profiling**: Detect CPU/GPU/RAM and effective backend capabilities.
+2. **Model pool assembly**: Merge dynamic scraped catalog (or curated fallback) with locally installed models.
+3. **Candidate filtering**: Keep only relevant models for the requested use case.
+4. **Fit selection**: Choose the best quantization for available memory budget.
+5. **Deterministic scoring**: Score each candidate across quality, speed, fit, and context.
+6. **Policy + ranking**: Apply optional policy checks, then rank and return actionable commands.
 
 ---
 
