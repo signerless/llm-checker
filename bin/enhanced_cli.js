@@ -591,6 +591,80 @@ async function checkOllamaAndExit() {
     }
 }
 
+function parsePositiveIntegerOption(rawValue, optionName) {
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid ${optionName}: ${rawValue}`);
+    }
+    return Math.round(parsed);
+}
+
+function parseNonNegativeNumberOption(rawValue, optionName) {
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`Invalid ${optionName}: ${rawValue}`);
+    }
+    return parsed;
+}
+
+function selectModelsForPlan(installedModels, requestedModels = []) {
+    const requested = Array.isArray(requestedModels)
+        ? requestedModels.map((model) => String(model || '').trim()).filter(Boolean)
+        : [];
+
+    if (!requested.length) {
+        return {
+            selected: installedModels.slice(),
+            missing: []
+        };
+    }
+
+    const selected = [];
+    const missing = [];
+    const seen = new Set();
+
+    for (const request of requested) {
+        const normalized = request.toLowerCase();
+
+        let match = installedModels.find(
+            (model) => String(model.name || '').toLowerCase() === normalized
+        );
+
+        if (!match) {
+            match = installedModels.find((model) =>
+                String(model.name || '').toLowerCase().startsWith(`${normalized}:`)
+            );
+        }
+
+        if (!match) {
+            match = installedModels.find(
+                (model) => String(model.family || '').toLowerCase() === normalized
+            );
+        }
+
+        if (!match) {
+            match = installedModels.find((model) =>
+                String(model.name || '').toLowerCase().includes(normalized)
+            );
+        }
+
+        if (!match) {
+            missing.push(request);
+            continue;
+        }
+
+        if (!seen.has(match.name)) {
+            selected.push(match);
+            seen.add(match.name);
+        }
+    }
+
+    return {
+        selected,
+        missing
+    };
+}
+
 function getStatusIcon(model, ollamaModels) {
     const ollamaModel = ollamaModels?.find(om => om.matchedModel?.name === model.name);
 
@@ -3039,6 +3113,145 @@ program
             if (process.env.DEBUG) {
                 console.error(error.stack);
             }
+        }
+    });
+
+program
+    .command('ollama-plan')
+    .description('Plan safe Ollama runtime settings for selected local models')
+    .option('--models <models...>', 'Model tags/families to include (default: all local models)')
+    .option('--ctx <tokens>', 'Target context window in tokens', '8192')
+    .option('--concurrency <n>', 'Target parallel request count', '2')
+    .option('--objective <mode>', 'Optimization objective (latency|balanced|throughput)', 'balanced')
+    .option('--reserve-gb <gb>', 'Memory reserve for OS and background workloads', '2')
+    .option('--json', 'Output plan as JSON')
+    .action(async (options) => {
+        const spinner = options.json ? null : ora('Building Ollama capacity plan...').start();
+
+        try {
+            const requestedObjective = String(options.objective || 'balanced').toLowerCase();
+            const supportedObjectives = new Set(['latency', 'balanced', 'throughput']);
+            if (!supportedObjectives.has(requestedObjective)) {
+                throw new Error(`Invalid objective "${options.objective}". Use latency, balanced, or throughput.`);
+            }
+
+            const targetContext = parsePositiveIntegerOption(options.ctx, '--ctx');
+            const targetConcurrency = parsePositiveIntegerOption(options.concurrency, '--concurrency');
+            const reserveGB = parseNonNegativeNumberOption(options.reserveGb, '--reserve-gb');
+
+            const OllamaClient = require('../src/ollama/client');
+            const UnifiedDetector = require('../src/hardware/unified-detector');
+            const OllamaCapacityPlanner = require('../src/ollama/capacity-planner');
+
+            const ollamaClient = new OllamaClient();
+            const availability = await ollamaClient.checkOllamaAvailability();
+            if (!availability.available) {
+                throw new Error(availability.error || 'Ollama is not available');
+            }
+
+            const localModels = await ollamaClient.getLocalModels();
+            if (!localModels || localModels.length === 0) {
+                throw new Error('No local Ollama models found. Install one with: ollama pull llama3.2:3b');
+            }
+
+            const { selected, missing } = selectModelsForPlan(localModels, options.models || []);
+            if (selected.length === 0) {
+                throw new Error(
+                    `No matching local models found for: ${(options.models || []).join(', ')}`
+                );
+            }
+
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+            const planner = new OllamaCapacityPlanner();
+
+            const plan = planner.plan({
+                hardware,
+                models: selected,
+                targetContext,
+                targetConcurrency,
+                objective: requestedObjective,
+                reserveGB
+            });
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    generated_at: new Date().toISOString(),
+                    selection: {
+                        requested: options.models || [],
+                        selected: selected.map((model) => model.name),
+                        missing
+                    },
+                    plan
+                }, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('Capacity plan generated');
+
+            console.log('\n' + chalk.bgBlue.white.bold(' OLLAMA CAPACITY PLAN '));
+            console.log(
+                chalk.blue('Hardware:'),
+                `${plan.hardware.backendName} (${plan.hardware.backend})`
+            );
+            console.log(
+                chalk.blue('Memory budget:'),
+                `${plan.memory.budgetGB}GB usable (reserve ${plan.hardware.reserveGB}GB)`
+            );
+
+            if (missing.length > 0) {
+                console.log(
+                    chalk.yellow('Missing model filters:'),
+                    missing.join(', ')
+                );
+            }
+
+            console.log(chalk.blue.bold('\nSelected models:'));
+            for (const model of plan.models) {
+                console.log(
+                    `  - ${model.name} (${model.size}, ~${model.estimatedBaseMemoryGB}GB base)`
+                );
+            }
+
+            console.log(chalk.blue.bold('\nRecommended envelope:'));
+            console.log(
+                `  Context: ${plan.envelope.context.recommended} (requested ${plan.envelope.context.requested})`
+            );
+            console.log(
+                `  Parallel: ${plan.envelope.parallel.recommended} (requested ${plan.envelope.parallel.requested})`
+            );
+            console.log(
+                `  Loaded models: ${plan.envelope.loaded_models.recommended} (requested ${plan.envelope.loaded_models.requested})`
+            );
+            console.log(
+                `  Estimated memory: ${plan.memory.recommendedEstimatedGB}GB / ${plan.memory.budgetGB}GB (${plan.memory.utilizationPercent}%)`
+            );
+            console.log(`  Risk: ${plan.risk.level.toUpperCase()} (${plan.risk.score}/100)`);
+
+            if (plan.notes.length > 0) {
+                console.log(chalk.blue.bold('\nNotes:'));
+                for (const note of plan.notes) {
+                    console.log(`  - ${note}`);
+                }
+            }
+
+            console.log(chalk.blue.bold('\nRecommended env vars:'));
+            for (const [key, value] of Object.entries(plan.shell.env)) {
+                console.log(`  export ${key}=${value}`);
+            }
+
+            console.log(chalk.blue.bold('\nFallback profile:'));
+            console.log(
+                `  OLLAMA_NUM_CTX=${plan.fallback.num_ctx} OLLAMA_NUM_PARALLEL=${plan.fallback.num_parallel} OLLAMA_MAX_LOADED_MODELS=${plan.fallback.max_loaded_models}`
+            );
+            console.log('');
+        } catch (error) {
+            if (spinner) spinner.fail('Failed to build capacity plan');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
         }
     });
 
