@@ -4155,8 +4155,8 @@ program
                 }
 
                 if (backend === 'cuda' && info.info) {
-                    console.log(`  Driver: ${info.info.driver}`);
-                    console.log(`  CUDA: ${info.info.cuda}`);
+                    console.log(`  Driver: ${info.info.driver || 'unknown'}`);
+                    console.log(`  CUDA: ${info.info.cuda || 'unknown'}`);
                     console.log(`  Total VRAM: ${info.info.totalVRAM}GB`);
                     for (const gpu of info.info.gpus) {
                         console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);

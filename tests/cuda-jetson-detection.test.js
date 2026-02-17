@@ -88,11 +88,60 @@ function testJetsonCudaSupportMarkerFromNvTegraRelease() {
     }
 }
 
+function testJetsonDriverFallbackToUnknown() {
+    const detector = new CUDADetector();
+
+    detector.readJetsonModel = () => 'NVIDIA Jetson Orin Nano Developer Kit';
+    detector.detectJetsonCudaVersion = () => '12.2';
+    detector.detectJetsonDriverVersion = () => null;
+    detector.getJetsonCapabilities = () => ({
+        tensorCores: true,
+        fp16: true,
+        bf16: true,
+        int8: true,
+        fp8: false,
+        nvlink: false,
+        computeCapability: '8.7',
+        architecture: 'Ampere'
+    });
+    detector.getJetsonSpeedCoefficient = () => 65;
+
+    const info = detector.getJetsonGPUInfo();
+    assert.strictEqual(info.driver, 'unknown', 'Jetson driver should default to "unknown" when unavailable');
+}
+
+function testJetsonFingerprintIsSanitized() {
+    const detector = new CUDADetector();
+
+    detector.detect = () => ({
+        gpus: [
+            {
+                index: 0,
+                name: 'NVIDIA Jetson Orin Nano',
+                memory: { total: 6 }
+            }
+        ],
+        totalVRAM: 6,
+        isMultiGPU: false
+    });
+
+    detector.getPrimaryGPU = () => ({
+        name: 'NVIDIA Jetson Orin Nano',
+        memory: { total: 6 }
+    });
+
+    const fingerprint = detector.getFingerprint();
+    assert.strictEqual(fingerprint, 'cuda-jetson-orin-nano-6gb', 'Fingerprint should not include double hyphens');
+    assert.strictEqual(fingerprint.includes('--'), false, 'Fingerprint must not contain consecutive hyphens');
+}
+
 function run() {
     testJetsonFallbackWithoutNvidiaSMI();
     testNoFalsePositiveWithoutJetsonHints();
     testJetsonPlatformMarkerFromNvTegraRelease();
     testJetsonCudaSupportMarkerFromNvTegraRelease();
+    testJetsonDriverFallbackToUnknown();
+    testJetsonFingerprintIsSanitized();
     console.log('✅ cuda-jetson-detection.test.js passed');
 }
 

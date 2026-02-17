@@ -322,7 +322,7 @@ class CUDADetector {
         const modelRaw = this.readJetsonModel();
         const model = this.normalizeJetsonModel(modelRaw);
         const cudaVersion = this.detectJetsonCudaVersion();
-        const driverVersion = this.detectJetsonDriverVersion();
+        const driverVersion = this.detectJetsonDriverVersion() || 'unknown';
         const totalSystemGB = Math.max(1, Math.round(os.totalmem() / (1024 ** 3)));
         const sharedGpuMemoryGB = Math.max(1, Math.round(totalSystemGB * 0.85));
         const capabilities = this.getJetsonCapabilities(modelRaw || model);
@@ -423,11 +423,26 @@ class CUDADetector {
     }
 
     detectJetsonDriverVersion() {
-        const versionInfo = this.readFileIfExists('/proc/driver/nvidia/version');
-        if (!versionInfo) return null;
+        const driverSources = [
+            '/proc/driver/nvidia/version',
+            '/sys/module/nvidia/version'
+        ];
 
-        const match = versionInfo.match(/Kernel Module\s+([0-9.]+)/i);
-        return match ? match[1] : null;
+        for (const source of driverSources) {
+            const versionInfo = this.readFileIfExists(source);
+            if (!versionInfo) continue;
+
+            const kernelMatch = versionInfo.match(/Kernel Module(?:\s+for\s+\w+)?\s+([0-9]+(?:\.[0-9]+){1,3})/i);
+            if (kernelMatch) return kernelMatch[1];
+
+            const nvrmMatch = versionInfo.match(/NVRM version:\s*.*?([0-9]+(?:\.[0-9]+){1,3})/i);
+            if (nvrmMatch) return nvrmMatch[1];
+
+            const genericMatch = versionInfo.match(/\b([0-9]+(?:\.[0-9]+){1,3})\b/);
+            if (genericMatch) return genericMatch[1];
+        }
+
+        return null;
     }
 
     getJetsonCapabilities(model) {
@@ -734,10 +749,13 @@ class CUDADetector {
         const primary = this.getPrimaryGPU();
         const gpuName = primary.name.toLowerCase()
             .replace(/nvidia|geforce|quadro|tesla/gi, '')
-            .replace(/\s+/g, '-')
-            .trim();
+            .replace(/[^a-z0-9]+/gi, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
+        const normalizedGpuName = gpuName || 'gpu';
+        const normalizedVRAM = Number.isFinite(info.totalVRAM) ? Math.max(0, Math.round(info.totalVRAM)) : 0;
 
-        return `cuda-${gpuName}-${info.totalVRAM}gb${info.isMultiGPU ? '-x' + info.gpus.length : ''}`;
+        return `cuda-${normalizedGpuName}-${normalizedVRAM}gb${info.isMultiGPU ? '-x' + info.gpus.length : ''}`;
     }
 
     /**
