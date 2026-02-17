@@ -24,6 +24,7 @@ const {
     getRuntimeCommandSet
 } = require('../src/runtime/runtime-support');
 const SpeculativeDecodingEstimator = require('../src/models/speculative-decoding-estimator');
+const PolicyManager = require('../src/policy/policy-manager');
 
 // ASCII Art for each command - Large text banners
 const ASCII_ART = {
@@ -2059,6 +2060,79 @@ function extractModelName(command) {
     const match = command.match(/ollama pull (.+)/);
     return match ? match[1] : 'model';
 }
+
+const policyManager = new PolicyManager();
+const policyCommand = program
+    .command('policy')
+    .description('Manage enterprise policy files (policy.yaml)')
+    .showHelpAfterError();
+
+policyCommand
+    .command('init')
+    .description('Create a policy.yaml template')
+    .option('-f, --file <path>', 'Policy file path', 'policy.yaml')
+    .option('--force', 'Overwrite existing file if it already exists')
+    .action((options) => {
+        try {
+            const result = policyManager.initPolicy(options.file, {
+                force: Boolean(options.force)
+            });
+
+            const status = result.overwritten ? 'overwritten' : 'created';
+            console.log(chalk.green(`Policy file ${status}: ${result.path}`));
+        } catch (error) {
+            console.error(chalk.red(`Failed to initialize policy: ${error.message}`));
+            process.exit(1);
+        }
+    });
+
+policyCommand
+    .command('validate')
+    .description('Validate policy.yaml against the v1 schema')
+    .option('-f, --file <path>', 'Policy file path', 'policy.yaml')
+    .option('-j, --json', 'Output validation result as JSON')
+    .action((options) => {
+        try {
+            const result = policyManager.validatePolicyFile(options.file);
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    valid: result.valid,
+                    file: result.path,
+                    errorCount: result.errors.length,
+                    errors: result.errors
+                }, null, 2));
+                if (!result.valid) {
+                    process.exit(1);
+                }
+            } else if (result.valid) {
+                const mode = result.policy?.mode || 'unknown';
+                console.log(chalk.green(`Policy is valid (${mode} mode): ${result.path}`));
+            } else {
+                console.error(chalk.red(`Policy validation failed: ${result.path}`));
+                result.errors.forEach((entry) => {
+                    console.error(chalk.red(`  - ${entry.path}: ${entry.message}`));
+                });
+                process.exit(1);
+            }
+        } catch (error) {
+            if (options.json) {
+                console.log(JSON.stringify({
+                    valid: false,
+                    file: policyManager.resolvePolicyPath(options.file),
+                    errorCount: 1,
+                    errors: [{ path: 'file', message: error.message }]
+                }, null, 2));
+            } else {
+                console.error(chalk.red(`Policy validation failed: ${error.message}`));
+            }
+            process.exit(1);
+        }
+    });
+
+policyCommand.action(() => {
+    policyCommand.outputHelp();
+});
 
 program
     .command('check')

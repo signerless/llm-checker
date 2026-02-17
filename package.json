@@ -14,6 +14,7 @@
     "test:platform": "node tests/platform-tests/cross-platform.test.js",
     "test:ui": "node tests/ui-tests/interface.test.js",
     "test:runtime": "node tests/runtime-specdec-tests.js",
+    "test:policy": "node tests/policy-commands.test.js",
     "test:hardware-detector": "node tests/hardware-detector-regression.js",
     "test:all": "node tests/run-all-tests.js",
     "build": "echo 'No build needed'",
@@ -38,6 +39,7 @@
     "ora": "^5.4.1",
     "systeminformation": "^5.21.0",
     "table": "^6.8.1",
+    "yaml": "^2.8.1",
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
