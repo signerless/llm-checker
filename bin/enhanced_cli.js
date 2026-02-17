@@ -25,6 +25,15 @@ const {
 } = require('../src/runtime/runtime-support');
 const SpeculativeDecodingEstimator = require('../src/models/speculative-decoding-estimator');
 const PolicyManager = require('../src/policy/policy-manager');
+const PolicyEngine = require('../src/policy/policy-engine');
+const {
+    collectCandidatesFromAnalysis,
+    collectCandidatesFromRecommendationData,
+    buildPolicyRuntimeContext,
+    evaluatePolicyCandidates,
+    resolvePolicyEnforcement
+} = require('../src/policy/cli-policy');
+const policyManager = new PolicyManager();
 
 // ASCII Art for each command - Large text banners
 const ASCII_ART = {
@@ -2061,7 +2070,71 @@ function extractModelName(command) {
     return match ? match[1] : 'model';
 }
 
-const policyManager = new PolicyManager();
+function loadPolicyConfiguration(policyFile) {
+    const validation = policyManager.validatePolicyFile(policyFile);
+    if (!validation.valid) {
+        const details = validation.errors
+            .map((entry) => `${entry.path}: ${entry.message}`)
+            .join('; ');
+        throw new Error(`Invalid policy file: ${details}`);
+    }
+
+    return {
+        policyPath: validation.path,
+        policy: validation.policy,
+        policyEngine: new PolicyEngine(validation.policy)
+    };
+}
+
+function displayPolicySummary(commandName, policyConfig, evaluation, enforcement) {
+    if (!policyConfig || !evaluation || !enforcement) return;
+
+    console.log('\n' + chalk.bgMagenta.white.bold(` POLICY SUMMARY (${commandName.toUpperCase()}) `));
+    console.log(chalk.magenta('╭' + '─'.repeat(65)));
+    console.log(chalk.magenta('│') + ` File: ${chalk.white(policyConfig.policyPath)}`);
+    console.log(
+        chalk.magenta('│') +
+            ` Mode: ${chalk.cyan(enforcement.mode)} | Action: ${chalk.cyan(enforcement.onViolation)}`
+    );
+    console.log(chalk.magenta('│') + ` Total checked: ${chalk.white.bold(evaluation.totalChecked)}`);
+    console.log(chalk.magenta('│') + ` Pass: ${chalk.green.bold(evaluation.passCount)} | Fail: ${chalk.red.bold(evaluation.failCount)}`);
+
+    if (evaluation.topViolations.length === 0) {
+        console.log(chalk.magenta('│') + ` Top violations: ${chalk.green('none')}`);
+    } else {
+        console.log(chalk.magenta('│') + ` Top violations:`);
+        evaluation.topViolations.slice(0, 3).forEach((violation) => {
+            console.log(
+                chalk.magenta('│') +
+                    `   - ${chalk.yellow(violation.code)}: ${chalk.white(violation.count)}`
+            );
+        });
+    }
+
+    if (enforcement.shouldBlock) {
+        console.log(
+            chalk.magenta('│') +
+                chalk.red.bold(
+                    ` Enforcement result: blocking violations detected (exit ${enforcement.exitCode})`
+                )
+        );
+    } else if (enforcement.mode === 'audit' && enforcement.hasFailures) {
+        console.log(
+            chalk.magenta('│') +
+                chalk.yellow(' Audit mode: violations reported, command exits with code 0')
+        );
+    } else if (enforcement.onViolation === 'warn' && enforcement.hasFailures) {
+        console.log(
+            chalk.magenta('│') +
+                chalk.yellow(' Enforce+warn: violations reported, command exits with code 0')
+        );
+    } else {
+        console.log(chalk.magenta('│') + chalk.green(' Policy check passed'));
+    }
+
+    console.log(chalk.magenta('╰' + '─'.repeat(65)));
+}
+
 const policyCommand = program
     .command('policy')
     .description('Manage enterprise policy files (policy.yaml)')
@@ -2146,15 +2219,30 @@ program
     .option('--include-cloud', 'Include cloud models in analysis')
     .option('--ollama-only', 'Only show models available in Ollama')
     .option('--runtime <runtime>', `Inference runtime (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
+    .option('--policy <file>', 'Evaluate candidate models against a policy file')
     .option('--performance-test', 'Run performance benchmarks')
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
+    .addHelpText(
+        'after',
+        `
+Enterprise policy examples:
+  $ llm-checker check --policy ./policy.yaml
+  $ llm-checker check --policy ./policy.yaml --use-case coding --runtime vllm
+  $ llm-checker check --policy ./policy.yaml --include-cloud --max-size 24B
+
+Policy scope:
+  - Evaluates all compatible and marginal candidates discovered during analysis
+  - Not limited to the top --limit results shown in output
+`
+    )
     .action(async (options) => {
         showAsciiArt('check');
         try {
             // Use verbose progress unless explicitly disabled
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
             
             // If verbose is disabled, show simple loading message
             if (!verboseEnabled) {
@@ -2221,6 +2309,22 @@ program
                 console.log(chalk.green(' done'));
             }
 
+            let policyEvaluation = null;
+            let policyEnforcement = null;
+            if (policyConfig) {
+                const policyCandidates = collectCandidatesFromAnalysis(analysis);
+                const policyContext = buildPolicyRuntimeContext({
+                    hardware,
+                    runtimeBackend: selectedRuntime
+                });
+                policyEvaluation = evaluatePolicyCandidates(
+                    policyConfig.policyEngine,
+                    policyCandidates,
+                    policyContext
+                );
+                policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
+            }
+
             // Simplified output - show only essential information
             displaySimplifiedSystemInfo(hardware);
             const recommendedModels = await displayModelRecommendations(
@@ -2231,6 +2335,13 @@ program
                 selectedRuntime
             );
             await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels, selectedRuntime);
+
+            if (policyConfig && policyEvaluation && policyEnforcement) {
+                displayPolicySummary('check', policyConfig, policyEvaluation, policyEnforcement);
+                if (policyEnforcement.shouldBlock) {
+                    process.exit(policyEnforcement.exitCode);
+                }
+            }
 
         } catch (error) {
             console.error(chalk.red('\nError:'), error.message);
@@ -2461,11 +2572,22 @@ program
     .description('Get intelligent model recommendations for your hardware')
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
     .option('--no-verbose', 'Disable step-by-step progress display')
+    .option('--policy <file>', 'Evaluate recommendations against a policy file')
+    .addHelpText(
+        'after',
+        `
+Enterprise policy examples:
+  $ llm-checker recommend --policy ./policy.yaml
+  $ llm-checker recommend --policy ./policy.yaml --category coding
+  $ llm-checker recommend --policy ./policy.yaml --no-verbose
+`
+    )
     .action(async (options) => {
         showAsciiArt('recommend');
         try {
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
             
             if (!verboseEnabled) {
                 process.stdout.write(chalk.gray('Generating recommendations...'));
@@ -2483,11 +2605,34 @@ program
                 console.log(chalk.green(' done'));
             }
 
+            let policyEvaluation = null;
+            let policyEnforcement = null;
+            if (policyConfig) {
+                const policyCandidates = collectCandidatesFromRecommendationData(intelligentRecommendations);
+                const policyContext = buildPolicyRuntimeContext({
+                    hardware,
+                    runtimeBackend: 'ollama'
+                });
+                policyEvaluation = evaluatePolicyCandidates(
+                    policyConfig.policyEngine,
+                    policyCandidates,
+                    policyContext
+                );
+                policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
+            }
+
             // Mostrar información del sistema
             displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
             
             // Mostrar recomendaciones
             displayIntelligentRecommendations(intelligentRecommendations);
+
+            if (policyConfig && policyEvaluation && policyEnforcement) {
+                displayPolicySummary('recommend', policyConfig, policyEvaluation, policyEnforcement);
+                if (policyEnforcement.shouldBlock) {
+                    process.exit(policyEnforcement.exitCode);
+                }
+            }
 
         } catch (error) {
             console.error(chalk.red('\nError:'), error.message);

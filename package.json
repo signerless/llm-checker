@@ -15,6 +15,7 @@
     "test:ui": "node tests/ui-tests/interface.test.js",
     "test:runtime": "node tests/runtime-specdec-tests.js",
     "test:policy": "node tests/policy-commands.test.js",
+    "test:policy-cli": "node tests/policy-cli-enforcement.js",
     "test:policy-engine": "node tests/policy-engine.test.js",
     "test:hardware-detector": "node tests/hardware-detector-regression.js",
     "test:all": "node tests/run-all-tests.js",
