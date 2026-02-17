@@ -128,6 +128,95 @@ class DeterministicModelSelector {
         return hardware;
     }
 
+    /**
+     * Normalize hardware shape coming from different detectors/callers.
+     * Ensures deterministic selector always has:
+     * - memory.totalGB
+     * - gpu.vramGB
+     * - acceleration.supports_*
+     */
+    normalizeHardwareProfile(input = {}) {
+        const toNumber = (value) => {
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+                return Number(value);
+            }
+            return null;
+        };
+
+        const cpu = input.cpu || {};
+        const gpu = input.gpu || {};
+        const memory = input.memory || {};
+        const acceleration = input.acceleration || {};
+
+        const totalMemGB =
+            toNumber(memory.totalGB) ??
+            toNumber(memory.total) ??
+            toNumber(input.total_ram_gb) ??
+            toNumber(input.memoryGB) ??
+            8;
+
+        const usableMemGB =
+            toNumber(input.usableMemGB) ??
+            Math.max(1, Math.min(0.8 * totalMemGB, totalMemGB - 2));
+
+        const vramGB =
+            toNumber(gpu.vramGB) ??
+            toNumber(gpu.vram) ??
+            toNumber(gpu.totalVRAM) ??
+            toNumber(gpu.vramPerGPU) ??
+            0;
+
+        const modelHints = `${gpu.model || ''} ${gpu.vendor || ''} ${gpu.type || ''}`.toLowerCase();
+        const inferredUnified =
+            Boolean(gpu.unified) ||
+            /apple|m1|m2|m3|m4|unified/.test(modelHints);
+
+        let gpuType = gpu.type;
+        if (!gpuType) {
+            if (inferredUnified) gpuType = 'apple_silicon';
+            else if (/nvidia|rtx|gtx|tesla|quadro/.test(modelHints)) gpuType = 'nvidia';
+            else if (/amd|radeon|rx |instinct/.test(modelHints)) gpuType = 'amd';
+            else gpuType = 'cpu_only';
+        }
+
+        const normalizedAcceleration = {
+            supports_metal:
+                typeof acceleration.supports_metal === 'boolean'
+                    ? acceleration.supports_metal
+                    : gpuType === 'apple_silicon',
+            supports_cuda:
+                typeof acceleration.supports_cuda === 'boolean'
+                    ? acceleration.supports_cuda
+                    : gpuType === 'nvidia',
+            supports_rocm:
+                typeof acceleration.supports_rocm === 'boolean'
+                    ? acceleration.supports_rocm
+                    : gpuType === 'amd'
+        };
+
+        return {
+            ...input,
+            cpu: {
+                ...cpu,
+                architecture: cpu.architecture || cpu.arch || process.arch || 'x86_64',
+                cores: toNumber(cpu.cores) ?? toNumber(cpu.physicalCores) ?? 4
+            },
+            gpu: {
+                ...gpu,
+                type: gpuType,
+                vramGB,
+                unified: inferredUnified
+            },
+            memory: {
+                ...memory,
+                totalGB: totalMemGB
+            },
+            acceleration: normalizedAcceleration,
+            usableMemGB
+        };
+    }
+
     async getCPUInfo() {
         const os = require('os');
         return {
@@ -810,7 +899,8 @@ class DeterministicModelSelector {
         }
         
         // Phase 0: Gather data
-        const hardware = providedHardware || await this.getHardware();
+        const detectedHardware = providedHardware || await this.getHardware();
+        const hardware = this.normalizeHardwareProfile(detectedHardware);
         const installed = Array.isArray(installedModels) ? installedModels : await this.getInstalledModels();
         const externalPool = Array.isArray(modelPool) && modelPool.length > 0
             ? this.normalizeExternalModels(modelPool)
@@ -1366,6 +1456,7 @@ class DeterministicModelSelector {
         const recommendations = {};
         const normalizedPool = this.normalizeExternalModels(Array.isArray(allModels) ? allModels : []);
         const installedModels = await this.getInstalledModels();
+        const normalizedHardware = this.normalizeHardwareProfile(hardware || await this.getHardware());
 
         for (const category of categories) {
             try {
@@ -1373,6 +1464,7 @@ class DeterministicModelSelector {
                     topN: 3,
                     enableProbe: false,
                     silent: true,
+                    hardware: normalizedHardware,
                     installedModels,
                     modelPool: normalizedPool
                 });

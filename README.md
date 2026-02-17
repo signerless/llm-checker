@@ -93,14 +93,14 @@ npm install sql.js
 
 LLM Checker is published in all primary channels:
 
-- npm (latest): [`llm-checker@3.2.3`](https://www.npmjs.com/package/llm-checker)
-- GitHub Release: [`v3.2.3`](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.3)
+- npm (latest): [`llm-checker@3.2.4`](https://www.npmjs.com/package/llm-checker)
+- GitHub Release: [`v3.2.4`](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.4)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
-### v3.2.3 Highlights
+### v3.2.4 Highlights
 
-- Added vLLM/MLX runtime support and speculative decoding estimation.
-- Improved GPU detection, added DGX Spark/GB10 support, strengthened Node runtime guards, and updated policy/provenance workflows.
+- Fixed `recommend` hardware-profile handling so discrete VRAM limits are honored consistently.
+- Added deterministic selector regression coverage for 24GB VRAM fit behavior.
 
 ### Optional: Install from GitHub Packages
 
@@ -110,7 +110,7 @@ echo "@pavelevich:registry=https://npm.pkg.github.com" >> ~/.npmrc
 echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
 
 # 2) Install
-npm install -g @pavelevich/llm-checker@3.2.3
+npm install -g @pavelevich/llm-checker@3.2.4
 ```
 
 ---
