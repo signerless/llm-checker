@@ -1709,6 +1709,16 @@ class DeterministicModelSelector {
         return 0; // Should be filtered out earlier
     }
 
+    estimatePracticalMaxParamsForBudget(budgetGB) {
+        if (!Number.isFinite(budgetGB) || budgetGB <= 0) return 4;
+        if (budgetGB >= 80) return 70;
+        if (budgetGB >= 48) return 46;
+        if (budgetGB >= 32) return 30;
+        if (budgetGB >= 24) return 14;
+        if (budgetGB >= 16) return 8;
+        return 4;
+    }
+
     ensureFeasibleMidTierCoverage(selectedCandidates, allCandidates, category, hardware, optimizeFor = 'balanced') {
         if (!Array.isArray(selectedCandidates) || selectedCandidates.length === 0) {
             return selectedCandidates;
@@ -1733,31 +1743,67 @@ class DeterministicModelSelector {
             return selectedCandidates;
         }
 
+        const candidatePool = Array.isArray(allCandidates) && allCandidates.length > 0
+            ? allCandidates
+            : selectedCandidates;
+        let promoted = [...selectedCandidates];
+
         const minMidTierParams = budget >= 24 ? 7 : 6;
-        const alreadyHasMidTier = selectedCandidates.some((candidate) => (candidate?.meta?.paramsB || 0) >= minMidTierParams);
-        if (alreadyHasMidTier) {
-            return selectedCandidates;
+        const alreadyHasMidTier = promoted.some((candidate) => (candidate?.meta?.paramsB || 0) >= minMidTierParams);
+        if (!alreadyHasMidTier) {
+            const practicalSpeedFloor = normalizedHardware.gpu.unified ? 25 : 20;
+            const feasibleMidTier = candidatePool.find((candidate) => {
+                const params = candidate?.meta?.paramsB || 0;
+                const speedScore = candidate?.components?.S ?? candidate?.estTPS ?? 0;
+                return params >= minMidTierParams && speedScore >= practicalSpeedFloor;
+            });
+
+            if (
+                feasibleMidTier &&
+                !promoted.some((candidate) => candidate?.meta?.model_identifier === feasibleMidTier?.meta?.model_identifier)
+            ) {
+                promoted[promoted.length - 1] = feasibleMidTier;
+                promoted.sort((a, b) => b.score - a.score);
+            }
         }
 
-        const practicalSpeedFloor = normalizedHardware.gpu.unified ? 25 : 20;
-        const feasibleMidTier = allCandidates.find((candidate) => {
+        const practicalMaxParams = this.estimatePracticalMaxParamsForBudget(budget);
+        const shouldEnforceThirtyBCoverage =
+            Boolean(normalizedHardware?.gpu?.isMultiGPU) &&
+            !Boolean(normalizedHardware?.gpu?.unified) &&
+            practicalMaxParams >= 30;
+
+        if (!shouldEnforceThirtyBCoverage || objective === 'speed') {
+            return promoted;
+        }
+
+        const alreadyHasThirtyB = promoted.some((candidate) => (candidate?.meta?.paramsB || 0) >= 30);
+        if (alreadyHasThirtyB) {
+            return promoted;
+        }
+
+        const largeModelSpeedFloor = Math.max(
+            8,
+            Math.round((this.targetSpeeds[category] || this.targetSpeeds.general) * 0.2)
+        );
+        const feasibleThirtyB = candidatePool.find((candidate) => {
             const params = candidate?.meta?.paramsB || 0;
-            const speedScore = candidate?.components?.S ?? candidate?.estTPS ?? 0;
-            return params >= minMidTierParams && speedScore >= practicalSpeedFloor;
+            const estTPS = candidate?.estTPS ?? candidate?.speed?.estimatedTPS ?? 0;
+            return params >= 30 && estTPS >= largeModelSpeedFloor;
         });
 
-        if (!feasibleMidTier) {
-            return selectedCandidates;
+        if (!feasibleThirtyB) {
+            return promoted;
         }
 
-        if (selectedCandidates.some((candidate) => candidate?.meta?.model_identifier === feasibleMidTier?.meta?.model_identifier)) {
-            return selectedCandidates;
+        if (promoted.some((candidate) => candidate?.meta?.model_identifier === feasibleThirtyB?.meta?.model_identifier)) {
+            return promoted;
         }
 
-        const promoted = [...selectedCandidates];
-        promoted[promoted.length - 1] = feasibleMidTier;
-        promoted.sort((a, b) => b.score - a.score);
-        return promoted;
+        const highCapacityPromoted = [...promoted];
+        highCapacityPromoted[highCapacityPromoted.length - 1] = feasibleThirtyB;
+        highCapacityPromoted.sort((a, b) => b.score - a.score);
+        return highCapacityPromoted;
     }
 
     buildRationale(hardware, model, quant, requiredGB, budget, category, Q, S, memoryEstimate = null, speedEstimate = null) {

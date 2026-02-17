@@ -114,6 +114,25 @@ function buildAppleM4ProHardware() {
     };
 }
 
+function buildDualGpu36GbHardware() {
+    return {
+        cpu: { cores: 24, architecture: 'x86_64' },
+        gpu: {
+            model: 'NVIDIA GeForce RTX 4090',
+            vendor: 'NVIDIA',
+            vram: 24,        // ambiguous field (often per-GPU)
+            vramPerGPU: 24,
+            gpuCount: 2,
+            isMultiGPU: true,
+            all: [
+                { model: 'NVIDIA GeForce RTX 4090', vram: 24, vendor: 'NVIDIA' },
+                { model: 'NVIDIA GeForce RTX 4070 Ti SUPER', vram: 12, vendor: 'NVIDIA' }
+            ]
+        },
+        memory: { total: 96 }
+    };
+}
+
 function buildFreshnessRegressionPool() {
     return [
         {
@@ -190,6 +209,25 @@ function buildConservativeRegressionPool() {
             ],
             tags: ['snappychat:3b', 'snappychat:8b'],
             use_cases: ['chat']
+        }
+    ];
+}
+
+function buildMultiGpuHighCapacityCoveragePool() {
+    return [
+        {
+            model_identifier: 'multisynth',
+            model_name: 'multisynth',
+            description: 'Synthetic family to validate 36GB multi-GPU capacity coverage',
+            primary_category: 'general',
+            context_length: '8K',
+            variants: [
+                { tag: 'multisynth:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.2, categories: ['general'] },
+                { tag: 'multisynth:14b', size: '14b', quantization: 'Q4_0', real_size_gb: 8.9, categories: ['general'] },
+                { tag: 'multisynth:30b', size: '30b', quantization: 'Q4_0', real_size_gb: 18.8, categories: ['general'] }
+            ],
+            tags: ['multisynth:8b', 'multisynth:14b', 'multisynth:30b'],
+            use_cases: ['general']
         }
     ];
 }
@@ -354,6 +392,30 @@ async function runMultiGpuNormalizationUsesCombinedVram() {
     const recommendations = await selector.getBestModelsForHardware(hardware, allModels);
     const reasoningIds = (recommendations.reasoning?.bestModels || []).map((m) => m.model_identifier);
     assert.ok(reasoningIds.includes('deepfit:70b'), '70B reasoning variant should be viable with 36GB aggregate VRAM');
+}
+
+async function runMultiGpu36GbIncludesThirtyBWhenFeasible() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildDualGpu36GbHardware();
+    const pool = buildMultiGpuHighCapacityCoveragePool();
+
+    const normalized = selector.normalizeHardwareProfile(hardware);
+    assert.strictEqual(normalized.gpu.vramGB, 36, `Expected dual-GPU combined VRAM 36GB, got: ${normalized.gpu.vramGB}`);
+
+    const result = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 1,
+        silent: true
+    });
+
+    const topModel = result.candidates[0];
+    const topParams = topModel?.meta?.paramsB || 0;
+    assert.ok(
+        topParams >= 30,
+        `36GB multi-GPU profile should include >=30B candidate when feasible, got: ${topModel?.meta?.model_identifier || 'none'}`
+    );
 }
 
 async function runFreshnessPenaltyPrefersRecentModel() {
@@ -629,6 +691,7 @@ async function runAll() {
     await runUndefinedHardwareFallsBackSafely();
     await runOptimizationProfilesInfluenceRanking();
     await runMultiGpuNormalizationUsesCombinedVram();
+    await runMultiGpu36GbIncludesThirtyBWhenFeasible();
     await runFreshnessPenaltyPrefersRecentModel();
     await runQuantizedLargeModelCanBeRecommended();
     await runUnified24GbIncludesMidTierWhenFeasible();
