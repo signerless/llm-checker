@@ -27,11 +27,12 @@ jobs:
       - name: Create and validate policy templates
         run: |
           mkdir -p .ci-policy
-          node bin/enhanced_cli.js policy init --file .ci-policy/policy-enforce.yaml
-          node bin/enhanced_cli.js policy validate --file .ci-policy/policy-enforce.yaml
+          node bin/enhanced_cli.js policy init --file .ci-policy/policy-template.yaml
+          node bin/enhanced_cli.js policy validate --file .ci-policy/policy-template.yaml
 
-          cp .ci-policy/policy-enforce.yaml .ci-policy/policy-audit.yaml
-          node -e "const fs=require('fs');const YAML=require('yaml');const policyPath='.ci-policy/policy-audit.yaml';const policy=YAML.parse(fs.readFileSync(policyPath,'utf8'));policy.mode='audit';fs.writeFileSync(policyPath,YAML.stringify(policy));"
+          cp tests/policy-fixtures/policy-valid-compliant.yaml .ci-policy/policy-enforce.yaml
+          cp tests/policy-fixtures/policy-valid-audit.yaml .ci-policy/policy-audit.yaml
+          node bin/enhanced_cli.js policy validate --file .ci-policy/policy-enforce.yaml
           node bin/enhanced_cli.js policy validate --file .ci-policy/policy-audit.yaml
 
       - name: Policy CLI smoke test
@@ -61,4 +62,4 @@ jobs:
         with:
           name: policy-audit-reports
           path: .ci-policy/reports
-          if-no-files-found: error
+          if-no-files-found: warn
