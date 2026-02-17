@@ -66,9 +66,28 @@ class CUDADetector {
     isJetsonPlatform() {
         if (process.platform !== 'linux') return false;
 
+        // Strong L4T marker present on Jetson devices
+        if (this.readFileIfExists('/etc/nv_tegra_release')) {
+            return true;
+        }
+
         const modelPaths = [
             '/proc/device-tree/model',
-            '/sys/firmware/devicetree/base/model'
+            '/sys/firmware/devicetree/base/model',
+            '/proc/device-tree/compatible',
+            '/sys/firmware/devicetree/base/compatible'
+        ];
+
+        const jetsonMarkers = [
+            'jetson',
+            'tegra',
+            'orin',
+            'xavier',
+            'p3701',
+            'p3767',
+            'p2888',
+            'p3668',
+            'p3448'
         ];
 
         for (const modelPath of modelPaths) {
@@ -76,9 +95,23 @@ class CUDADetector {
             if (!model) continue;
 
             const modelLower = model.toLowerCase();
-            if (modelLower.includes('jetson') || modelLower.includes('tegra')) {
+            if (jetsonMarkers.some((marker) => modelLower.includes(marker))) {
                 return true;
             }
+        }
+
+        // Jetson kernels often include tegra in release string
+        const kernelRelease = (os.release() || '').toLowerCase();
+        if (kernelRelease.includes('tegra')) {
+            return true;
+        }
+
+        // Last-resort utility-based detection for minimal installs
+        if (process.arch === 'arm64' && (
+            fs.existsSync('/usr/bin/tegrastats') ||
+            fs.existsSync('/usr/sbin/nvpmodel')
+        )) {
+            return true;
         }
 
         const cpuInfo = this.readFileIfExists('/proc/cpuinfo');
@@ -96,6 +129,9 @@ class CUDADetector {
         const runtimeHints = [
             '/usr/local/cuda',
             '/usr/bin/tegrastats',
+            '/usr/sbin/nvpmodel',
+            '/usr/lib/aarch64-linux-gnu/tegra',
+            '/etc/nv_tegra_release',
             '/dev/nvhost-gpu',
             '/dev/nvmap',
             '/proc/driver/nvidia/version'

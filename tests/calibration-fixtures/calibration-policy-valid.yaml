@@ -1,0 +1,19 @@
+schema_version: "1.0"
+generated_at: "2026-02-17T00:00:00.000Z"
+objective: balanced
+source:
+  calibration_version: "contract-2026-02-17"
+  calibration_result_path: "/tmp/calibration-result.json"
+routing:
+  coding:
+    primary: "qwen2.5-coder:7b"
+    fallbacks:
+      - "llama3.2:3b"
+      - "phi3:mini"
+  general:
+    primary: "llama3.2:3b"
+    fallbacks:
+      - "phi3:mini"
+metadata:
+  runtime: "ollama"
+  hardware_fingerprint: "darwin-arm64-24gb"

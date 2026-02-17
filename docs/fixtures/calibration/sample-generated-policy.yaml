@@ -1,0 +1,20 @@
+schema_version: "1.0"
+generated_at: "2026-02-17T00:00:00.000Z"
+objective: balanced
+source:
+  calibration_version: "contract-2026-02-17T00-00-00-000Z"
+  calibration_result_path: "./artifacts/calibration-result.json"
+routing:
+  coding:
+    primary: "qwen2.5-coder:7b"
+    fallbacks:
+      - "llama3.2:3b"
+    rationale: "Draft routing generated from calibration contract output."
+  general:
+    primary: "qwen2.5-coder:7b"
+    fallbacks:
+      - "llama3.2:3b"
+    rationale: "Draft routing generated from calibration contract output."
+metadata:
+  runtime: "ollama"
+  hardware_fingerprint: "darwin-arm64-24gb"

@@ -1,0 +1,3 @@
+{"id":"coding-1","task":"coding","prompt":"Write a Python function that validates email addresses and returns True or False."}
+{"id":"coding-2","task":"coding","prompt":"Refactor this callback-based JavaScript snippet into async/await style."}
+{"id":"general-1","task":"general","prompt":"Summarize the tradeoffs of edge deployment versus centralized inference in five bullet points."}

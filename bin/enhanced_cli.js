@@ -25,6 +25,14 @@ const {
 } = require('../src/runtime/runtime-support');
 const { CalibrationManager } = require('../src/calibration/calibration-manager');
 const { SUPPORTED_CALIBRATION_OBJECTIVES } = require('../src/calibration/schemas');
+const {
+    resolveRoutingPolicyPreference,
+    normalizeTaskName,
+    inferTaskFromPrompt,
+    resolveCalibrationRoute,
+    getRouteModelCandidates,
+    selectModelFromRoute
+} = require('../src/calibration/policy-routing');
 const SpeculativeDecodingEstimator = require('../src/models/speculative-decoding-estimator');
 const PolicyManager = require('../src/policy/policy-manager');
 const PolicyEngine = require('../src/policy/policy-engine');
@@ -1074,6 +1082,119 @@ function displayIntelligentRecommendations(intelligentData) {
     });
 
     console.log(chalk.red('╰'));
+}
+
+function toCalibrationSourceLabel(source) {
+    if (source === 'default-discovery') {
+        return '~/.llm-checker/calibration-policy.{yaml,yml,json}';
+    }
+    return source || 'unknown';
+}
+
+function collectRecommendationModelIdentifiers(intelligentData) {
+    const identifiers = new Set();
+    const summary = intelligentData?.summary || {};
+
+    if (summary.best_overall?.identifier) {
+        identifiers.add(summary.best_overall.identifier);
+    }
+
+    if (summary.by_category && typeof summary.by_category === 'object') {
+        Object.values(summary.by_category).forEach((entry) => {
+            if (entry?.identifier) {
+                identifiers.add(entry.identifier);
+            }
+        });
+    }
+
+    const recommendationGroups = intelligentData?.recommendations || {};
+    Object.values(recommendationGroups).forEach((group) => {
+        const models = Array.isArray(group?.bestModels) ? group.bestModels : [];
+        models.forEach((model) => {
+            if (model?.model_identifier) {
+                identifiers.add(model.model_identifier);
+            }
+        });
+    });
+
+    return Array.from(identifiers);
+}
+
+function resolveCalibratedRouteDecision(calibratedPolicy, requestedTask, availableModels = []) {
+    if (!calibratedPolicy?.policy) return null;
+
+    const resolvedRoute = resolveCalibrationRoute(calibratedPolicy.policy, requestedTask);
+    if (!resolvedRoute?.route) return null;
+
+    const routeCandidates = getRouteModelCandidates(resolvedRoute.route);
+    const routeSelection = selectModelFromRoute(resolvedRoute.route, availableModels);
+
+    const selectedModel = routeSelection?.selectedModel || routeCandidates[0] || null;
+
+    return {
+        requestedTask: resolvedRoute.requestedTask,
+        resolvedTask: resolvedRoute.resolvedTask,
+        usedTaskFallback: Boolean(resolvedRoute.usedTaskFallback),
+        primary: resolvedRoute.route.primary,
+        fallbacks: Array.isArray(resolvedRoute.route.fallbacks) ? resolvedRoute.route.fallbacks : [],
+        routeCandidates,
+        selectedModel,
+        matchedRouteModel: routeSelection?.matchedRouteModel || (routeCandidates[0] || null),
+        matchedAvailableModel: Boolean(routeSelection),
+        usedRouteFallbackModel: Boolean(routeSelection?.usedFallback)
+    };
+}
+
+function displayCalibratedRoutingDecision(commandName, calibratedPolicy, routeDecision, warnings = []) {
+    if (!calibratedPolicy && (!warnings || warnings.length === 0)) {
+        return;
+    }
+
+    console.log('\n' + chalk.bgBlue.white.bold(' CALIBRATED ROUTING '));
+    console.log(chalk.blue('╭' + '─'.repeat(78)));
+    console.log(chalk.blue('│') + ` Command: ${chalk.cyan(commandName)}`);
+
+    if (calibratedPolicy) {
+        console.log(chalk.blue('│') + ` Policy: ${chalk.green(calibratedPolicy.policyPath)}`);
+        console.log(chalk.blue('│') + ` Source: ${chalk.magenta(toCalibrationSourceLabel(calibratedPolicy.source))}`);
+    } else {
+        console.log(chalk.blue('│') + chalk.yellow(' Policy: not active (deterministic fallback)'));
+    }
+
+    if (routeDecision) {
+        const requestedTask = routeDecision.requestedTask || 'general';
+        const resolvedTask = routeDecision.resolvedTask || requestedTask;
+        const taskDisplay = routeDecision.usedTaskFallback
+            ? `${requestedTask} → ${resolvedTask}`
+            : requestedTask;
+
+        const selectedModel = routeDecision.selectedModel || routeDecision.primary || 'N/A';
+        const selectedLabel = routeDecision.usedRouteFallbackModel
+            ? `${selectedModel} (fallback)`
+            : selectedModel;
+
+        console.log(chalk.blue('│') + ` Task: ${chalk.white(taskDisplay)}`);
+        console.log(chalk.blue('│') + ` Route primary: ${chalk.green(routeDecision.primary || 'N/A')}`);
+        if (routeDecision.fallbacks && routeDecision.fallbacks.length > 0) {
+            console.log(chalk.blue('│') + ` Route fallbacks: ${chalk.gray(routeDecision.fallbacks.join(', '))}`);
+        }
+        console.log(chalk.blue('│') + ` Selected model: ${chalk.green.bold(selectedLabel)}`);
+
+        if (!routeDecision.matchedAvailableModel) {
+            console.log(
+                chalk.blue('│') +
+                    chalk.yellow(' Route did not match local/recommended models; using route primary for visibility.')
+            );
+        }
+    }
+
+    if (warnings && warnings.length > 0) {
+        warnings.forEach((warning) => {
+            console.log(chalk.blue('│') + chalk.yellow(` Warning: ${warning}`));
+        });
+    }
+
+    console.log(chalk.blue('╰'));
 }
 
 function displayModelsStats(originalCount, filteredCount, options) {
@@ -2928,6 +3049,10 @@ program
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
+    .option(
+        '--calibrated [file]',
+        'Use calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
+    )
     .addHelpText(
         'after',
         `
@@ -2935,6 +3060,11 @@ Enterprise policy examples:
   $ llm-checker recommend --policy ./policy.yaml
   $ llm-checker recommend --policy ./policy.yaml --category coding
   $ llm-checker recommend --policy ./policy.yaml --no-verbose
+
+Calibrated routing examples:
+  $ llm-checker recommend --calibrated --category coding
+  $ llm-checker recommend --calibrated ./calibration-policy.yaml --category reasoning
+  $ llm-checker recommend --policy ./calibration-policy.yaml --category coding
 `
     )
     .action(async (options) => {
@@ -2942,7 +3072,13 @@ Enterprise policy examples:
         try {
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
-            const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
+            const routingPreference = resolveRoutingPolicyPreference({
+                policyOption: options.policy,
+                calibratedOption: options.calibrated,
+                loadEnterprisePolicy: loadPolicyConfiguration
+            });
+            const policyConfig = routingPreference.enterprisePolicy;
+            const calibratedPolicy = routingPreference.calibratedPolicy;
             
             if (!verboseEnabled) {
                 process.stdout.write(chalk.gray('Generating recommendations...'));
@@ -2979,11 +3115,18 @@ Enterprise policy examples:
                 policyEnforcement = resolvePolicyEnforcement(policyConfig.policy, policyEvaluation);
             }
 
+            const routingTask = normalizeTaskName(options.category || 'general');
+            const recommendationIdentifiers = collectRecommendationModelIdentifiers(intelligentRecommendations);
+            const routeDecision = calibratedPolicy
+                ? resolveCalibratedRouteDecision(calibratedPolicy, routingTask, recommendationIdentifiers)
+                : null;
+
             // Mostrar información del sistema
             displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
             
             // Mostrar recomendaciones
             displayIntelligentRecommendations(intelligentRecommendations);
+            displayCalibratedRoutingDecision('recommend', calibratedPolicy, routeDecision, routingPreference.warnings);
 
             if (policyConfig && policyEvaluation && policyEnforcement) {
                 displayPolicySummary('recommend', policyConfig, policyEvaluation, policyEnforcement);
@@ -3243,7 +3386,13 @@ program
     .command('ai-run')
     .description('AI-powered model selection and execution')
     .option('-m, --models <models...>', 'Specific models to choose from')
+    .option('-c, --category <category>', 'Task category hint (coding, reasoning, multimodal, general, etc.)')
     .option('--prompt <prompt>', 'Prompt to run with selected model')
+    .option('--policy <file>', 'Explicit calibrated routing policy file (takes precedence over --calibrated)')
+    .option(
+        '--calibrated [file]',
+        'Enable calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
+    )
     .action(async (options) => {
         showAsciiArt('ai-run');
         // Check if Ollama is installed first
@@ -3257,6 +3406,11 @@ program
             const aiSelector = new AIModelSelector();
             const checker = new (getLLMChecker())();
             const systemInfo = await checker.getSystemInfo();
+            const routingPreference = resolveRoutingPolicyPreference({
+                policyOption: options.policy,
+                calibratedOption: options.calibrated
+            });
+            const calibratedPolicy = routingPreference.calibratedPolicy;
             
             // Get available models or use provided ones
             let candidateModels = options.models;
@@ -3284,6 +3438,10 @@ program
                     return;
                 }
             }
+
+            candidateModels = Array.isArray(candidateModels)
+                ? candidateModels.filter((model) => typeof model === 'string' && model.trim().length > 0)
+                : [];
             
             // AI selection
             const systemSpecs = {
@@ -3294,10 +3452,33 @@ program
                 gpu_model_normalized: systemInfo.gpu?.model || 
                     (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
             };
-            
-            const result = await aiSelector.selectBestModel(candidateModels, systemSpecs);
+
+            const taskHint = normalizeTaskName(options.category || inferTaskFromPrompt(options.prompt));
+            const routeDecision = calibratedPolicy
+                ? resolveCalibratedRouteDecision(calibratedPolicy, taskHint, candidateModels)
+                : null;
+
+            let result;
+            if (routeDecision && routeDecision.matchedAvailableModel && routeDecision.selectedModel) {
+                result = {
+                    bestModel: routeDecision.selectedModel,
+                    confidence: routeDecision.usedRouteFallbackModel ? 0.82 : 0.94,
+                    method: 'calibrated-policy-route',
+                    reasoning: `Selected from calibrated policy route for ${routeDecision.resolvedTask}`
+                };
+            } else {
+                if (routeDecision && routeDecision.routeCandidates.length > 0) {
+                    routingPreference.warnings.push(
+                        `Calibrated route candidates (${routeDecision.routeCandidates.join(
+                            ', '
+                        )}) are not installed locally. Falling back to AI selector.`
+                    );
+                }
+                result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint);
+            }
             
             spinner.succeed(`Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
+            displayCalibratedRoutingDecision('ai-run', calibratedPolicy, routeDecision, routingPreference.warnings);
             
             // Execute the selected model
             console.log(chalk.magenta.bold(`\nLaunching ${result.bestModel}...`));

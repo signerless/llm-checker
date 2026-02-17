@@ -4,6 +4,7 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
 const CUDADetector = require('../src/hardware/backends/cuda-detector');
 
 function testJetsonFallbackWithoutNvidiaSMI() {
@@ -53,9 +54,45 @@ function testNoFalsePositiveWithoutJetsonHints() {
     assert.strictEqual(detector.detect(), null, 'detect() should return null when CUDA is unavailable');
 }
 
+function testJetsonPlatformMarkerFromNvTegraRelease() {
+    if (process.platform !== 'linux') {
+        return;
+    }
+
+    const detector = new CUDADetector();
+
+    detector.readFileIfExists = (path) => (
+        path === '/etc/nv_tegra_release' ? '# R35 (release), REVISION: 4.1' : null
+    );
+
+    assert.strictEqual(
+        detector.isJetsonPlatform(),
+        true,
+        'Jetson platform should be detected via /etc/nv_tegra_release marker'
+    );
+}
+
+function testJetsonCudaSupportMarkerFromNvTegraRelease() {
+    const detector = new CUDADetector();
+    const originalExistsSync = fs.existsSync;
+
+    try {
+        fs.existsSync = (path) => path === '/etc/nv_tegra_release';
+        assert.strictEqual(
+            detector.hasJetsonCudaSupport(),
+            true,
+            'Jetson CUDA support should be detected via /etc/nv_tegra_release marker'
+        );
+    } finally {
+        fs.existsSync = originalExistsSync;
+    }
+}
+
 function run() {
     testJetsonFallbackWithoutNvidiaSMI();
     testNoFalsePositiveWithoutJetsonHints();
+    testJetsonPlatformMarkerFromNvTegraRelease();
+    testJetsonCudaSupportMarkerFromNvTegraRelease();
     console.log('✅ cuda-jetson-detection.test.js passed');
 }
 

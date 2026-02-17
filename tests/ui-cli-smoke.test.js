@@ -31,12 +31,27 @@ function run() {
         stripAnsi(recommendHelp.stdout).includes('Get intelligent model recommendations for your hardware'),
         'recommend help should describe command purpose'
     );
+    assert.ok(
+        stripAnsi(recommendHelp.stdout).includes('--calibrated [file]'),
+        'recommend help should expose calibrated routing option'
+    );
 
     const calibrateHelp = runCli(['calibrate', '--help']);
     assert.strictEqual(calibrateHelp.status, 0, stripAnsi(calibrateHelp.stderr || calibrateHelp.stdout));
     assert.ok(
         stripAnsi(calibrateHelp.stdout).includes('Generate calibration contract artifacts from a JSONL prompt suite'),
         'calibrate help should describe command purpose'
+    );
+
+    const aiRunHelp = runCli(['ai-run', '--help']);
+    assert.strictEqual(aiRunHelp.status, 0, stripAnsi(aiRunHelp.stderr || aiRunHelp.stdout));
+    assert.ok(
+        stripAnsi(aiRunHelp.stdout).includes('--policy <file>'),
+        'ai-run help should expose policy option'
+    );
+    assert.ok(
+        stripAnsi(aiRunHelp.stdout).includes('--calibrated [file]'),
+        'ai-run help should expose calibrated routing option'
     );
 
     console.log('ui-cli-smoke.test.js: OK');
