@@ -17,6 +17,7 @@
   <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF" alt="npm downloads"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-0066FF?style=flat-square" alt="License"></a>
+  <a href="https://discord.gg/mnmYrA7T"><img src="https://img.shields.io/discord/1457032977849520374?style=flat-square&color=0066FF&label=Discord" alt="Discord"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D16-0066FF?style=flat-square" alt="Node.js"></a>
 </p>
 
@@ -26,7 +27,8 @@
   <a href="#claude-code-mcp">Claude MCP</a> &bull;
   <a href="#commands">Commands</a> &bull;
   <a href="#scoring-system">Scoring</a> &bull;
-  <a href="#supported-hardware">Hardware</a>
+  <a href="#supported-hardware">Hardware</a> &bull;
+  <a href="https://discord.gg/mnmYrA7T"><img src="https://cdn.simpleicons.org/discord/0066FF" alt="Discord" width="14" height="14"> Discord</a>
 </p>
 
 ---
@@ -83,6 +85,32 @@ npx llm-checker hw-detect
 **Optional:** For database search features (`sync`, `search`, `smart-recommend`):
 ```bash
 npm install sql.js
+```
+
+---
+
+## Distribution
+
+LLM Checker is published in all primary channels:
+
+- npm (latest): [`llm-checker@3.2.1`](https://www.npmjs.com/package/llm-checker)
+- GitHub Release: [`v3.2.1` (2026-02-17)](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.1)
+- GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
+
+### v3.2.1 Highlights
+
+- Added vLLM/MLX runtime support and speculative decoding estimation.
+- Improved GPU detection, added DGX Spark/GB10 support, strengthened Node runtime guards, and updated tooling comparison notes.
+
+### Optional: Install from GitHub Packages
+
+```bash
+# 1) Configure registry + token (PAT with read:packages)
+echo "@pavelevich:registry=https://npm.pkg.github.com" >> ~/.npmrc
+echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
+
+# 2) Install
+npm install -g @pavelevich/llm-checker@3.2.1
 ```
 
 ---
@@ -197,6 +225,29 @@ Claude will automatically call the right tools and give you actionable results.
 | `sync` | Download the latest model catalog from Ollama registry |
 | `search <query>` | Search models with filters and intelligent scoring |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
+
+### Enterprise Policy Commands
+
+| Command | Description |
+|---------|-------------|
+| `policy init` | Generate a `policy.yaml` template for enterprise governance |
+| `policy validate` | Validate a policy file and return non-zero on schema errors |
+
+### Policy Enforcement in `check` and `recommend`
+
+Both `check` and `recommend` support `--policy <file>`.
+
+- In `audit` mode, policy violations are reported but the command exits with `0`.
+- In `enforce` mode, blocking violations return non-zero (default `1`).
+- You can override the non-zero code with `enforcement.exit_code` in `policy.yaml`.
+
+Examples:
+
+```bash
+llm-checker check --policy ./policy.yaml
+llm-checker check --policy ./policy.yaml --use-case coding --runtime vllm
+llm-checker recommend --policy ./policy.yaml --category coding
+```
 
 ### AI Commands
 
@@ -501,6 +552,9 @@ MIT License &mdash; see [LICENSE](LICENSE) for details.
 
 <p align="center">
   <a href="https://github.com/Pavelevich/llm-checker">GitHub</a> &bull;
+  <a href="https://github.com/Pavelevich/llm-checker/releases">Releases</a> &bull;
   <a href="https://www.npmjs.com/package/llm-checker">npm</a> &bull;
-  <a href="https://github.com/Pavelevich/llm-checker/issues">Issues</a>
+  <a href="https://github.com/users/Pavelevich/packages/npm/package/llm-checker">GitHub Packages</a> &bull;
+  <a href="https://github.com/Pavelevich/llm-checker/issues">Issues</a> &bull;
+  <a href="https://discord.gg/mnmYrA7T">Discord</a>
 </p>
