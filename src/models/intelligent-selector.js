@@ -29,6 +29,7 @@ class IntelligentSelector {
             useCase: 'general',
             targetContext: 8192,
             targetTPS: 20,
+            runtime: 'ollama',
             preferQuantization: null,  // null = auto select
             preferFamily: null,
             maxSize: null,  // null = auto from hardware
@@ -70,6 +71,7 @@ class IntelligentSelector {
             useCase: opts.useCase,
             targetContext: opts.targetContext,
             targetTPS: opts.targetTPS,
+            runtime: opts.runtime,
             headroom: opts.headroom || 2
         });
 

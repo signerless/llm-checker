@@ -11,6 +11,11 @@
  */
 
 const { SCORING_ENGINE_WEIGHTS } = require('./scoring-config');
+const {
+    normalizeMoERuntime,
+    resolveMoEParameterProfile,
+    estimateMoESpeedMultiplier
+} = require('./moe-assumptions');
 
 class ScoringEngine {
     constructor(options = {}) {
@@ -303,14 +308,22 @@ class ScoringEngine {
         const useCase = options.useCase || 'general';
         const targetContext = options.targetContext || 8192;
         const targetTPS = options.targetTPS || 20;  // Target tokens per second
+        const runtime = normalizeMoERuntime(options.runtime || 'ollama');
 
         const weights = this.weightPresets[useCase] || this.weightPresets.general;
 
         // Calculate individual scores
         const Q = this.calculateQualityScore(variant, useCase);
-        const S = this.calculateSpeedScore(variant, hardware, targetTPS);
+        const S = this.calculateSpeedScore(variant, hardware, targetTPS, runtime);
         const F = this.calculateFitScore(variant, hardware);
         const C = this.calculateContextScore(variant, targetContext);
+        const moeProfile = resolveMoEParameterProfile(variant);
+        const moeSpeed = estimateMoESpeedMultiplier({
+            model: variant,
+            runtime,
+            denseParamsB: variant.params_b || variant.paramsB || null,
+            parameterProfile: moeProfile
+        });
 
         // Calculate weighted final score
         const finalScore = Math.round(
@@ -334,8 +347,17 @@ class ScoringEngine {
                 family: this.extractFamily(variant.model_id || variant.modelId),
                 params: variant.params_b || variant.paramsB,
                 quant: variant.quant,
-                estimatedTPS: this.estimateTPS(variant, hardware),
-                estimatedSize: variant.size_gb || variant.sizeGB
+                estimatedTPS: this.estimateTPS(variant, hardware, runtime),
+                estimatedSize: variant.size_gb || variant.sizeGB,
+                runtime,
+                moe: {
+                    isMoE: moeProfile.isMoE,
+                    assumptionSource: moeProfile.assumptionSource,
+                    activeParamsB: moeProfile.activeParamsB,
+                    totalParamsB: moeProfile.totalParamsB,
+                    speedMultiplier: moeSpeed.multiplier,
+                    overheadMultiplier: moeSpeed.overheadMultiplier
+                }
             }
         };
     }
@@ -368,7 +390,7 @@ class ScoringEngine {
         const taskBonus = this.getTaskBonus(family, useCase);
 
         // MoE bonus (mixture of experts models are often better quality/speed ratio)
-        const moeBonus = (variant.is_moe || variant.isMoE) ? 5 : 0;
+        const moeBonus = resolveMoEParameterProfile(variant).isMoE ? 5 : 0;
 
         const score = baseScore + paramBonus - quantPenalty + taskBonus + moeBonus;
 
@@ -379,8 +401,8 @@ class ScoringEngine {
      * Calculate Speed score (S)
      * Based on estimated tokens per second vs target
      */
-    calculateSpeedScore(variant, hardware, targetTPS) {
-        const estimatedTPS = this.estimateTPS(variant, hardware);
+    calculateSpeedScore(variant, hardware, targetTPS, runtime = 'ollama') {
+        const estimatedTPS = this.estimateTPS(variant, hardware, runtime);
 
         if (estimatedTPS >= targetTPS * 2) {
             return 100;  // 2x target = perfect score
@@ -459,10 +481,11 @@ class ScoringEngine {
      * - Quantization adjustment
      * - MoE efficiency bonus
      */
-    estimateTPS(variant, hardware) {
+    estimateTPS(variant, hardware, runtime = 'ollama') {
         const params = variant.params_b || variant.paramsB || 7;
         const quant = (variant.quant || 'Q4_K_M').toUpperCase();
-        const isMoE = variant.is_moe || variant.isMoE || false;
+        const normalizedRuntime = normalizeMoERuntime(runtime);
+        const parameterProfile = resolveMoEParameterProfile(variant);
 
         // Get backend speed coefficient (TPS for 7B Q4_K_M)
         const backendKey = this.getBackendKey(hardware);
@@ -500,11 +523,13 @@ class ScoringEngine {
         // Calculate base TPS
         let tps = baseSpeed * sizeMult * quantMult;
 
-        // MoE models are faster because only ~1/3 of params are active
-        // But communication overhead limits the speedup
-        if (isMoE) {
-            tps *= 1.8;  // ~1.8x speedup (not 3x due to routing overhead)
-        }
+        const moeSpeed = estimateMoESpeedMultiplier({
+            model: variant,
+            runtime: normalizedRuntime,
+            denseParamsB: params,
+            parameterProfile
+        });
+        if (moeSpeed.applied) tps *= moeSpeed.multiplier;
 
         // Apply minimum floor (can't go below 1 TPS)
         return Math.max(1, Math.round(tps));

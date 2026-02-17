@@ -465,6 +465,42 @@ Memory requirements are calculated using calibrated bytes-per-parameter values:
 
 The selector automatically picks the best quantization that fits your available memory.
 
+For MoE models, deterministic memory estimation supports explicit sparse metadata when present:
+
+- `total_params_b`
+- `active_params_b`
+- `expert_count`
+- `experts_active_per_token`
+
+MoE parameter path selection is deterministic and uses this fallback order:
+
+1. `active_params_b` (assumption source: `moe_active_metadata`)
+2. `total_params_b * (experts_active_per_token / expert_count)` (assumption source: `moe_derived_expert_ratio`)
+3. `total_params_b` (assumption source: `moe_fallback_total_params`)
+4. Model `paramsB` fallback (assumption source: `moe_fallback_model_params`)
+
+Dense models continue to use the dense parameter path (`dense_params`) unchanged.
+
+### Runtime-Aware MoE Speed Estimation
+
+MoE speed estimates now include runtime-specific overhead assumptions (routing, communication, offload), instead of using a single fixed MoE boost.
+
+- Canonical helper: `src/models/moe-assumptions.js`
+- Applied in both:
+  - `src/models/deterministic-selector.js`
+  - `src/models/scoring-engine.js`
+
+Current runtime profiles:
+
+| Runtime | Routing | Communication | Offload | Max Effective Gain |
+|:--------|:-------:|:-------------:|:-------:|:------------------:|
+| `ollama` | 18% | 13% | 8% | 2.35x |
+| `vllm` | 12% | 8% | 4% | 2.65x |
+| `mlx` | 16% | 10% | 5% | 2.45x |
+| `llama.cpp` | 20% | 14% | 9% | 2.30x |
+
+Recommendation outputs now expose these assumptions through runtime metadata and MoE speed diagnostics.
+
 ---
 
 ## Supported Hardware

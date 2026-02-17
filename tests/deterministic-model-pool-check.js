@@ -212,6 +212,34 @@ function buildM4ProVisionPool() {
     ];
 }
 
+function buildMoERuntimeRegressionPool() {
+    return [
+        {
+            model_identifier: 'mixbench',
+            model_name: 'mixbench',
+            description: 'MoE runtime regression family',
+            primary_category: 'chat',
+            context_length: '8K',
+            variants: [
+                {
+                    tag: 'mixbench:46b',
+                    size: '46b',
+                    quantization: 'Q4_0',
+                    real_size_gb: 26,
+                    categories: ['chat'],
+                    is_moe: true,
+                    total_params_b: 46,
+                    active_params_b: 12,
+                    expert_count: 8,
+                    experts_active_per_token: 2
+                }
+            ],
+            tags: ['mixbench:46b'],
+            use_cases: ['chat']
+        }
+    ];
+}
+
 async function runSelectModelsUsesProvidedPool() {
     const selector = new DeterministicModelSelector();
     const hardware = buildHighEndHardware();
@@ -399,6 +427,135 @@ async function runM4ProMultimodalIncludesMidTierWhenFeasible() {
     assert.ok(topModelParams >= 7, `M4 Pro multimodal profile should include a mid-tier model when feasible, got: ${topModelParams}B`);
 }
 
+async function runDenseMemoryPathUsesDenseParams() {
+    const selector = new DeterministicModelSelector();
+    const denseModel = { paramsB: 46 };
+    const breakdown = selector.estimateMemoryBreakdown(denseModel, 'Q4_K_M', 8192);
+
+    assert.strictEqual(breakdown.parameterProfile.isMoE, false, 'Dense model should not be marked as MoE');
+    assert.strictEqual(breakdown.parameterProfile.assumptionSource, 'dense_params', 'Dense estimator should use dense params path');
+    assert.strictEqual(breakdown.parameterProfile.effectiveParamsB, 46, 'Dense estimator should use paramsB directly');
+}
+
+async function runMoECompleteMetadataUsesActiveParams() {
+    const selector = new DeterministicModelSelector();
+    const denseEquivalent = { paramsB: 46 };
+    const moeModel = {
+        paramsB: 46,
+        isMoE: true,
+        totalParamsB: 46,
+        activeParamsB: 12,
+        expertCount: 8,
+        expertsActivePerToken: 2
+    };
+
+    const denseRequired = selector.estimateMemoryBreakdown(denseEquivalent, 'Q4_K_M', 8192).requiredGB;
+    const moeBreakdown = selector.estimateMemoryBreakdown(moeModel, 'Q4_K_M', 8192);
+
+    assert.strictEqual(moeBreakdown.parameterProfile.assumptionSource, 'moe_active_metadata', 'Complete MoE metadata should use active-param path');
+    assert.strictEqual(moeBreakdown.parameterProfile.effectiveParamsB, 12, 'Active params should drive MoE effective memory footprint');
+    assert.ok(moeBreakdown.requiredGB < denseRequired, 'MoE active-param estimate should be smaller than dense equivalent');
+}
+
+async function runMoEPartialMetadataFallsBackDeterministically() {
+    const selector = new DeterministicModelSelector();
+
+    const derivedModel = {
+        paramsB: 46,
+        isMoE: true,
+        totalParamsB: 46,
+        expertCount: 8,
+        expertsActivePerToken: 2
+    };
+    const derivedBreakdown = selector.estimateMemoryBreakdown(derivedModel, 'Q4_K_M', 8192);
+    assert.strictEqual(
+        derivedBreakdown.parameterProfile.assumptionSource,
+        'moe_derived_expert_ratio',
+        'Partial MoE metadata with expert ratio should derive active params deterministically'
+    );
+    assert.strictEqual(
+        Math.round(derivedBreakdown.parameterProfile.effectiveParamsB * 10) / 10,
+        11.5,
+        'Derived active params should be total * (experts_active / expert_count)'
+    );
+
+    const fallbackModel = {
+        paramsB: 46,
+        isMoE: true,
+        totalParamsB: 46
+    };
+    const fallbackBreakdown = selector.estimateMemoryBreakdown(fallbackModel, 'Q4_K_M', 8192);
+    assert.strictEqual(
+        fallbackBreakdown.parameterProfile.assumptionSource,
+        'moe_fallback_total_params',
+        'When active metadata is missing, estimator should fall back to total params deterministically'
+    );
+    assert.strictEqual(
+        fallbackBreakdown.parameterProfile.effectiveParamsB,
+        46,
+        'Fallback to total params should preserve deterministic effective params'
+    );
+}
+
+async function runMoERuntimeProfilesChangeSpeedEstimate() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildHighEndHardware();
+    const pool = buildMoERuntimeRegressionPool();
+
+    const ollamaResult = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        runtime: 'ollama',
+        topN: 1,
+        silent: true
+    });
+    const vllmResult = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        runtime: 'vllm',
+        topN: 1,
+        silent: true
+    });
+
+    const ollamaTop = ollamaResult.candidates[0];
+    const vllmTop = vllmResult.candidates[0];
+
+    assert.ok(ollamaTop, 'Expected a candidate for ollama runtime');
+    assert.ok(vllmTop, 'Expected a candidate for vLLM runtime');
+    assert.strictEqual(ollamaTop.speed.runtime, 'ollama', 'Speed diagnostics should expose normalized ollama runtime');
+    assert.strictEqual(vllmTop.speed.runtime, 'vllm', 'Speed diagnostics should expose normalized vLLM runtime');
+    assert.strictEqual(ollamaTop.speed.moe.applied, true, 'MoE speed multiplier should be applied when metadata is present');
+    assert.strictEqual(vllmTop.speed.moe.applied, true, 'MoE speed multiplier should be applied for vLLM runtime too');
+    assert.ok(
+        vllmTop.speed.estimatedTPS > ollamaTop.speed.estimatedTPS,
+        `Expected vLLM MoE estimate (${vllmTop.speed.estimatedTPS}) to exceed ollama estimate (${ollamaTop.speed.estimatedTPS})`
+    );
+    assert.ok(
+        /MoE speed x/i.test(vllmTop.rationale),
+        'Rationale should include MoE speed assumption details'
+    );
+}
+
+async function runRuntimePropagationInCategoryRecommendations() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildHighEndHardware();
+    const pool = buildMoERuntimeRegressionPool();
+
+    selector.getInstalledModels = async () => [];
+    const recommendations = await selector.getBestModelsForHardware(hardware, pool, { runtime: 'vllm' });
+
+    const general = recommendations.general;
+    const top = general.bestModels[0];
+
+    assert.ok(general, 'General recommendations should be present');
+    assert.strictEqual(general.runtime, 'vllm', 'Category recommendations should preserve runtime context');
+    assert.ok(top, 'General recommendations should include a top model');
+    assert.strictEqual(top.runtime, 'vllm', 'Legacy mapped model should expose selected runtime');
+    assert.strictEqual(top.speedAssumptions.runtime, 'vllm', 'Speed assumptions should preserve runtime backend');
+}
+
 async function runAll() {
     await runSelectModelsUsesProvidedPool();
     await runGetBestModelsForHardwareUsesAllModels();
@@ -410,6 +567,11 @@ async function runAll() {
     await runQuantizedLargeModelCanBeRecommended();
     await runUnified24GbIncludesMidTierWhenFeasible();
     await runM4ProMultimodalIncludesMidTierWhenFeasible();
+    await runDenseMemoryPathUsesDenseParams();
+    await runMoECompleteMetadataUsesActiveParams();
+    await runMoEPartialMetadataFallsBackDeterministically();
+    await runMoERuntimeProfilesChangeSpeedEstimate();
+    await runRuntimePropagationInCategoryRecommendations();
     console.log('deterministic-model-pool-check: OK');
 }
 

@@ -10,6 +10,14 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
+const {
+    parseBillionsValue: parseMoEBillionsValue,
+    parsePositiveNumber: parseMoEPositiveNumber,
+    normalizeMoERuntime,
+    extractMoEMetadata: extractCanonicalMoEMetadata,
+    resolveMoEParameterProfile,
+    estimateMoESpeedMultiplier
+} = require('./moe-assumptions');
 
 class DeterministicModelSelector {
     constructor() {
@@ -748,6 +756,7 @@ class DeterministicModelSelector {
                 ollamaModel.main_size,
                 ollamaModel.model_identifier
             );
+            const moeMetadata = this.extractMoEMetadata(ollamaModel, variant, paramsB, baseText);
             const quant = this.normalizeQuantization(
                 variant.quantization ||
                 this.extractQuantizationFromTag(variantTag) ||
@@ -791,11 +800,28 @@ class DeterministicModelSelector {
             const version = ollamaModel.version || variantTag;
             const license = ollamaModel.license || 'unknown';
             const digest = ollamaModel.digest || 'unknown';
+            const normalizedExpertCount = Number.isFinite(moeMetadata.expertCount) && moeMetadata.expertCount > 0
+                ? Math.round(moeMetadata.expertCount)
+                : null;
+            const normalizedExpertsActive = Number.isFinite(moeMetadata.expertsActivePerToken) && moeMetadata.expertsActivePerToken > 0
+                ? moeMetadata.expertsActivePerToken
+                : null;
+            const normalizedTotalParamsB = Number.isFinite(moeMetadata.totalParamsB) && moeMetadata.totalParamsB > 0
+                ? moeMetadata.totalParamsB
+                : null;
+            const normalizedActiveParamsB = Number.isFinite(moeMetadata.activeParamsB) && moeMetadata.activeParamsB > 0
+                ? moeMetadata.activeParamsB
+                : null;
 
             return {
                 name: variantTag,
                 family: this.extractFamily(baseIdentifier),
                 paramsB,
+                isMoE: Boolean(moeMetadata.isMoE),
+                totalParamsB: normalizedTotalParamsB,
+                activeParamsB: normalizedActiveParamsB,
+                expertCount: normalizedExpertCount,
+                expertsActivePerToken: normalizedExpertsActive,
                 ctxMax: contextLength,
                 quant,
                 sizeGB: variantSizeGB,
@@ -820,6 +846,23 @@ class DeterministicModelSelector {
                     digest
                 }
             };
+        });
+    }
+
+    parseBillionsValue(rawValue) {
+        return parseMoEBillionsValue(rawValue);
+    }
+
+    parsePositiveNumber(rawValue) {
+        return parseMoEPositiveNumber(rawValue);
+    }
+
+    extractMoEMetadata(model = {}, variant = {}, paramsB = null, baseText = '') {
+        return extractCanonicalMoEMetadata({
+            model,
+            variant,
+            paramsB,
+            baseText
         });
     }
 
@@ -1166,10 +1209,12 @@ class DeterministicModelSelector {
             enableProbe = false,
             silent = false,
             optimizeFor = 'balanced',
+            runtime = 'ollama',
             hardware: providedHardware = null,
             installedModels = null,
             modelPool = null
         } = options;
+        const normalizedRuntime = normalizeMoERuntime(runtime);
         const optimizationObjective = this.normalizeOptimizationObjective(
             options.optimize || options.objective || optimizeFor
         );
@@ -1220,7 +1265,8 @@ class DeterministicModelSelector {
                 category,
                 targetCtx,
                 budget,
-                optimizationObjective
+                optimizationObjective,
+                normalizedRuntime
             );
             if (result) {
                 candidates.push(result);
@@ -1255,6 +1301,7 @@ class DeterministicModelSelector {
         return {
             category,
             optimizeFor: optimizationObjective,
+            runtime: normalizedRuntime,
             hardware,
             candidates: topCandidates,
             total_evaluated: filtered.length,
@@ -1306,18 +1353,20 @@ class DeterministicModelSelector {
         });
     }
 
-    evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced') {
+    evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced', runtime = 'ollama') {
         // 1. Select best fitting quantization
         const bestQuant = this.selectBestQuantization(model, budget, targetCtx);
         if (!bestQuant) return null;
 
         // 2. Calculate required memory
-        const requiredGB = this.estimateRequiredGB(model, bestQuant.quant, targetCtx);
+        const memoryEstimate = this.estimateMemoryBreakdown(model, bestQuant.quant, targetCtx);
+        const requiredGB = memoryEstimate.requiredGB;
         if (requiredGB > budget) return null;
 
         // 3. Calculate component scores
         const Q = this.calculateQualityPrior(model, bestQuant.quant, category);
-        const S = this.estimateSpeed(hardware, model, bestQuant.quant, category);
+        const speedEstimate = this.estimateSpeedProfile(hardware, model, bestQuant.quant, category, runtime);
+        const S = speedEstimate.score;
         const F = this.calculateFitScore(requiredGB, budget);
         const C = this.calculateContextScore(model, targetCtx);
 
@@ -1326,15 +1375,42 @@ class DeterministicModelSelector {
         const score = Math.round((Q * weights[0] + S * weights[1] + F * weights[2] + C * weights[3]) * 10) / 10;
 
         // 5. Build rationale
-        const rationale = this.buildRationale(hardware, model, bestQuant.quant, requiredGB, budget, category, Q, S);
+        const rationale = this.buildRationale(
+            hardware,
+            model,
+            bestQuant.quant,
+            requiredGB,
+            budget,
+            category,
+            Q,
+            S,
+            memoryEstimate,
+            speedEstimate
+        );
 
         return {
             meta: model,
             quant: bestQuant.quant,
             requiredGB: Math.round(requiredGB * 10) / 10,
-            estTPS: S,
+            estTPS: speedEstimate.estimatedTPS,
             score,
+            runtime: speedEstimate.runtime,
             rationale,
+            memory: {
+                modelMemGB: Math.round(memoryEstimate.modelMemGB * 100) / 100,
+                kvCacheGB: Math.round(memoryEstimate.kvCacheGB * 100) / 100,
+                runtimeOverheadGB: Math.round(memoryEstimate.runtimeOverheadGB * 100) / 100,
+                assumptionSource: memoryEstimate.parameterProfile.assumptionSource,
+                isMoE: memoryEstimate.parameterProfile.isMoE,
+                effectiveParamsB: Math.round(memoryEstimate.parameterProfile.effectiveParamsB * 1000) / 1000
+            },
+            speed: {
+                backend: speedEstimate.backend,
+                targetTPS: speedEstimate.targetTPS,
+                estimatedTPS: speedEstimate.estimatedTPS,
+                runtime: speedEstimate.runtime,
+                moe: speedEstimate.moe
+            },
             components: { Q, S, F, C }
         };
     }
@@ -1405,7 +1481,11 @@ class DeterministicModelSelector {
         return null; // Model doesn't fit
     }
 
-    estimateRequiredGB(model, quant, ctx) {
+    resolveMemoryParameterProfile(model = {}) {
+        return resolveMoEParameterProfile(model);
+    }
+
+    estimateMemoryBreakdown(model, quant, ctx) {
         // Bytes per parameter by quantization level (calibrated to real Ollama sizes)
         // 7B Q4_K_M=~4.5GB, 14B Q4_K_M=~9GB, 32B Q4_K_M=~19GB
         const bytesPerParam = {
@@ -1429,17 +1509,28 @@ class DeterministicModelSelector {
             ? observedFromSizeMap
             : (Number.isFinite(directVariantMatch) && directVariantMatch > 0 ? directVariantMatch : null);
 
-        const modelMemGB = observedWeightGB ?? (model.paramsB * bpp);
+        const parameterProfile = this.resolveMemoryParameterProfile(model);
+        const modelMemGB = observedWeightGB ?? (parameterProfile.effectiveParamsB * bpp);
         const effectiveCtx = Number.isFinite(Number(ctx)) && Number(ctx) > 0 ? Number(ctx) : 4096;
 
         // KV cache: ~2 * numLayers * hiddenDim * 2bytes * ctx / 1e9
         // Simplified: ~0.000008 GB per billion params per context token
-        const kvCacheGB = 0.000008 * model.paramsB * effectiveCtx;
+        const kvCacheGB = 0.000008 * parameterProfile.effectiveParamsB * effectiveCtx;
 
         // Runtime overhead (Metal/CUDA context, buffers)
         const runtimeOverhead = observedWeightGB ? 0.35 : 0.5;
 
-        return modelMemGB + kvCacheGB + runtimeOverhead;
+        return {
+            parameterProfile,
+            modelMemGB,
+            kvCacheGB,
+            runtimeOverheadGB: runtimeOverhead,
+            requiredGB: modelMemGB + kvCacheGB + runtimeOverhead
+        };
+    }
+
+    estimateRequiredGB(model, quant, ctx) {
+        return this.estimateMemoryBreakdown(model, quant, ctx).requiredGB;
     }
 
     calculateQualityPrior(model, quant, category) {
@@ -1530,7 +1621,11 @@ class DeterministicModelSelector {
         return 0;
     }
 
-    estimateSpeed(hardware, model, quant, category) {
+    estimateSpeed(hardware, model, quant, category, runtime = 'ollama') {
+        return this.estimateSpeedProfile(hardware, model, quant, category, runtime).score;
+    }
+
+    estimateSpeedProfile(hardware, model, quant, category, runtime = 'ollama') {
         // Determine backend
         let backend = 'cpu_x86';
         if (hardware.acceleration.supports_metal) backend = 'metal';
@@ -1539,7 +1634,14 @@ class DeterministicModelSelector {
         
         // Base speed calculation
         const K = this.backendK[backend];
-        let base = K / model.paramsB;
+        const denseParamsB = Number.isFinite(this.parseBillionsValue(model.paramsB))
+            ? this.parseBillionsValue(model.paramsB)
+            : 1;
+        const parameterProfile = this.resolveMemoryParameterProfile(model);
+        const effectiveParamsB = Number.isFinite(parameterProfile.effectiveParamsB) && parameterProfile.effectiveParamsB > 0
+            ? parameterProfile.effectiveParamsB
+            : denseParamsB;
+        let base = K / effectiveParamsB;
         
         // Quantization multiplier
         const quantMultiplier = this.quantSpeedMultipliers[quant] || 1.0;
@@ -1548,10 +1650,31 @@ class DeterministicModelSelector {
         // Threading multiplier
         if (hardware.cpu.cores >= 8) base *= 1.1;
         if (hardware.acceleration.supports_metal || hardware.acceleration.supports_cuda) base *= 1.2;
+
+        const normalizedRuntime = normalizeMoERuntime(runtime);
+        const moe = estimateMoESpeedMultiplier({
+            model,
+            runtime: normalizedRuntime,
+            denseParamsB,
+            parameterProfile
+        });
+        if (moe.applied) {
+            base *= moe.multiplier;
+        }
         
         // Normalize to 0-100 score
         const target = this.targetSpeeds[category] || this.targetSpeeds.general;
-        return Math.min(100, Math.round((100 * base / target) * 10) / 10);
+        const estimatedTPS = Math.max(1, Math.round(base * 10) / 10);
+        const score = Math.min(100, Math.round((100 * estimatedTPS / target) * 10) / 10);
+
+        return {
+            backend,
+            targetTPS: target,
+            estimatedTPS,
+            score,
+            runtime: normalizedRuntime,
+            moe
+        };
     }
 
     calculateFitScore(requiredGB, budgetGB) {
@@ -1618,7 +1741,7 @@ class DeterministicModelSelector {
         return promoted;
     }
 
-    buildRationale(hardware, model, quant, requiredGB, budget, category, Q, S) {
+    buildRationale(hardware, model, quant, requiredGB, budget, category, Q, S, memoryEstimate = null, speedEstimate = null) {
         const parts = [];
         
         // Memory fit
@@ -1633,6 +1756,24 @@ class DeterministicModelSelector {
         if (model.isDeprecated) parts.push('deprecated penalized');
         else if (model.isStale) parts.push('stale penalized');
         else if (model.freshnessScore >= 90) parts.push('fresh release');
+
+        const memoryProfile = memoryEstimate?.parameterProfile;
+        if (memoryProfile?.isMoE) {
+            const assumptionLabels = {
+                moe_active_metadata: 'MoE active params',
+                moe_derived_expert_ratio: 'MoE derived active ratio',
+                moe_fallback_total_params: 'MoE fallback total params',
+                moe_fallback_model_params: 'MoE fallback model params',
+                moe_fallback_default: 'MoE fallback default'
+            };
+            parts.push(assumptionLabels[memoryProfile.assumptionSource] || memoryProfile.assumptionSource);
+        }
+
+        if (speedEstimate?.moe?.applied) {
+            const runtimeLabel = speedEstimate.runtime || 'ollama';
+            const multiplier = Number(speedEstimate.moe.multiplier || 1).toFixed(2);
+            parts.push(`MoE speed x${multiplier} (${runtimeLabel})`);
+        }
         
         // Size sweet spot
         if (model.paramsB >= 7 && model.paramsB <= 13) {
@@ -1809,6 +1950,16 @@ class DeterministicModelSelector {
             quantization: candidate.quant,
             estimatedRAM: candidate.requiredGB,
             reasoning: candidate.rationale,
+            runtime: candidate.runtime || candidate.speed?.runtime || 'ollama',
+            memoryAssumptionSource: candidate.memory?.assumptionSource || 'dense_params',
+            speedAssumptions: candidate.speed?.moe ? {
+                applied: Boolean(candidate.speed.moe.applied),
+                runtime: candidate.speed.runtime || candidate.runtime || 'ollama',
+                multiplier: Number.isFinite(candidate.speed.moe.multiplier) ? candidate.speed.moe.multiplier : 1,
+                theoreticalSpeedup: Number.isFinite(candidate.speed.moe.theoreticalSpeedup) ? candidate.speed.moe.theoreticalSpeedup : 1,
+                overheadMultiplier: Number.isFinite(candidate.speed.moe.overheadMultiplier) ? candidate.speed.moe.overheadMultiplier : 1,
+                assumptionSource: candidate.speed.moe.assumptionSource || candidate.memory?.assumptionSource || 'dense_params'
+            } : null,
             source: provenance.source,
             registry: provenance.registry,
             version: provenance.version,
@@ -1900,6 +2051,7 @@ class DeterministicModelSelector {
         const normalizedPool = this.normalizeExternalModels(Array.isArray(allModels) ? allModels : []);
         const installedModels = await this.getInstalledModels();
         const normalizedHardware = this.normalizeHardwareProfile(hardware || await this.getHardware());
+        const runtime = normalizeMoERuntime(options.runtime || 'ollama');
         const optimizationObjective = this.normalizeOptimizationObjective(
             options.optimizeFor || options.optimize || options.objective
         );
@@ -1911,6 +2063,7 @@ class DeterministicModelSelector {
                     enableProbe: false,
                     silent: true,
                     optimizeFor: optimizationObjective,
+                    runtime,
                     hardware: normalizedHardware,
                     installedModels,
                     modelPool: normalizedPool
@@ -1919,6 +2072,7 @@ class DeterministicModelSelector {
                 recommendations[category] = {
                     tier: this.mapHardwareTier(normalizedHardware),
                     optimizeFor: optimizationObjective,
+                    runtime,
                     bestModels: result.candidates.map(candidate => this.mapCandidateToLegacyFormat(candidate)),
                     totalEvaluated: result.total_evaluated,
                     category: this.getCategoryInfo(category)
@@ -1927,6 +2081,7 @@ class DeterministicModelSelector {
                 recommendations[category] = {
                     tier: this.mapHardwareTier(normalizedHardware),
                     optimizeFor: optimizationObjective,
+                    runtime,
                     bestModels: [],
                     totalEvaluated: 0,
                     category: this.getCategoryInfo(category)

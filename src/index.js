@@ -259,7 +259,8 @@ class LLMChecker {
         }
 
         const recommendations = await this.generateIntelligentRecommendations(hardware, {
-            optimizeFor: options.optimizeFor || options.optimize
+            optimizeFor: options.optimizeFor || options.optimize,
+            runtime: options.runtime
         });
         const intelligentRecommendations = recommendations;
 
@@ -2387,6 +2388,7 @@ class LLMChecker {
     async generateIntelligentRecommendations(hardware, options = {}) {
         try {
             this.logger.info('Generating intelligent recommendations...');
+            const selectedRuntime = normalizeRuntime(options.runtime || 'ollama');
             
             // Obtener todos los modelos de Ollama
             const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
@@ -2402,7 +2404,7 @@ class LLMChecker {
             const recommendations = await this.intelligentRecommender.getBestModelsForHardware(
                 hardware,
                 allModels,
-                { optimizeFor }
+                { optimizeFor, runtime: selectedRuntime }
             );
             const summary = this.intelligentRecommender.generateRecommendationSummary(
                 recommendations,
@@ -2416,6 +2418,7 @@ class LLMChecker {
                 recommendations,
                 summary,
                 optimizeFor: summary.optimize_for || optimizeFor,
+                runtime: selectedRuntime,
                 totalModelsAnalyzed: allModels.length,
                 generatedAt: new Date().toISOString()
             };
