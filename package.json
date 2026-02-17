@@ -3,8 +3,8 @@
   "version": "3.2.0",
   "description": "Intelligent CLI tool with AI-powered model selection that analyzes your hardware and recommends optimal LLM models for your system",
   "bin": {
-    "llm-checker": "bin/enhanced_cli.js",
-    "ollama-checker": "bin/enhanced_cli.js",
+    "llm-checker": "bin/cli.js",
+    "ollama-checker": "bin/cli.js",
     "llm-checker-mcp": "bin/mcp-server.mjs"
   },
   "main": "src/index.js",
@@ -14,6 +14,7 @@
     "test:platform": "node tests/platform-tests/cross-platform.test.js",
     "test:ui": "node tests/ui-tests/interface.test.js",
     "test:runtime": "node tests/runtime-specdec-tests.js",
+    "test:hardware-detector": "node tests/hardware-detector-regression.js",
     "test:all": "node tests/run-all-tests.js",
     "build": "echo 'No build needed'",
     "dev": "node bin/enhanced_cli.js",

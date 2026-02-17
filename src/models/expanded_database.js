@@ -999,10 +999,16 @@ class ExpandedModelsDatabase {
         } else if (hasDedicatedGPU) {
             // Dedicated GPU - much better performance
             let gpuTPS = 30;
-            if (gpuModel.toLowerCase().includes('rtx 50')) gpuTPS = 65;
+            if (gpuModel.toLowerCase().includes('gb10') ||
+                gpuModel.toLowerCase().includes('grace blackwell') ||
+                gpuModel.toLowerCase().includes('dgx spark')) gpuTPS = 90;
+            else if (gpuModel.toLowerCase().includes('h100')) gpuTPS = 120;
+            else if (gpuModel.toLowerCase().includes('a100')) gpuTPS = 95;
+            else if (gpuModel.toLowerCase().includes('rtx 50')) gpuTPS = 65;
             else if (gpuModel.toLowerCase().includes('rtx 40')) gpuTPS = 50;
             else if (gpuModel.toLowerCase().includes('rtx 30')) gpuTPS = 40;
             else if (gpuModel.toLowerCase().includes('rtx 20')) gpuTPS = 30;
+            else if (gpuModel.toLowerCase().includes('p100')) gpuTPS = 32;
             else if (vramGB >= 16) gpuTPS = 45;
             else if (vramGB >= 8) gpuTPS = 35;
             else if (vramGB >= 4) gpuTPS = 25;

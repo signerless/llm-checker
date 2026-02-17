@@ -52,6 +52,20 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 
 ---
 
+## Comparison with Other Tooling (e.g. `llmfit`)
+
+LLM Checker and `llmfit` solve related but different problems:
+
+| Tool | Primary Focus | Typical Output |
+|------|---------------|----------------|
+| **LLM Checker** | Hardware-aware **model selection** for local inference | Ranked recommendations, compatibility scores, pull/run commands |
+| **llmfit** | LLM workflow support and model-fit evaluation from another angle | Different optimization workflow and selection heuristics |
+
+If your goal is: *"What should I run on this exact machine right now?"*, use **LLM Checker** first.  
+If your goal is broader experimentation across custom pipelines, using both tools can be complementary.
+
+---
+
 ## Installation
 
 ```bash
