@@ -133,9 +133,22 @@ llm-checker ai-run --calibrated --category coding --prompt "Refactor this functi
 
 LLM Checker is published in all primary channels:
 
-- npm (latest): [`llm-checker@latest`](https://www.npmjs.com/package/llm-checker)
+- npm (latest, recommended): [`llm-checker@latest`](https://www.npmjs.com/package/llm-checker)
 - GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
-- GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
+- GitHub Packages (legacy mirror, may lag): [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
+
+### Important: Use npm for Latest Builds
+
+If you need the newest release, install from npm (`llm-checker`), not the scoped GitHub Packages mirror.
+
+If you installed `@pavelevich/llm-checker` and version looks old:
+
+```bash
+npm uninstall -g @pavelevich/llm-checker
+npm install -g llm-checker@latest
+hash -r
+llm-checker --version
+```
 
 ### v3.3.0 Highlights
 
@@ -148,7 +161,9 @@ LLM Checker is published in all primary channels:
 - Hardened Jetson CUDA detection to avoid false CPU-only fallback.
 - Documentation reorganized under `docs/` with clearer onboarding paths.
 
-### Optional: Install from GitHub Packages
+### Optional (Legacy): Install from GitHub Packages
+
+Use this only if you explicitly need GitHub Packages. It may not match npm latest.
 
 ```bash
 # 1) Configure registry + token (PAT with read:packages)
