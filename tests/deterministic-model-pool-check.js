@@ -56,6 +56,44 @@ function buildReasoningPoolForFitRegression() {
     ];
 }
 
+function buildOptimizationPool() {
+    return [
+        {
+            model_identifier: 'duo',
+            model_name: 'duo',
+            description: 'Synthetic family to validate optimization profile weighting',
+            primary_category: 'general',
+            context_length: '8K',
+            variants: [
+                { tag: 'duo:7b', size: '7b', quantization: 'Q4_0', real_size_gb: 4.5, categories: ['general'], family: 'llama3.2' },
+                { tag: 'duo:13b', size: '13b', quantization: 'Q4_0', real_size_gb: 8.2, categories: ['general'], family: 'qwen2.5' }
+            ],
+            tags: ['duo:7b', 'duo:13b'],
+            use_cases: ['general']
+        }
+    ];
+}
+
+function buildThreeGpuHardwareAmbiguousVram() {
+    return {
+        cpu: { cores: 32, architecture: 'x86_64' },
+        gpu: {
+            model: 'NVIDIA Tesla V100',
+            vendor: 'NVIDIA',
+            vram: 12,           // ambiguous field (often per-GPU)
+            vramPerGPU: 12,
+            gpuCount: 3,
+            isMultiGPU: true,
+            all: [
+                { model: 'NVIDIA Tesla V100', vram: 12, vendor: 'NVIDIA' },
+                { model: 'NVIDIA Tesla P40', vram: 12, vendor: 'NVIDIA' },
+                { model: 'NVIDIA Tesla M40', vram: 12, vendor: 'NVIDIA' }
+            ]
+        },
+        memory: { total: 128 }
+    };
+}
+
 async function runSelectModelsUsesProvidedPool() {
     const selector = new DeterministicModelSelector();
     const hardware = buildHighEndHardware();
@@ -128,11 +166,57 @@ async function runUndefinedHardwareFallsBackSafely() {
     assert.ok(generalIds.every((id) => id.startsWith('unitmega:')), 'fallback hardware path should still use provided allModels');
 }
 
+async function runOptimizationProfilesInfluenceRanking() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildRtx3090Hardware();
+    const pool = buildOptimizationPool();
+
+    const speedResult = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        optimizeFor: 'speed',
+        topN: 2,
+        silent: true
+    });
+    const qualityResult = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        optimizeFor: 'quality',
+        topN: 2,
+        silent: true
+    });
+
+    const speedTop = speedResult.candidates[0]?.meta?.model_identifier;
+    const qualityTop = qualityResult.candidates[0]?.meta?.model_identifier;
+
+    assert.strictEqual(speedTop, 'duo:7b', `Speed profile should prefer smaller/faster variant, got: ${speedTop}`);
+    assert.strictEqual(qualityTop, 'duo:13b', `Quality profile should prefer larger/higher-quality variant, got: ${qualityTop}`);
+}
+
+async function runMultiGpuNormalizationUsesCombinedVram() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildThreeGpuHardwareAmbiguousVram();
+    const allModels = buildReasoningPoolForFitRegression();
+
+    selector.getInstalledModels = async () => [];
+
+    const normalized = selector.normalizeHardwareProfile(hardware);
+    assert.strictEqual(normalized.gpu.vramGB, 36, `Expected combined VRAM 36GB, got: ${normalized.gpu.vramGB}`);
+
+    const recommendations = await selector.getBestModelsForHardware(hardware, allModels);
+    const reasoningIds = (recommendations.reasoning?.bestModels || []).map((m) => m.model_identifier);
+    assert.ok(reasoningIds.includes('deepfit:70b'), '70B reasoning variant should be viable with 36GB aggregate VRAM');
+}
+
 async function runAll() {
     await runSelectModelsUsesProvidedPool();
     await runGetBestModelsForHardwareUsesAllModels();
     await runProvidedHardwareProfileIsHonored();
     await runUndefinedHardwareFallsBackSafely();
+    await runOptimizationProfilesInfluenceRanking();
+    await runMultiGpuNormalizationUsesCombinedVram();
     console.log('deterministic-model-pool-check: OK');
 }
 

@@ -18,6 +18,8 @@ class ROCmDetector {
 
     // AMD PCI device IDs for model name resolution
     static AMD_DEVICE_IDS = {
+        // RDNA 4 / Radeon AI PRO
+        '7551': { name: 'AMD Radeon AI PRO R9700', vram: 32 },
         // RDNA 3 (RX 7000 series)
         '744c': { name: 'AMD Radeon RX 7900 XTX', vram: 24 },
         '7448': { name: 'AMD Radeon RX 7900 XT', vram: 20 },
@@ -546,8 +548,17 @@ class ROCmDetector {
             gfxVersion: null
         };
 
+        // RDNA 4 / Radeon AI PRO
+        if (nameLower.includes('r9700') || nameLower.includes('ai pro') ||
+            nameLower.includes('gfx1200') || nameLower.includes('gfx1201')) {
+            capabilities.bf16 = true;
+            capabilities.matrixCores = true;
+            capabilities.infinityCache = true;
+            capabilities.architecture = 'RDNA 4';
+            capabilities.gfxVersion = 'gfx1200';
+        }
         // RDNA 3 (RX 7000 series)
-        if (nameLower.includes('7900') || nameLower.includes('7800') ||
+        else if (nameLower.includes('7900') || nameLower.includes('7800') ||
             nameLower.includes('7700') || nameLower.includes('7600') ||
             nameLower.includes('gfx1100') || nameLower.includes('gfx1101') ||
             nameLower.includes('gfx1102')) {
@@ -598,6 +609,9 @@ class ROCmDetector {
     estimateVRAMFromModel(name) {
         const nameLower = (name || '').toLowerCase();
 
+        // RDNA 4 / Radeon AI PRO
+        if (nameLower.includes('r9700') || nameLower.includes('ai pro r9700')) return 32;
+
         // RX 7000 series
         if (nameLower.includes('7900 xtx')) return 24;
         if (nameLower.includes('7900 xt')) return 20;
@@ -634,6 +648,7 @@ class ROCmDetector {
     estimateVRAMFromGfxName(name) {
         const nameLower = (name || '').toLowerCase();
 
+        if (nameLower.includes('gfx1200') || nameLower.includes('gfx1201')) return 32; // Radeon AI PRO R9700
         if (nameLower.includes('gfx1100')) return 24;  // RX 7900 XTX
         if (nameLower.includes('gfx1101')) return 16;  // RX 7800
         if (nameLower.includes('gfx1102')) return 8;   // RX 7600
@@ -654,6 +669,10 @@ class ROCmDetector {
 
         // Speed coefficients (tokens/sec per B params at Q4)
         const speedMap = {
+            // RDNA 4 / Radeon AI PRO
+            'r9700': 230,
+            'ai pro r9700': 230,
+
             // RX 7000 series (RDNA 3)
             '7900 xtx': 200,
             '7900 xt': 180,

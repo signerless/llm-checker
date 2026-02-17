@@ -516,6 +516,38 @@ class AMDGPUDetectionTest {
         }
     }
 
+    /**
+     * Test 11: Radeon AI PRO R9700 (PCI ID 7551) via lspci
+     */
+    test_lspci_r9700() {
+        this.log('\n--- Test 11: Radeon AI PRO R9700 via lspci ---', 'info');
+
+        const lspciOutput = '03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] GFX1200 [Radeon AI PRO R9700] [1002:7551]\n';
+
+        const { detector, cleanup } = this.createMockedDetector({
+            rocmSmiAvailable: false,
+            rocmInfoAvailable: false,
+            lspciOutput: lspciOutput,
+            platform: 'linux',
+        });
+
+        try {
+            const info = detector.detect();
+            this.assert(info !== null, 'detect() should return non-null');
+            this.assert(info.gpus.length === 1, `Should detect 1 GPU, got: ${info?.gpus?.length}`);
+
+            if (info && info.gpus.length > 0) {
+                const gpu = info.gpus[0];
+                this.assert(gpu.name.includes('R9700'), `GPU name should contain R9700, got: ${gpu.name}`);
+                this.assert(gpu.memory.total === 32, `VRAM should be 32GB, got: ${gpu.memory.total}GB`);
+                this.assert(gpu.capabilities.architecture === 'RDNA 4', `Architecture should be RDNA 4, got: ${gpu.capabilities.architecture}`);
+                this.assert(gpu.speedCoefficient >= 220, `Speed coefficient should be >= 220, got: ${gpu.speedCoefficient}`);
+            }
+        } finally {
+            cleanup();
+        }
+    }
+
     // ==========================================
     // RUN ALL
     // ==========================================
@@ -535,6 +567,7 @@ class AMDGPUDetectionTest {
         this.test_isIntegratedGPU_fix();
         this.test_unified_detector_with_lspci_fallback();
         this.test_lspci_rx7600();
+        this.test_lspci_r9700();
 
         // Summary
         console.log('\n' + '='.repeat(60));

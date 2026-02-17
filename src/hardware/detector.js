@@ -86,15 +86,40 @@ class HardwareDetector {
     processGPUInfo(graphics) {
         const controllers = graphics.controllers || [];
         const displays = graphics.displays || [];
+
+        // Enrich weak/placeholder controller entries with device-id fallback.
+        const normalizedControllers = controllers.map((gpu) => {
+            const normalized = { ...gpu };
+            const originalModel = (gpu.model || '').trim();
+            const modelLower = originalModel.toLowerCase();
+
+            const hasGenericModel = !originalModel ||
+                modelLower === 'unknown' ||
+                modelLower.includes('nvidia corporation device') ||
+                /^device\s+[0-9a-f]{4}$/i.test(originalModel);
+
+            if (hasGenericModel && gpu.deviceId) {
+                const mappedModel = this.getGPUModelFromDeviceId(gpu.deviceId);
+                if (mappedModel) {
+                    normalized.model = mappedModel;
+                }
+            }
+
+            if ((!normalized.vendor || normalized.vendor.trim() === '') && normalized.model) {
+                normalized.vendor = this.inferVendorFromGPUModel(normalized.model, '');
+            }
+
+            return normalized;
+        });
         
         // Debug logging to help diagnose GPU detection issues
         if (process.env.DEBUG_GPU) {
-            console.log('GPU Detection Debug:', JSON.stringify(controllers, null, 2));
+            console.log('GPU Detection Debug:', JSON.stringify(normalizedControllers, null, 2));
         }
 
 
         // Filter out invalid/virtualized GPUs first
-        const validGPUs = controllers.filter(gpu => {
+        const validGPUs = normalizedControllers.filter(gpu => {
             const model = (gpu.model || '').toLowerCase();
             const vendor = (gpu.vendor || '').toLowerCase();
             const hasKnownModelSignature = this.looksLikeRealGPUModel(model);
@@ -199,7 +224,7 @@ class HardwareDetector {
             driverVersion: primaryGPU.driverVersion || 'Unknown',
             gpuCount: gpuCount > 0 ? gpuCount : (dedicatedGPUs.length > 0 ? dedicatedGPUs.length : 1),
             isMultiGPU: gpuCount > 1,
-            all: controllers.map(gpu => ({
+            all: normalizedControllers.map(gpu => ({
                 model: gpu.model,
                 vram: this.normalizeVRAM(gpu.vram || 0),
                 vendor: gpu.vendor || this.inferVendorFromGPUModel(gpu.model, 'Unknown')
@@ -230,7 +255,7 @@ class HardwareDetector {
             const perGPUVRAM = backendGPUs[0]?.memory?.total
                 || (gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / gpuCount) : 0);
 
-            const modelFromUnified = summary.gpuModel || systemInfo.gpu.model;
+            const modelFromUnified = summary.gpuInventory || summary.gpuModel || systemInfo.gpu.model;
             const vendor = this.inferVendorFromGPUModel(modelFromUnified, systemInfo.gpu.vendor);
 
             systemInfo.gpu = {
@@ -242,6 +267,7 @@ class HardwareDetector {
                 dedicated: primaryType !== 'metal',
                 gpuCount,
                 isMultiGPU: Boolean(summary.isMultiGPU || gpuCount > 1),
+                gpuInventory: summary.gpuInventory || null,
                 backend: primaryType,
                 driverVersion: backendInfo.driver || systemInfo.gpu.driverVersion
             };
@@ -315,10 +341,14 @@ class HardwareDetector {
     getGPUModelFromDeviceId(deviceId) {
         if (!deviceId) return null;
         
-        // Normalize device ID (remove 0x prefix if present and convert to lowercase)
-        const normalizedId = deviceId.toLowerCase().replace('0x', '');
+        // Normalize device ID (handle "0x1B82", "10de:1b82", and raw variants)
+        let normalizedId = deviceId.toLowerCase().replace('0x', '');
+        const trailingHexMatch = normalizedId.match(/([0-9a-f]{4})$/);
+        if (trailingHexMatch) {
+            normalizedId = trailingHexMatch[1];
+        }
         
-        // NVIDIA RTX 50 series device IDs
+        // Known PCI device-id mappings (subset, focused on common LLM hardware)
         const deviceIdMap = {
             '2d04': 'NVIDIA GeForce RTX 5060 Ti',
             '2d05': 'NVIDIA GeForce RTX 5060',
@@ -327,7 +357,7 @@ class HardwareDetector {
             '2d08': 'NVIDIA GeForce RTX 5080',
             '2d09': 'NVIDIA GeForce RTX 5090',
             
-            // NVIDIA RTX 40 series device IDs
+            // NVIDIA RTX 40 series
             '2684': 'NVIDIA GeForce RTX 4090',
             '2685': 'NVIDIA GeForce RTX 4080',
             '2786': 'NVIDIA GeForce RTX 4070 Ti',
@@ -335,12 +365,32 @@ class HardwareDetector {
             '27a0': 'NVIDIA GeForce RTX 4060 Ti',
             '27a1': 'NVIDIA GeForce RTX 4060',
             
-            // NVIDIA RTX 30 series device IDs
+            // NVIDIA RTX 30 series
             '2204': 'NVIDIA GeForce RTX 3090',
             '2206': 'NVIDIA GeForce RTX 3080',
             '2484': 'NVIDIA GeForce RTX 3070',
             '2487': 'NVIDIA GeForce RTX 3060 Ti',
-            '2504': 'NVIDIA GeForce RTX 3060'
+            '2504': 'NVIDIA GeForce RTX 3060',
+
+            // NVIDIA Pascal (Issue #35)
+            '1b82': 'NVIDIA GeForce GTX 1070 Ti',
+            '1b81': 'NVIDIA GeForce GTX 1070',
+            '1b80': 'NVIDIA GeForce GTX 1080',
+
+            // AMD RDNA 3 / RDNA 2
+            '744c': 'AMD Radeon RX 7900 XTX',
+            '7448': 'AMD Radeon RX 7900 XT',
+            '7460': 'AMD Radeon RX 7900 GRE',
+            '7480': 'AMD Radeon RX 7800 XT',
+            '7481': 'AMD Radeon RX 7700 XT',
+            '7483': 'AMD Radeon RX 7600',
+            '7484': 'AMD Radeon RX 7600 XT',
+            '73a3': 'AMD Radeon RX 6800 XT',
+            '73a2': 'AMD Radeon RX 6800',
+            '73df': 'AMD Radeon RX 6700 XT',
+
+            // AMD Radeon AI PRO
+            '7551': 'AMD Radeon AI PRO R9700'
         };
         
         return deviceIdMap[normalizedId] || null;
@@ -383,6 +433,13 @@ class HardwareDetector {
         if (modelLower.includes('rx 7800')) return 16;
         if (modelLower.includes('rx 7700')) return 12;
         if (modelLower.includes('rx 7600')) return 8;
+        if (modelLower.includes('r9700') || modelLower.includes('ai pro r9700')) return 32;
+
+        // NVIDIA GTX Pascal
+        if (modelLower.includes('gtx 1080 ti')) return 11;
+        if (modelLower.includes('gtx 1080')) return 8;
+        if (modelLower.includes('gtx 1070 ti')) return 8;
+        if (modelLower.includes('gtx 1070')) return 8;
         
         // Generic estimates
         if (modelLower.includes('rtx')) return 8; // Default for RTX
@@ -462,9 +519,13 @@ class HardwareDetector {
         else if (model.includes('rtx 4070')) score += 20;
         else if (model.includes('rtx 30')) score += 18;
         else if (model.includes('rtx 20')) score += 15;
+        else if (model.includes('gtx 1080')) score += 14;
+        else if (model.includes('gtx 1070 ti')) score += 13;
+        else if (model.includes('gtx 1070')) score += 12;
         else if (model.includes('gtx 16')) score += 12;
         else if (model.includes('tesla p100') || model.includes('p100')) score += 14;
         else if (model.includes('apple m')) score += 15;
+        else if (model.includes('r9700') || model.includes('ai pro r9700')) score += 23;
 
         return Math.min(Math.round(score), 100);
     }
@@ -563,6 +624,9 @@ class HardwareDetector {
         if (modelLower.includes('rtx 3090')) return 85;
         if (modelLower.includes('rtx 30')) return 80;
         if (modelLower.includes('rtx 20')) return 70;
+        if (modelLower.includes('gtx 1080')) return 58;
+        if (modelLower.includes('gtx 1070 ti')) return 56;
+        if (modelLower.includes('gtx 1070')) return 54;
         if (modelLower.includes('gtx 16')) return 60;
         if (modelLower.includes('gtx 10')) return 50;
         
@@ -579,6 +643,7 @@ class HardwareDetector {
         if (modelLower.includes('rx 7700')) return 75;
         if (modelLower.includes('rx 6900')) return 70;
         if (modelLower.includes('rx 6800')) return 65;
+        if (modelLower.includes('r9700') || modelLower.includes('ai pro r9700')) return 88;
         
         // Intel
         if (modelLower.includes('arc a7')) return 55;

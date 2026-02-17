@@ -1027,11 +1027,13 @@ function displayIntelligentRecommendations(intelligentData) {
 
     const { summary, recommendations } = intelligentData;
     const tier = summary.hardware_tier.replace('_', ' ').toUpperCase();
+    const optimizeProfile = (summary.optimize_for || intelligentData.optimizeFor || 'balanced').toUpperCase();
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
 
     console.log('\n' + chalk.bgRed.white.bold(' INTELLIGENT RECOMMENDATIONS BY CATEGORY '));
     console.log(chalk.red('╭' + '─'.repeat(65)));
     console.log(chalk.red('│') + ` Hardware Tier: ${tierColor.bold(tier)} | Models Analyzed: ${chalk.cyan.bold(intelligentData.totalModelsAnalyzed)}`);
+    console.log(chalk.red('│') + ` Optimization: ${chalk.magenta.bold(optimizeProfile)}`);
     console.log(chalk.red('│'));
 
     // Mostrar mejor modelo general
@@ -2303,6 +2305,7 @@ auditCommand
     .option('--out-dir <path>', 'Output directory when --out is omitted', 'audit-reports')
     .option('-u, --use-case <case>', 'Use case when --command check is selected', 'general')
     .option('-c, --category <category>', 'Category hint when --command recommend is selected')
+    .option('--optimize <profile>', 'Optimization profile for recommend mode (balanced|speed|quality|context|coding)', 'balanced')
     .option('--runtime <runtime>', `Runtime for check mode (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
     .option('--include-cloud', 'Include cloud models in check-mode analysis')
     .option('--max-size <size>', 'Maximum model size for check mode (e.g., "24B" or "12GB")')
@@ -2356,7 +2359,9 @@ auditCommand
                 runtimeBackend = selectedRuntime;
                 policyCandidates = collectCandidatesFromAnalysis(analysisResult);
             } else {
-                recommendationResult = await checker.generateIntelligentRecommendations(hardware);
+                recommendationResult = await checker.generateIntelligentRecommendations(hardware, {
+                    optimizeFor: options.optimize
+                });
                 if (!recommendationResult) {
                     throw new Error('Unable to generate recommendation data for policy audit export.');
                 }
@@ -2390,6 +2395,7 @@ auditCommand
                     runtime: runtimeBackend,
                     use_case: selectedCommand === 'check' ? normalizeUseCaseInput(options.useCase) : null,
                     category: selectedCommand === 'recommend' ? options.category || null : null,
+                    optimize: selectedCommand === 'recommend' ? options.optimize || 'balanced' : null,
                     include_cloud: Boolean(options.includeCloud)
                 },
                 hardware
@@ -2798,6 +2804,7 @@ program
     .command('recommend')
     .description('Get intelligent model recommendations for your hardware')
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
+    .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
     .addHelpText(
@@ -2821,7 +2828,9 @@ Enterprise policy examples:
             }
 
             const hardware = await checker.getSystemInfo();
-            const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware);
+            const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware, {
+                optimizeFor: options.optimize
+            });
 
             if (!intelligentRecommendations) {
                 console.error(chalk.red('\nFailed to generate recommendations'));

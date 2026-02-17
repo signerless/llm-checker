@@ -258,7 +258,9 @@ class LLMChecker {
             this.progress.step('Smart Recommendations', 'Generating personalized model suggestions...');
         }
 
-        const recommendations = await this.generateIntelligentRecommendations(hardware);
+        const recommendations = await this.generateIntelligentRecommendations(hardware, {
+            optimizeFor: options.optimizeFor || options.optimize
+        });
         const intelligentRecommendations = recommendations;
 
         if (this.progress) {
@@ -2382,7 +2384,7 @@ class LLMChecker {
     }
 
 
-    async generateIntelligentRecommendations(hardware) {
+    async generateIntelligentRecommendations(hardware, options = {}) {
         try {
             this.logger.info('Generating intelligent recommendations...');
             
@@ -2396,14 +2398,24 @@ class LLMChecker {
             }
 
             // Generar recomendaciones inteligentes
-            const recommendations = await this.intelligentRecommender.getBestModelsForHardware(hardware, allModels);
-            const summary = this.intelligentRecommender.generateRecommendationSummary(recommendations, hardware);
+            const optimizeFor = options.optimizeFor || options.optimize || 'balanced';
+            const recommendations = await this.intelligentRecommender.getBestModelsForHardware(
+                hardware,
+                allModels,
+                { optimizeFor }
+            );
+            const summary = this.intelligentRecommender.generateRecommendationSummary(
+                recommendations,
+                hardware,
+                { optimizeFor }
+            );
 
             this.logger.info(`Generated recommendations for ${Object.keys(recommendations).length} categories`);
             
             return {
                 recommendations,
                 summary,
+                optimizeFor: summary.optimize_for || optimizeFor,
                 totalModelsAnalyzed: allModels.length,
                 generatedAt: new Date().toISOString()
             };

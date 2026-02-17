@@ -101,6 +101,15 @@ class DeterministicModelSelector {
         
         // Category scoring weights [Q, S, F, C] from centralized config
         this.categoryWeights = DETERMINISTIC_WEIGHTS;
+
+        // User optimization profile overrides [Q, S, F, C]
+        this.optimizationProfiles = {
+            balanced: null,
+            speed: [0.25, 0.55, 0.15, 0.05],
+            quality: [0.65, 0.10, 0.15, 0.10],
+            context: [0.30, 0.10, 0.20, 0.40],
+            coding: [0.55, 0.25, 0.10, 0.10]
+        };
     }
 
     // ============================================================================
@@ -148,6 +157,7 @@ class DeterministicModelSelector {
         const gpu = input.gpu || {};
         const memory = input.memory || {};
         const acceleration = input.acceleration || {};
+        const gpuEntries = Array.isArray(gpu.all) ? gpu.all : [];
 
         const totalMemGB =
             toNumber(memory.totalGB) ??
@@ -156,21 +166,62 @@ class DeterministicModelSelector {
             toNumber(input.memoryGB) ??
             8;
 
-        const usableMemGB =
-            toNumber(input.usableMemGB) ??
-            Math.max(1, Math.min(0.8 * totalMemGB, totalMemGB - 2));
-
-        const vramGB =
-            toNumber(gpu.vramGB) ??
-            toNumber(gpu.vram) ??
-            toNumber(gpu.totalVRAM) ??
-            toNumber(gpu.vramPerGPU) ??
-            0;
-
         const modelHints = `${gpu.model || ''} ${gpu.vendor || ''} ${gpu.type || ''}`.toLowerCase();
         const inferredUnified =
             Boolean(gpu.unified) ||
             /apple|m1|m2|m3|m4|unified/.test(modelHints);
+
+        const utilizationFactor = inferredUnified ? 0.85 : 0.8;
+        const memoryHeadroomGB = inferredUnified ? 1.5 : 2;
+        const usableMemGB =
+            toNumber(input.usableMemGB) ??
+            Math.max(1, Math.min(utilizationFactor * totalMemGB, totalMemGB - memoryHeadroomGB));
+
+        const gpuCount =
+            toNumber(gpu.gpuCount) ??
+            toNumber(gpu.count) ??
+            (gpuEntries.length > 0 ? gpuEntries.length : null) ??
+            toNumber(input.gpuCount) ??
+            1;
+
+        const vramPerGPU =
+            toNumber(gpu.vramPerGPU) ??
+            toNumber(input.vramPerGPU) ??
+            null;
+
+        const summedEntryVRAM = gpuEntries.reduce((sum, entry) => {
+            return sum + (
+                toNumber(entry?.vramGB) ??
+                toNumber(entry?.vram) ??
+                toNumber(entry?.totalVRAM) ??
+                0
+            );
+        }, 0);
+
+        const explicitTotalVRAM =
+            toNumber(gpu.totalVRAM) ??
+            toNumber(input.totalVRAM) ??
+            toNumber(input.gpuTotalVRAM) ??
+            (summedEntryVRAM > 0 ? summedEntryVRAM : null);
+
+        const directVRAM =
+            toNumber(gpu.vramGB) ??
+            toNumber(gpu.vram) ??
+            null;
+
+        let vramGB =
+            explicitTotalVRAM ??
+            directVRAM ??
+            0;
+
+        // Multi-GPU fallback when only per-GPU memory is known.
+        if (!explicitTotalVRAM && gpuCount > 1) {
+            if (vramPerGPU) {
+                vramGB = vramPerGPU * gpuCount;
+            } else if (directVRAM && Boolean(gpu.isMultiGPU || input.isMultiGPU)) {
+                vramGB = Math.max(directVRAM, directVRAM * gpuCount);
+            }
+        }
 
         let gpuType = gpu.type;
         if (!gpuType) {
@@ -206,6 +257,9 @@ class DeterministicModelSelector {
                 ...gpu,
                 type: gpuType,
                 vramGB,
+                vramPerGPU: vramPerGPU ?? (gpuCount > 0 ? (vramGB > 0 ? vramGB / gpuCount : 0) : 0),
+                gpuCount,
+                isMultiGPU: Boolean(gpu.isMultiGPU || gpuCount > 1),
                 unified: inferredUnified
             },
             memory: {
@@ -215,6 +269,43 @@ class DeterministicModelSelector {
             acceleration: normalizedAcceleration,
             usableMemGB
         };
+    }
+
+    normalizeOptimizationObjective(objective) {
+        if (!objective) return 'balanced';
+        const normalized = String(objective).toLowerCase().trim();
+        if (['balanced', 'default', 'auto'].includes(normalized)) return 'balanced';
+        if (['speed', 'fast', 'latency', 'throughput'].includes(normalized)) return 'speed';
+        if (['quality', 'accurate', 'accuracy'].includes(normalized)) return 'quality';
+        if (['context', 'long-context', 'long_context', 'memory'].includes(normalized)) return 'context';
+        if (['coding', 'code', 'developer'].includes(normalized)) return 'coding';
+        return 'balanced';
+    }
+
+    getScoringWeights(category, optimizeFor = 'balanced') {
+        const base = this.categoryWeights[category] || this.categoryWeights.general;
+        const objective = this.normalizeOptimizationObjective(optimizeFor);
+        const objectiveWeights = this.optimizationProfiles[objective];
+
+        if (!objectiveWeights) {
+            return base;
+        }
+
+        // Blend category semantics with requested profile, but keep explicit
+        // user intent dominant (especially for quality/context priorities).
+        const objectivePriorities = {
+            speed: 0.8,
+            quality: 0.95,
+            context: 0.85,
+            coding: 0.8
+        };
+        const objectivePriority = objectivePriorities[objective] || 0.75;
+        const categoryPriority = 1 - objectivePriority;
+
+        return base.map((weight, idx) => {
+            const blended = (weight * categoryPriority) + (objectiveWeights[idx] * objectivePriority);
+            return Math.round(blended * 1000) / 1000;
+        });
     }
 
     async getCPUInfo() {
@@ -889,13 +980,20 @@ class DeterministicModelSelector {
             topN = 5,
             enableProbe = false,
             silent = false,
+            optimizeFor = 'balanced',
             hardware: providedHardware = null,
             installedModels = null,
             modelPool = null
         } = options;
+        const optimizationObjective = this.normalizeOptimizationObjective(
+            options.optimize || options.objective || optimizeFor
+        );
 
         if (!silent) {
             console.log(`🔍 Selecting models for category: ${category}`);
+            if (optimizationObjective !== 'balanced') {
+                console.log(`⚙️  Optimization profile: ${optimizationObjective}`);
+            }
         }
         
         // Phase 0: Gather data
@@ -931,7 +1029,14 @@ class DeterministicModelSelector {
         const budget = isUnified ? usableMem : (vram || usableMem);
 
         for (const model of filtered) {
-            const result = this.evaluateModel(model, hardware, category, targetCtx, budget);
+            const result = this.evaluateModel(
+                model,
+                hardware,
+                category,
+                targetCtx,
+                budget,
+                optimizationObjective
+            );
             if (result) {
                 candidates.push(result);
             }
@@ -957,6 +1062,7 @@ class DeterministicModelSelector {
 
         return {
             category,
+            optimizeFor: optimizationObjective,
             hardware,
             candidates: topCandidates,
             total_evaluated: filtered.length,
@@ -1008,7 +1114,7 @@ class DeterministicModelSelector {
         });
     }
 
-    evaluateModel(model, hardware, category, targetCtx, budget) {
+    evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced') {
         // 1. Select best fitting quantization
         const bestQuant = this.selectBestQuantization(model, budget, targetCtx);
         if (!bestQuant) return null;
@@ -1024,7 +1130,7 @@ class DeterministicModelSelector {
         const C = this.calculateContextScore(model, targetCtx);
 
         // 4. Calculate final weighted score
-        const weights = this.categoryWeights[category] || this.categoryWeights.general;
+        const weights = this.getScoringWeights(category, optimizeFor);
         const score = Math.round((Q * weights[0] + S * weights[1] + F * weights[2] + C * weights[3]) * 10) / 10;
 
         // 5. Build rationale
@@ -1410,9 +1516,23 @@ class DeterministicModelSelector {
             cores = 4;
         }
 
-        if (ram >= 64 && cores >= 16) return 'extreme';
-        if (ram >= 32 && cores >= 12) return 'very_high';
-        if (ram >= 16 && cores >= 8) return 'high';
+        const gpu = hardware?.gpu || {};
+        const gpuCount =
+            (Number.isFinite(Number(gpu.gpuCount)) ? Number(gpu.gpuCount) : null) ??
+            (Number.isFinite(Number(hardware?.gpuCount)) ? Number(hardware.gpuCount) : null) ??
+            1;
+        const totalVRAM =
+            (Number.isFinite(Number(gpu.vramGB)) ? Number(gpu.vramGB) : null) ??
+            (Number.isFinite(Number(gpu.vram)) ? Number(gpu.vram) : null) ??
+            (Number.isFinite(Number(gpu.totalVRAM)) ? Number(gpu.totalVRAM) : null) ??
+            0;
+        const unifiedGPU = Boolean(gpu.unified) || gpu.type === 'apple_silicon';
+        const effectiveAcceleratorMem = unifiedGPU ? Math.max(totalVRAM, ram) : totalVRAM;
+
+        if (effectiveAcceleratorMem >= 80 || (ram >= 64 && cores >= 16)) return 'extreme';
+        if (effectiveAcceleratorMem >= 48 || (ram >= 32 && cores >= 12)) return 'very_high';
+        if (effectiveAcceleratorMem >= 24 || (ram >= 16 && cores >= 8)) return 'high';
+        if (gpuCount >= 2 && effectiveAcceleratorMem >= 20) return 'high';
         if (ram >= 8 && cores >= 4) return 'medium';
         return 'low';
     }
@@ -1451,12 +1571,15 @@ class DeterministicModelSelector {
     /**
      * Generate recommendations by category (main API, replaces EnhancedModelSelector)
      */
-    async getBestModelsForHardware(hardware, allModels) {
+    async getBestModelsForHardware(hardware, allModels, options = {}) {
         const categories = ['coding', 'reasoning', 'multimodal', 'creative', 'talking', 'reading', 'general'];
         const recommendations = {};
         const normalizedPool = this.normalizeExternalModels(Array.isArray(allModels) ? allModels : []);
         const installedModels = await this.getInstalledModels();
         const normalizedHardware = this.normalizeHardwareProfile(hardware || await this.getHardware());
+        const optimizationObjective = this.normalizeOptimizationObjective(
+            options.optimizeFor || options.optimize || options.objective
+        );
 
         for (const category of categories) {
             try {
@@ -1464,6 +1587,7 @@ class DeterministicModelSelector {
                     topN: 3,
                     enableProbe: false,
                     silent: true,
+                    optimizeFor: optimizationObjective,
                     hardware: normalizedHardware,
                     installedModels,
                     modelPool: normalizedPool
@@ -1471,6 +1595,7 @@ class DeterministicModelSelector {
 
                 recommendations[category] = {
                     tier: this.mapHardwareTier(normalizedHardware),
+                    optimizeFor: optimizationObjective,
                     bestModels: result.candidates.map(candidate => this.mapCandidateToLegacyFormat(candidate)),
                     totalEvaluated: result.total_evaluated,
                     category: this.getCategoryInfo(category)
@@ -1478,6 +1603,7 @@ class DeterministicModelSelector {
             } catch (error) {
                 recommendations[category] = {
                     tier: this.mapHardwareTier(normalizedHardware),
+                    optimizeFor: optimizationObjective,
                     bestModels: [],
                     totalEvaluated: 0,
                     category: this.getCategoryInfo(category)
@@ -1491,9 +1617,12 @@ class DeterministicModelSelector {
     /**
      * Generate recommendation summary
      */
-    generateRecommendationSummary(recommendations, hardware) {
+    generateRecommendationSummary(recommendations, hardware, options = {}) {
         const summary = {
             hardware_tier: this.mapHardwareTier(hardware),
+            optimize_for: this.normalizeOptimizationObjective(
+                options.optimizeFor || options.optimize || options.objective
+            ),
             total_categories: Object.keys(recommendations).length,
             best_overall: null,
             by_category: {},

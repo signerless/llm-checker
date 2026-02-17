@@ -8,6 +8,7 @@
 
 const assert = require('assert');
 const HardwareDetector = require('../src/hardware/detector');
+const UnifiedDetector = require('../src/hardware/unified-detector');
 
 async function testVendorlessTeslaDetection() {
     const detector = new HardwareDetector();
@@ -94,10 +95,91 @@ function testGb10AndP100Mappings() {
     );
 }
 
+function testDeviceIdFallbackMappings() {
+    const detector = new HardwareDetector();
+
+    const nvidiaFallback = detector.processGPUInfo({
+        controllers: [
+            {
+                model: 'NVIDIA Corporation Device 1b82',
+                vendor: 'NVIDIA Corporation',
+                deviceId: '0x1B82',
+                vram: 0
+            }
+        ],
+        displays: []
+    });
+
+    assert.ok(
+        nvidiaFallback.model.toLowerCase().includes('1070 ti'),
+        `Expected GTX 1070 Ti mapping, got: ${nvidiaFallback.model}`
+    );
+    assert.strictEqual(nvidiaFallback.vram, 8, 'GTX 1070 Ti should map to 8GB VRAM');
+    assert.strictEqual(nvidiaFallback.dedicated, true, 'GTX 1070 Ti should be treated as dedicated');
+
+    const amdFallback = detector.processGPUInfo({
+        controllers: [
+            {
+                model: 'Unknown',
+                vendor: '',
+                deviceId: '0x744c',
+                vram: 0
+            }
+        ],
+        displays: []
+    });
+
+    assert.ok(
+        amdFallback.model.toLowerCase().includes('7900 xtx'),
+        `Expected RX 7900 XTX mapping, got: ${amdFallback.model}`
+    );
+    assert.strictEqual(amdFallback.vram, 24, 'RX 7900 XTX fallback should map to 24GB');
+    assert.strictEqual(amdFallback.dedicated, true, 'RX 7900 XTX should be treated as dedicated');
+}
+
+function testHeterogeneousGpuSummaryPreserved() {
+    const detector = new UnifiedDetector();
+    const summary = detector.buildSummary({
+        cpu: { brand: 'AMD EPYC 7742' },
+        primary: {
+            type: 'cuda',
+            name: 'NVIDIA CUDA',
+            info: {
+                totalVRAM: 120,
+                isMultiGPU: true,
+                speedCoefficient: 180,
+                gpus: [
+                    { name: 'NVIDIA Tesla V100' },
+                    { name: 'NVIDIA Tesla V100' },
+                    { name: 'NVIDIA Tesla P40' },
+                    { name: 'NVIDIA Tesla P40' },
+                    { name: 'NVIDIA Tesla M40' }
+                ]
+            }
+        }
+    });
+
+    assert.strictEqual(
+        summary.gpuInventory,
+        '2x NVIDIA Tesla V100 + 2x NVIDIA Tesla P40 + NVIDIA Tesla M40',
+        'Mixed GPU inventory should preserve individual model counts'
+    );
+    assert.strictEqual(summary.hasHeterogeneousGPU, true, 'Heterogeneous GPU flag should be true');
+
+    detector.cache = { summary };
+    const description = detector.getHardwareDescription();
+    assert.ok(
+        description.includes('2x NVIDIA Tesla V100 + 2x NVIDIA Tesla P40 + NVIDIA Tesla M40'),
+        `Hardware description should include mixed inventory, got: ${description}`
+    );
+}
+
 async function run() {
     await testVendorlessTeslaDetection();
     await testUnifiedFallbackEnrichment();
     testGb10AndP100Mappings();
+    testDeviceIdFallbackMappings();
+    testHeterogeneousGpuSummaryPreserved();
     console.log('✅ hardware-detector-regression.js passed');
 }
 

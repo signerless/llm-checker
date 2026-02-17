@@ -199,6 +199,9 @@ class UnifiedDetector {
             isMultiGPU: false,
             gpuCount: 0,
             gpuModel: null,
+            gpuInventory: null,
+            gpuModels: [],
+            hasHeterogeneousGPU: false,
             cpuModel: result.cpu?.brand || 'Unknown',
             systemRAM: require('os').totalmem() / (1024 ** 3)
         };
@@ -206,18 +209,26 @@ class UnifiedDetector {
         const primary = result.primary;
 
         if (primary?.type === 'cuda' && primary.info) {
+            const inventory = this.summarizeGPUInventory(primary.info.gpus);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.length;
             summary.isMultiGPU = primary.info.isMultiGPU;
             summary.speedCoefficient = primary.info.speedCoefficient;
-            summary.gpuModel = primary.info.gpus[0]?.name || 'NVIDIA GPU';
+            summary.gpuModel = inventory.primaryModel || 'NVIDIA GPU';
+            summary.gpuInventory = inventory.displayName || summary.gpuModel;
+            summary.gpuModels = inventory.models;
+            summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
         }
         else if (primary?.type === 'rocm' && primary.info) {
+            const inventory = this.summarizeGPUInventory(primary.info.gpus);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.length;
             summary.isMultiGPU = primary.info.isMultiGPU;
             summary.speedCoefficient = primary.info.speedCoefficient;
-            summary.gpuModel = primary.info.gpus[0]?.name || 'AMD GPU';
+            summary.gpuModel = inventory.primaryModel || 'AMD GPU';
+            summary.gpuInventory = inventory.displayName || summary.gpuModel;
+            summary.gpuModels = inventory.models;
+            summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
         }
         else if (primary?.type === 'metal' && primary.info) {
             // Apple Silicon uses unified memory
@@ -225,12 +236,18 @@ class UnifiedDetector {
             summary.gpuCount = 1;
             summary.speedCoefficient = primary.info.speedCoefficient;
             summary.gpuModel = primary.info.chip || 'Apple Silicon';
+            summary.gpuInventory = summary.gpuModel;
+            summary.gpuModels = [{ name: summary.gpuModel, count: 1 }];
         }
         else if (primary?.type === 'intel' && primary.info) {
+            const inventory = this.summarizeGPUInventory(primary.info.gpus);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.filter(g => g.type === 'dedicated').length;
             summary.speedCoefficient = primary.info.speedCoefficient;
-            summary.gpuModel = primary.info.gpus[0]?.name || 'Intel GPU';
+            summary.gpuModel = inventory.primaryModel || 'Intel GPU';
+            summary.gpuInventory = inventory.displayName || summary.gpuModel;
+            summary.gpuModels = inventory.models;
+            summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
         }
         else if (result.cpu) {
             summary.speedCoefficient = result.cpu.speedCoefficient;
@@ -246,6 +263,27 @@ class UnifiedDetector {
         }
 
         return summary;
+    }
+
+    summarizeGPUInventory(gpus = []) {
+        const counts = new Map();
+
+        for (const gpu of gpus) {
+            const name = (gpu?.name || 'Unknown GPU').replace(/\s+/g, ' ').trim();
+            counts.set(name, (counts.get(name) || 0) + 1);
+        }
+
+        const models = Array.from(counts.entries()).map(([name, count]) => ({ name, count }));
+        const displayName = models
+            .map(({ name, count }) => (count > 1 ? `${count}x ${name}` : name))
+            .join(' + ');
+
+        return {
+            primaryModel: models[0]?.name || null,
+            displayName: displayName || null,
+            models,
+            isHeterogeneous: models.length > 1
+        };
     }
 
     /**
@@ -391,22 +429,23 @@ class UnifiedDetector {
         const summary = result.summary;
 
         if (summary.bestBackend === 'cuda') {
-            const gpuDesc = summary.isMultiGPU
-                ? `${summary.gpuCount}x ${summary.gpuModel}`
-                : summary.gpuModel;
+            const gpuDesc = summary.gpuInventory || (
+                summary.isMultiGPU ? `${summary.gpuCount}x ${summary.gpuModel}` : summary.gpuModel
+            );
             return `${gpuDesc} (${summary.totalVRAM}GB VRAM) + ${summary.cpuModel}`;
         }
         else if (summary.bestBackend === 'rocm') {
-            const gpuDesc = summary.isMultiGPU
-                ? `${summary.gpuCount}x ${summary.gpuModel}`
-                : summary.gpuModel;
+            const gpuDesc = summary.gpuInventory || (
+                summary.isMultiGPU ? `${summary.gpuCount}x ${summary.gpuModel}` : summary.gpuModel
+            );
             return `${gpuDesc} (${summary.totalVRAM}GB VRAM) + ${summary.cpuModel}`;
         }
         else if (summary.bestBackend === 'metal') {
             return `${summary.gpuModel} (${summary.totalVRAM}GB Unified Memory)`;
         }
         else if (summary.bestBackend === 'intel') {
-            return `${summary.gpuModel} (${summary.totalVRAM}GB) + ${summary.cpuModel}`;
+            const gpuDesc = summary.gpuInventory || summary.gpuModel;
+            return `${gpuDesc} (${summary.totalVRAM}GB) + ${summary.cpuModel}`;
         }
         else {
             return `${summary.cpuModel} (${Math.round(summary.systemRAM)}GB RAM, CPU-only)`;
