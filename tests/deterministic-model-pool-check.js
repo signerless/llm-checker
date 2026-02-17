@@ -250,6 +250,39 @@ function buildM4ProVisionPool() {
     ];
 }
 
+function buildMultimodalFalsePositivePool() {
+    return [
+        {
+            model_identifier: 'coderghost',
+            model_name: 'coderghost',
+            description: 'Coding model with noisy input_types metadata',
+            primary_category: 'coding',
+            categories: ['coding'],
+            use_cases: ['coding', 'programming'],
+            input_types: ['text', 'image', 'code'],
+            context_length: '8K',
+            variants: [
+                { tag: 'coderghost:7b', size: '7b', quantization: 'Q4_0', real_size_gb: 4.9, categories: ['coding'] }
+            ],
+            tags: ['coderghost:7b']
+        },
+        {
+            model_identifier: 'visionreal',
+            model_name: 'visionreal',
+            description: 'Multimodal vision-language model',
+            primary_category: 'multimodal',
+            categories: ['multimodal'],
+            use_cases: ['vision', 'multimodal'],
+            input_types: ['text', 'image'],
+            context_length: '8K',
+            variants: [
+                { tag: 'visionreal:7b-vl', size: '7b', quantization: 'Q4_0', real_size_gb: 5.3, categories: ['multimodal'] }
+            ],
+            tags: ['visionreal:7b-vl']
+        }
+    ];
+}
+
 function buildMoERuntimeRegressionPool() {
     return [
         {
@@ -489,6 +522,27 @@ async function runM4ProMultimodalIncludesMidTierWhenFeasible() {
     assert.ok(topModelParams >= 7, `M4 Pro multimodal profile should include a mid-tier model when feasible, got: ${topModelParams}B`);
 }
 
+async function runMultimodalFilterRejectsFalsePositiveImageInput() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildApple24GbUnifiedHardware();
+    const pool = buildMultimodalFalsePositivePool();
+
+    const result = await selector.selectModels('multimodal', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 3,
+        silent: true
+    });
+
+    const ids = result.candidates.map((candidate) => candidate.meta.model_identifier);
+    assert.ok(ids.includes('visionreal:7b-vl'), 'True multimodal model should be selected');
+    assert.ok(
+        !ids.includes('coderghost:7b'),
+        'Coding model should not be selected as multimodal from noisy input_types metadata'
+    );
+}
+
 async function runDenseMemoryPathUsesDenseParams() {
     const selector = new DeterministicModelSelector();
     const denseModel = { paramsB: 46 };
@@ -696,6 +750,7 @@ async function runAll() {
     await runQuantizedLargeModelCanBeRecommended();
     await runUnified24GbIncludesMidTierWhenFeasible();
     await runM4ProMultimodalIncludesMidTierWhenFeasible();
+    await runMultimodalFilterRejectsFalsePositiveImageInput();
     await runDenseMemoryPathUsesDenseParams();
     await runConvertedVariantCarriesExplicitMoEMetadataSchemaFields();
     await runMoECompleteMetadataUsesActiveParams();

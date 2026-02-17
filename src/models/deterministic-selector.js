@@ -1042,6 +1042,9 @@ class DeterministicModelSelector {
 
     inferModalities(model, variantTag = '') {
         const inputTypes = Array.isArray(model.input_types) ? model.input_types.map((x) => String(x).toLowerCase()) : [];
+        const primaryCategory = String(model.primary_category || '').toLowerCase();
+        const categories = Array.isArray(model.categories) ? model.categories.map((x) => String(x).toLowerCase()) : [];
+        const useCases = Array.isArray(model.use_cases) ? model.use_cases.map((x) => String(x).toLowerCase()) : [];
         const text = [
             model.model_identifier,
             model.model_name,
@@ -1050,9 +1053,19 @@ class DeterministicModelSelector {
             variantTag
         ].filter(Boolean).join(' ').toLowerCase();
 
-        const hasVision = inputTypes.includes('image') ||
-            inputTypes.includes('vision') ||
-            /vision|vl\b|llava|pixtral|moondream|image|multimodal/.test(text);
+        const hasVisionInputFlag = inputTypes.includes('image') || inputTypes.includes('vision');
+        const hasVisionMetadataHint =
+            primaryCategory === 'multimodal' ||
+            categories.some((cat) => cat.includes('multimodal') || cat.includes('vision')) ||
+            useCases.some((useCase) => useCase.includes('multimodal') || useCase.includes('vision'));
+        const hasVisionTextHint =
+            /(?:\bmultimodal\b|\bvision\b|\bllava\b|\bbakllava\b|\bmoondream\b|\bpixtral\b|\bidefics\b|\bpaligemma\b|\bminicpm-?v\b|\bqwen[\w.-]*vl\b|\bllama3\.2[-_ ]?vision\b|\bdeepseek-ocr\b)/.test(text);
+        const hasVisionContextHint =
+            /\b(image[- ]?(understanding|caption|analysis)|vision[- ]?language|vlm)\b/.test(text);
+
+        // Some upstream scrapers may over-report `image` support by scanning generic page text.
+        // Trust image input flags only when accompanied by multimodal metadata or explicit vision naming.
+        const hasVision = hasVisionTextHint || hasVisionMetadataHint || (hasVisionInputFlag && hasVisionContextHint);
 
         return hasVision ? ['text', 'vision'] : ['text'];
     }
