@@ -33,6 +33,7 @@ class DeterministicModelSelector {
         // Family quality bumps
         this.familyBumps = {
             'qwen2.5': 2,
+            'qwen3': 4,
             'deepseek': 3,
             'mistral': 1,
             'llama3.1': 1,
@@ -109,6 +110,19 @@ class DeterministicModelSelector {
             quality: [0.65, 0.10, 0.15, 0.10],
             context: [0.30, 0.10, 0.20, 0.40],
             coding: [0.55, 0.25, 0.10, 0.10]
+        };
+
+        this.freshnessThresholds = {
+            staleDays: 365,
+            veryStaleDays: 730,
+            indexCadenceDays: 14
+        };
+
+        this.modelIndexStatus = {
+            source: 'unknown',
+            ageDays: null,
+            isStale: false,
+            cachedAt: null
         };
     }
 
@@ -602,7 +616,8 @@ class DeterministicModelSelector {
                 if (!fs.existsSync(cachePath)) continue;
                 const raw = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
                 const sourceModels = Array.isArray(raw) ? raw : (raw.models || []);
-                const normalized = this.normalizeExternalModels(sourceModels);
+                const indexMeta = this.extractModelIndexMetadata(raw, cachePath);
+                const normalized = this.normalizeExternalModels(sourceModels, { indexMeta });
                 if (normalized.length > 0) return normalized;
             } catch (error) {
                 // Ignore broken cache files and keep trying fallbacks
@@ -611,8 +626,28 @@ class DeterministicModelSelector {
         return [];
     }
 
-    normalizeExternalModels(models = []) {
+    extractModelIndexMetadata(raw, sourcePath = '') {
+        const cachedAtRaw = raw?.cached_at || raw?.generated_at || raw?.last_updated || null;
+        const cachedAt = this.parseDateSafe(cachedAtRaw);
+        const ageDays = cachedAt
+            ? Math.max(0, (Date.now() - cachedAt.getTime()) / (1000 * 60 * 60 * 24))
+            : null;
+        const isStale = Number.isFinite(ageDays) && ageDays > this.freshnessThresholds.indexCadenceDays;
+
+        const status = {
+            source: sourcePath || 'cache',
+            ageDays: Number.isFinite(ageDays) ? Math.round(ageDays * 10) / 10 : null,
+            isStale: Boolean(isStale),
+            cachedAt: cachedAt ? cachedAt.toISOString() : null
+        };
+
+        this.modelIndexStatus = status;
+        return status;
+    }
+
+    normalizeExternalModels(models = [], context = {}) {
         const normalized = [];
+        const indexMeta = context.indexMeta || this.modelIndexStatus || {};
 
         for (const model of models) {
             if (!model || typeof model !== 'object') continue;
@@ -622,17 +657,23 @@ class DeterministicModelSelector {
                 typeof model.ctxMax === 'number' &&
                 model.model_identifier;
 
+            const freshness = this.computeFreshnessMetadata(model, indexMeta);
+            const quantizations = this.extractAvailableQuantizations(model, model.variants || []);
+
             if (alreadyNormalized) {
                 normalized.push({
                     ...model,
                     tags: Array.isArray(model.tags) ? model.tags : [],
                     modalities: Array.isArray(model.modalities) ? model.modalities : ['text'],
                     installed: Boolean(model.installed),
+                    availableQuantizations: model.availableQuantizations || quantizations,
+                    sizeByQuant: model.sizeByQuant || {},
                     source: model.source || 'ollama_database',
                     registry: model.registry || 'ollama.com',
                     version: model.version || model.model_identifier,
                     license: model.license || 'unknown',
                     digest: model.digest || 'unknown',
+                    ...freshness,
                     provenance: model.provenance || {
                         source: model.source || 'ollama_database',
                         registry: model.registry || 'ollama.com',
@@ -644,7 +685,7 @@ class DeterministicModelSelector {
                 continue;
             }
 
-            const converted = this.convertOllamaModelToDeterministicModels(model);
+            const converted = this.convertOllamaModelToDeterministicModels(model, { indexMeta });
             normalized.push(...converted);
         }
 
@@ -658,12 +699,14 @@ class DeterministicModelSelector {
         return [...deduped.values()];
     }
 
-    convertOllamaModelToDeterministicModels(ollamaModel) {
+    convertOllamaModelToDeterministicModels(ollamaModel, context = {}) {
         const baseIdentifier = ollamaModel.model_identifier || ollamaModel.model_name || 'unknown';
         const fallbackTag = `${baseIdentifier}:latest`;
         const variants = Array.isArray(ollamaModel.variants) && ollamaModel.variants.length > 0
             ? ollamaModel.variants
             : [{ tag: ollamaModel.model_identifier || fallbackTag }];
+        const indexMeta = context.indexMeta || this.modelIndexStatus || {};
+        const freshness = this.computeFreshnessMetadata(ollamaModel, indexMeta);
 
         const contextLength = this.parseContextLength(
             ollamaModel.context_length ||
@@ -714,6 +757,34 @@ class DeterministicModelSelector {
             const variantSizeGB = this.extractVariantSizeGB(variant, paramsB);
             const modalities = this.inferModalities(ollamaModel, variantTag);
             const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
+            const sizeByQuant = {};
+
+            for (const sibling of variants) {
+                const siblingParams = this.extractParamsFromString(
+                    sibling.size,
+                    sibling.tag,
+                    ollamaModel.main_size,
+                    ollamaModel.model_identifier
+                );
+
+                // Keep quantization map parameter-aware: don't blend 8B/70B/405B sizes.
+                if (Math.abs(siblingParams - paramsB) > 0.25) continue;
+
+                const siblingQuant = this.normalizeQuantization(
+                    sibling.quantization ||
+                    this.extractQuantizationFromTag(sibling.tag || '') ||
+                    quant
+                );
+                const siblingSize = this.extractVariantSizeGB(sibling, siblingParams);
+                if (!Number.isFinite(sizeByQuant[siblingQuant]) || siblingSize < sizeByQuant[siblingQuant]) {
+                    sizeByQuant[siblingQuant] = siblingSize;
+                }
+            }
+
+            const availableQuantizations = this.getQuantizationCandidates({
+                availableQuantizations: this.extractAvailableQuantizations(ollamaModel, variants),
+                sizeByQuant
+            });
 
             const source = ollamaModel.source || 'ollama_database';
             const registry = ollamaModel.registry || 'ollama.com';
@@ -733,6 +804,9 @@ class DeterministicModelSelector {
                 model_identifier: variantTag,
                 installed: false,
                 pulls: ollamaModel.actual_pulls || ollamaModel.pulls || 0,
+                availableQuantizations,
+                sizeByQuant,
+                ...freshness,
                 source,
                 registry,
                 version,
@@ -747,6 +821,117 @@ class DeterministicModelSelector {
                 }
             };
         });
+    }
+
+    parseDateSafe(value) {
+        if (!value || typeof value !== 'string') return null;
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed;
+    }
+
+    extractAvailableQuantizations(model, variants = []) {
+        const quantSet = new Set();
+        const candidateStrings = [];
+
+        if (Array.isArray(model?.quantizations)) {
+            candidateStrings.push(...model.quantizations);
+        }
+        if (typeof model?.quantization === 'string') {
+            candidateStrings.push(model.quantization);
+        }
+        for (const variant of variants) {
+            if (variant?.quantization) candidateStrings.push(variant.quantization);
+            if (variant?.tag) candidateStrings.push(variant.tag);
+        }
+
+        for (const value of candidateStrings) {
+            const inferred = this.normalizeQuantization(
+                this.extractQuantizationFromTag(String(value)) || String(value)
+            );
+            if (inferred) quantSet.add(inferred);
+        }
+
+        if (quantSet.size === 0 && model?.quant) {
+            quantSet.add(this.normalizeQuantization(model.quant));
+        }
+        if (quantSet.size === 0) {
+            quantSet.add('Q4_K_M');
+        }
+
+        return [...quantSet].sort((a, b) => {
+            const aIdx = this.quantHierarchy.indexOf(a);
+            const bIdx = this.quantHierarchy.indexOf(b);
+            const safeA = aIdx === -1 ? Number.MAX_SAFE_INTEGER : aIdx;
+            const safeB = bIdx === -1 ? Number.MAX_SAFE_INTEGER : bIdx;
+            return safeA - safeB;
+        });
+    }
+
+    computeFreshnessMetadata(model = {}, indexMeta = {}) {
+        const dateCandidates = [
+            model.last_updated,
+            model.lastUpdated,
+            model.updated_at,
+            model.updatedAt,
+            model.release_date,
+            model.released_at,
+            model.created_at,
+            model.detailed_scraped_at
+        ];
+
+        const updatedAt = dateCandidates
+            .map((value) => this.parseDateSafe(value))
+            .find(Boolean);
+
+        const ageDays = updatedAt
+            ? Math.max(0, (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24))
+            : null;
+
+        let freshnessScore = 55; // neutral fallback when timestamp is unknown
+        if (Number.isFinite(ageDays)) {
+            if (ageDays <= 30) freshnessScore = 100;
+            else if (ageDays <= 90) freshnessScore = 90;
+            else if (ageDays <= 180) freshnessScore = 75;
+            else if (ageDays <= 365) freshnessScore = 60;
+            else if (ageDays <= 540) freshnessScore = 40;
+            else if (ageDays <= 720) freshnessScore = 25;
+            else freshnessScore = 10;
+        }
+
+        const textBlob = [
+            model.model_identifier,
+            model.model_name,
+            model.name,
+            model.description,
+            model.detailed_description,
+            model.status,
+            ...(Array.isArray(model.tags) ? model.tags : [])
+        ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+
+        const isDeprecatedByText =
+            /\bdeprecated\b|\bobsolete\b|\blegacy\b|\barchived\b|\breplaced by\b|\buse .+ instead\b/.test(textBlob);
+        const isDeprecated = Boolean(model.deprecated || model.is_deprecated || model.archived || isDeprecatedByText);
+        const isStale = Number.isFinite(ageDays) && ageDays > this.freshnessThresholds.staleDays;
+        const veryStale = Number.isFinite(ageDays) && ageDays > this.freshnessThresholds.veryStaleDays;
+        const indexStale = Boolean(indexMeta?.isStale);
+
+        if (isDeprecated) freshnessScore = Math.min(freshnessScore, 15);
+        if (veryStale) freshnessScore = Math.min(freshnessScore, 20);
+        if (indexStale && !updatedAt) freshnessScore = Math.max(0, freshnessScore - 10);
+
+        return {
+            lastUpdatedAt: updatedAt ? updatedAt.toISOString() : null,
+            modelAgeDays: Number.isFinite(ageDays) ? Math.round(ageDays * 10) / 10 : null,
+            freshnessScore,
+            isStale,
+            isDeprecated,
+            indexAgeDays: Number.isFinite(indexMeta?.ageDays) ? indexMeta.ageDays : null,
+            indexStale
+        };
     }
 
     parseContextLength(contextValue) {
@@ -857,7 +1042,7 @@ class DeterministicModelSelector {
     extractFamily(modelName) {
         const name = modelName.toLowerCase();
         if (name.includes('qwen2.5')) return 'qwen2.5';
-        if (name.includes('qwen3')) return 'qwen2.5';
+        if (name.includes('qwen3')) return 'qwen3';
         if (name.includes('qwen')) return 'qwen2.5';
         if (name.includes('deepseek')) return 'deepseek';
         if (name.includes('llama3.2') || name.includes('llama3.3')) return 'llama3.2';
@@ -1044,7 +1229,14 @@ class DeterministicModelSelector {
 
         // Sort by score
         candidates.sort((a, b) => b.score - a.score);
-        const topCandidates = candidates.slice(0, topN);
+        let topCandidates = candidates.slice(0, topN);
+        topCandidates = this.ensureFeasibleMidTierCoverage(
+            topCandidates,
+            candidates,
+            category,
+            hardware,
+            optimizationObjective
+        );
         
         if (!silent) {
             console.log(`✨ Selected ${topCandidates.length} top candidates`);
@@ -1147,9 +1339,52 @@ class DeterministicModelSelector {
         };
     }
 
+    getQuantizationCandidates(model) {
+        const normalizedAvailable = Array.isArray(model?.availableQuantizations)
+            ? model.availableQuantizations.map((quant) => this.normalizeQuantization(quant))
+            : [];
+        const fromSizeMap = model?.sizeByQuant && typeof model.sizeByQuant === 'object'
+            ? Object.keys(model.sizeByQuant).map((quant) => this.normalizeQuantization(quant))
+            : [];
+
+        const seeded = (fromSizeMap.length > 0
+            ? [...new Set(fromSizeMap)]
+            : [...new Set(normalizedAvailable)])
+            .filter(Boolean);
+
+        let candidates = seeded.length > 0 ? seeded : [...this.quantHierarchy];
+
+        // If we have at least one known quantization, allow extrapolating to
+        // *more compressed* levels as an explicit feasibility assumption.
+        if (seeded.length > 0) {
+            const expanded = new Set();
+            for (const quant of seeded) {
+                const idx = this.quantHierarchy.indexOf(quant);
+                if (idx === -1) {
+                    expanded.add(quant);
+                    continue;
+                }
+                for (let i = idx; i < this.quantHierarchy.length; i++) {
+                    expanded.add(this.quantHierarchy[i]);
+                }
+            }
+            candidates = [...expanded];
+        }
+
+        return candidates.sort((a, b) => {
+            const aIdx = this.quantHierarchy.indexOf(a);
+            const bIdx = this.quantHierarchy.indexOf(b);
+            const safeA = aIdx === -1 ? Number.MAX_SAFE_INTEGER : aIdx;
+            const safeB = bIdx === -1 ? Number.MAX_SAFE_INTEGER : bIdx;
+            return safeA - safeB;
+        });
+    }
+
     selectBestQuantization(model, budget, targetCtx) {
+        const quantizationCandidates = this.getQuantizationCandidates(model);
+
         // Try quantizations from best to worst quality
-        for (const quant of this.quantHierarchy) {
+        for (const quant of quantizationCandidates) {
             const requiredGB = this.estimateRequiredGB(model, quant, targetCtx);
             if (requiredGB <= budget) {
                 return { quant, sizeGB: requiredGB };
@@ -1159,7 +1394,7 @@ class DeterministicModelSelector {
         // If nothing fits at target context, try halving context once
         const halfCtx = Math.floor(targetCtx / 2);
         if (halfCtx >= 1024) {
-            for (const quant of this.quantHierarchy) {
+            for (const quant of quantizationCandidates) {
                 const requiredGB = this.estimateRequiredGB(model, quant, halfCtx);
                 if (requiredGB <= budget) {
                     return { quant, sizeGB: requiredGB };
@@ -1181,15 +1416,28 @@ class DeterministicModelSelector {
             'Q3_K': 0.48,
             'Q2_K': 0.37
         };
-        const bpp = bytesPerParam[quant] || 0.63;
-        const modelMemGB = model.paramsB * bpp;
+        const normalizedQuant = this.normalizeQuantization(quant);
+        const bpp = bytesPerParam[normalizedQuant] || 0.63;
+        const sizeByQuant = model?.sizeByQuant && typeof model.sizeByQuant === 'object' ? model.sizeByQuant : {};
+        const observedFromSizeMap = Number(sizeByQuant[normalizedQuant]);
+        const directVariantMatch =
+            this.normalizeQuantization(model?.quant || '') === normalizedQuant
+                ? Number(model?.sizeGB ?? model?.size)
+                : NaN;
+
+        const observedWeightGB = Number.isFinite(observedFromSizeMap) && observedFromSizeMap > 0
+            ? observedFromSizeMap
+            : (Number.isFinite(directVariantMatch) && directVariantMatch > 0 ? directVariantMatch : null);
+
+        const modelMemGB = observedWeightGB ?? (model.paramsB * bpp);
+        const effectiveCtx = Number.isFinite(Number(ctx)) && Number(ctx) > 0 ? Number(ctx) : 4096;
 
         // KV cache: ~2 * numLayers * hiddenDim * 2bytes * ctx / 1e9
         // Simplified: ~0.000008 GB per billion params per context token
-        const kvCacheGB = 0.000008 * model.paramsB * ctx;
+        const kvCacheGB = 0.000008 * model.paramsB * effectiveCtx;
 
         // Runtime overhead (Metal/CUDA context, buffers)
-        const runtimeOverhead = 0.5;
+        const runtimeOverhead = observedWeightGB ? 0.35 : 0.5;
 
         return modelMemGB + kvCacheGB + runtimeOverhead;
     }
@@ -1205,6 +1453,10 @@ class DeterministicModelSelector {
         // Quantization penalty
         const quantPenalty = this.quantPenalties[quant] || -5;
         Q += quantPenalty;
+
+        // Freshness/deprecation adjustment
+        const freshnessAdjustment = this.calculateFreshnessAdjustment(model);
+        Q += freshnessAdjustment;
         
         // Task alignment bump
         const taskBump = this.getTaskAlignmentBump(model, category);
@@ -1261,6 +1513,23 @@ class DeterministicModelSelector {
         }
     }
 
+    calculateFreshnessAdjustment(model = {}) {
+        const freshnessScore = Number.isFinite(model.freshnessScore) ? model.freshnessScore : 55;
+        const ageDays = Number.isFinite(model.modelAgeDays) ? model.modelAgeDays : null;
+        const isDeprecated = Boolean(model.isDeprecated);
+        const isStale = Boolean(model.isStale);
+
+        if (isDeprecated) return -12;
+        if (ageDays !== null && ageDays > this.freshnessThresholds.veryStaleDays) return -8;
+        if (ageDays !== null && ageDays > this.freshnessThresholds.staleDays) return -4;
+        if (isStale) return -3;
+        if (freshnessScore >= 90) return 3;
+        if (freshnessScore >= 75) return 2;
+        if (freshnessScore >= 60) return 1;
+        if (freshnessScore <= 25) return -4;
+        return 0;
+    }
+
     estimateSpeed(hardware, model, quant, category) {
         // Determine backend
         let backend = 'cpu_x86';
@@ -1298,6 +1567,57 @@ class DeterministicModelSelector {
         return 0; // Should be filtered out earlier
     }
 
+    ensureFeasibleMidTierCoverage(selectedCandidates, allCandidates, category, hardware, optimizeFor = 'balanced') {
+        if (!Array.isArray(selectedCandidates) || selectedCandidates.length === 0) {
+            return selectedCandidates;
+        }
+
+        const objective = this.normalizeOptimizationObjective(optimizeFor);
+        if (objective === 'speed') {
+            return selectedCandidates;
+        }
+
+        const enforceCategories = new Set(['general', 'talking', 'reading', 'coding', 'reasoning', 'multimodal']);
+        if (!enforceCategories.has(category)) {
+            return selectedCandidates;
+        }
+
+        const normalizedHardware = this.normalizeHardwareProfile(hardware || {});
+        const budget = normalizedHardware.gpu.unified
+            ? normalizedHardware.usableMemGB
+            : (normalizedHardware.gpu.vramGB || normalizedHardware.usableMemGB);
+
+        if (!Number.isFinite(budget) || budget < 16) {
+            return selectedCandidates;
+        }
+
+        const minMidTierParams = budget >= 24 ? 7 : 6;
+        const alreadyHasMidTier = selectedCandidates.some((candidate) => (candidate?.meta?.paramsB || 0) >= minMidTierParams);
+        if (alreadyHasMidTier) {
+            return selectedCandidates;
+        }
+
+        const practicalSpeedFloor = normalizedHardware.gpu.unified ? 25 : 20;
+        const feasibleMidTier = allCandidates.find((candidate) => {
+            const params = candidate?.meta?.paramsB || 0;
+            const speedScore = candidate?.components?.S ?? candidate?.estTPS ?? 0;
+            return params >= minMidTierParams && speedScore >= practicalSpeedFloor;
+        });
+
+        if (!feasibleMidTier) {
+            return selectedCandidates;
+        }
+
+        if (selectedCandidates.some((candidate) => candidate?.meta?.model_identifier === feasibleMidTier?.meta?.model_identifier)) {
+            return selectedCandidates;
+        }
+
+        const promoted = [...selectedCandidates];
+        promoted[promoted.length - 1] = feasibleMidTier;
+        promoted.sort((a, b) => b.score - a.score);
+        return promoted;
+    }
+
     buildRationale(hardware, model, quant, requiredGB, budget, category, Q, S) {
         const parts = [];
         
@@ -1310,6 +1630,9 @@ class DeterministicModelSelector {
         // Special attributes  
         if (model.tags.includes('coder')) parts.push('coder-tuned');
         if (model.modalities.includes('vision')) parts.push('vision-capable');
+        if (model.isDeprecated) parts.push('deprecated penalized');
+        else if (model.isStale) parts.push('stale penalized');
+        else if (model.freshnessScore >= 90) parts.push('fresh release');
         
         // Size sweet spot
         if (model.paramsB >= 7 && model.paramsB <= 13) {
@@ -1642,6 +1965,7 @@ class DeterministicModelSelector {
                     score: Math.round(bestModel.categoryScore || bestModel.score),
                     command: `ollama pull ${bestModel.model_identifier}`,
                     size: this.formatModelSize(bestModel),
+                    quantization: bestModel.quantization || bestModel.quant || 'Q4_K_M',
                     pulls: bestModel.pulls || 0,
                     source: bestModel.source || bestModel.provenance?.source || 'unknown',
                     registry: bestModel.registry || bestModel.provenance?.registry || 'unknown',
@@ -1677,6 +2001,7 @@ class DeterministicModelSelector {
                 category: bestOverallCategory,
                 score: Math.round(bestOverallScore),
                 command: `ollama pull ${bestOverallModel.model_identifier}`,
+                quantization: bestOverallModel.quantization || bestOverallModel.quant || 'Q4_K_M',
                 source: bestOverallModel.source || bestOverallModel.provenance?.source || 'unknown',
                 registry: bestOverallModel.registry || bestOverallModel.provenance?.registry || 'unknown',
                 version: bestOverallModel.version || bestOverallModel.provenance?.version || 'unknown',

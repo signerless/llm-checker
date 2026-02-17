@@ -94,6 +94,124 @@ function buildThreeGpuHardwareAmbiguousVram() {
     };
 }
 
+function buildApple24GbUnifiedHardware() {
+    return {
+        cpu: { cores: 12, architecture: 'arm64' },
+        gpu: { type: 'apple_silicon', unified: true, vramGB: 0 },
+        memory: { totalGB: 24 },
+        acceleration: { supports_metal: true, supports_cuda: false, supports_rocm: false },
+        usableMemGB: 20.4
+    };
+}
+
+function buildAppleM4ProHardware() {
+    return {
+        cpu: { cores: 14, architecture: 'arm64' },
+        gpu: { type: 'apple_silicon', unified: true, vramGB: 0 },
+        memory: { totalGB: 48 },
+        acceleration: { supports_metal: true, supports_cuda: false, supports_rocm: false },
+        usableMemGB: 40.8
+    };
+}
+
+function buildFreshnessRegressionPool() {
+    return [
+        {
+            model_identifier: 'legacychat',
+            model_name: 'legacychat',
+            description: 'deprecated legacy chat model',
+            primary_category: 'chat',
+            context_length: '8K',
+            deprecated: true,
+            last_updated: '2022-01-01T00:00:00.000Z',
+            variants: [
+                { tag: 'legacychat:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.1, categories: ['chat'] }
+            ],
+            tags: ['legacychat:8b'],
+            use_cases: ['chat']
+        },
+        {
+            model_identifier: 'freshchat',
+            model_name: 'freshchat',
+            description: 'recent chat model',
+            primary_category: 'chat',
+            context_length: '8K',
+            last_updated: '2026-01-20T00:00:00.000Z',
+            variants: [
+                { tag: 'freshchat:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.1, categories: ['chat'] }
+            ],
+            tags: ['freshchat:8b'],
+            use_cases: ['chat']
+        }
+    ];
+}
+
+function buildQuantizationRegressionPool() {
+    return [
+        {
+            model_identifier: 'bigquant',
+            model_name: 'bigquant',
+            description: 'Large family with quantized variants',
+            primary_category: 'chat',
+            context_length: '8K',
+            variants: [
+                { tag: 'bigquant:120b-q4', size: '120b', quantization: 'Q4_0', real_size_gb: 82, categories: ['chat'] },
+                { tag: 'bigquant:120b-q2', size: '120b', quantization: 'Q2_K', real_size_gb: 46, categories: ['chat'] }
+            ],
+            tags: ['bigquant:120b-q4', 'bigquant:120b-q2'],
+            use_cases: ['chat']
+        },
+        {
+            model_identifier: 'smallchat',
+            model_name: 'smallchat',
+            description: 'Small baseline chat model',
+            primary_category: 'chat',
+            context_length: '8K',
+            variants: [
+                { tag: 'smallchat:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5, categories: ['chat'] }
+            ],
+            tags: ['smallchat:8b'],
+            use_cases: ['chat']
+        }
+    ];
+}
+
+function buildConservativeRegressionPool() {
+    return [
+        {
+            model_identifier: 'snappychat',
+            model_name: 'snappychat',
+            description: 'Fast compact chat model',
+            primary_category: 'chat',
+            context_length: '8K',
+            variants: [
+                { tag: 'snappychat:3b', size: '3b', quantization: 'Q4_0', real_size_gb: 2.2, categories: ['chat'] },
+                { tag: 'snappychat:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.2, categories: ['chat'] }
+            ],
+            tags: ['snappychat:3b', 'snappychat:8b'],
+            use_cases: ['chat']
+        }
+    ];
+}
+
+function buildM4ProVisionPool() {
+    return [
+        {
+            model_identifier: 'visionduo',
+            model_name: 'visionduo',
+            description: 'Multimodal family for regression checks',
+            primary_category: 'multimodal',
+            context_length: '8K',
+            variants: [
+                { tag: 'visionduo:3b-vl', size: '3b', quantization: 'Q4_0', real_size_gb: 2.4, categories: ['multimodal'] },
+                { tag: 'visionduo:8b-vl', size: '8b', quantization: 'Q4_0', real_size_gb: 5.9, categories: ['multimodal'] }
+            ],
+            tags: ['visionduo:3b-vl', 'visionduo:8b-vl'],
+            use_cases: ['multimodal']
+        }
+    ];
+}
+
 async function runSelectModelsUsesProvidedPool() {
     const selector = new DeterministicModelSelector();
     const hardware = buildHighEndHardware();
@@ -210,6 +328,77 @@ async function runMultiGpuNormalizationUsesCombinedVram() {
     assert.ok(reasoningIds.includes('deepfit:70b'), '70B reasoning variant should be viable with 36GB aggregate VRAM');
 }
 
+async function runFreshnessPenaltyPrefersRecentModel() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildHighEndHardware();
+    const pool = buildFreshnessRegressionPool();
+
+    const result = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 2,
+        silent: true
+    });
+
+    const ids = result.candidates.map((candidate) => candidate.meta.model_identifier);
+    assert.ok(ids.includes('legacychat:8b'), 'Legacy model should still be considered as a candidate');
+    assert.ok(ids.includes('freshchat:8b'), 'Fresh model should be considered as a candidate');
+    assert.strictEqual(ids[0], 'freshchat:8b', `Fresh model should outrank deprecated equivalent, got: ${ids[0]}`);
+}
+
+async function runQuantizedLargeModelCanBeRecommended() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildHighEndHardware();
+    const pool = buildQuantizationRegressionPool();
+
+    const result = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 6,
+        silent: true
+    });
+
+    const largeCandidate = result.candidates.find((candidate) => candidate.meta.paramsB >= 100);
+    assert.ok(largeCandidate, 'Large-parameter candidate should appear when quantized variant fits the hardware budget');
+    assert.ok(['Q3_K', 'Q2_K'].includes(largeCandidate.quant), `Expected compressed quantization (Q3_K/Q2_K), got: ${largeCandidate.quant}`);
+}
+
+async function runUnified24GbIncludesMidTierWhenFeasible() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildApple24GbUnifiedHardware();
+    const pool = buildConservativeRegressionPool();
+
+    const result = await selector.selectModels('general', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 1,
+        silent: true
+    });
+
+    const topModelParams = result.candidates[0]?.meta?.paramsB || 0;
+    assert.ok(topModelParams >= 7, `24GB unified profile should surface at least one mid-tier option when feasible, got: ${topModelParams}B`);
+}
+
+async function runM4ProMultimodalIncludesMidTierWhenFeasible() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildAppleM4ProHardware();
+    const pool = buildM4ProVisionPool();
+
+    const result = await selector.selectModels('multimodal', {
+        hardware,
+        installedModels: [],
+        modelPool: pool,
+        topN: 1,
+        silent: true
+    });
+
+    const topModelParams = result.candidates[0]?.meta?.paramsB || 0;
+    assert.ok(topModelParams >= 7, `M4 Pro multimodal profile should include a mid-tier model when feasible, got: ${topModelParams}B`);
+}
+
 async function runAll() {
     await runSelectModelsUsesProvidedPool();
     await runGetBestModelsForHardwareUsesAllModels();
@@ -217,6 +406,10 @@ async function runAll() {
     await runUndefinedHardwareFallsBackSafely();
     await runOptimizationProfilesInfluenceRanking();
     await runMultiGpuNormalizationUsesCombinedVram();
+    await runFreshnessPenaltyPrefersRecentModel();
+    await runQuantizedLargeModelCanBeRecommended();
+    await runUnified24GbIncludesMidTierWhenFeasible();
+    await runM4ProMultimodalIncludesMidTierWhenFeasible();
     console.log('deterministic-model-pool-check: OK');
 }
 

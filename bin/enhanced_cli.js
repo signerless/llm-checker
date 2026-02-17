@@ -1042,6 +1042,7 @@ function displayIntelligentRecommendations(intelligentData) {
         console.log(chalk.red('│') + ` ${chalk.bold.yellow('BEST OVERALL:')} ${chalk.green.bold(best.name)}`);
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(best.command)}`);
         console.log(chalk.red('│') + `    Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
+        console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(best.quantization || 'Q4_K_M')}`);
         console.log(chalk.red('│'));
     }
 
@@ -1064,6 +1065,7 @@ function displayIntelligentRecommendations(intelligentData) {
         console.log(chalk.red('│') + ` ${chalk.bold.white(categoryName)} (${icon}):`);
         console.log(chalk.red('│') + `    ${chalk.green(model.name)} (${model.size})`);
         console.log(chalk.red('│') + `    Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
+        console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(model.quantization || 'Q4_K_M')}`);
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(model.command)}`);
         console.log(chalk.red('│'));
     });
