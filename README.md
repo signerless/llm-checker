@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF" alt="npm downloads"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-0066FF?style=flat-square" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-NPDL--1.0-CC3300?style=flat-square" alt="License"></a>
   <a href="https://discord.gg/mnmYrA7T"><img src="https://img.shields.io/discord/1457032977849520374?style=flat-square&color=0066FF&label=Discord" alt="Discord"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D16-0066FF?style=flat-square" alt="Node.js"></a>
 </p>
@@ -97,7 +97,9 @@ LLM Checker is published in all primary channels:
 - GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
-### v3.2.6 Highlights
+### v3.2.7 Highlights
+
+- License updated to **NPDL-1.0**: paid redistribution and paid hosted/API delivery now require a separate commercial license.
 
 - Recommendation engine now enforces feasible 30B-class coverage on high-capacity discrete multi-GPU setups (for non-speed objectives).
 - Heterogeneous GPU inventories are preserved in output summaries and downstream recommendation inputs.
@@ -709,7 +711,12 @@ bin/
 
 ## License
 
-MIT License &mdash; see [LICENSE](LICENSE) for details.
+LLM Checker is licensed under **NPDL-1.0** (No Paid Distribution License).
+
+- Free use, modification, and redistribution are allowed.
+- Selling the software or offering it as a paid hosted/API service is not allowed without a separate commercial license.
+
+See [LICENSE](LICENSE) for full terms.
 
 ---
 

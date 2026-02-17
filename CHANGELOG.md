@@ -1,6 +1,13 @@
 Changelog
 =========
 
+3.2.7 — License Update: No Paid Distribution (2026-02-17)
+----------------------------------------------------------
+
+- Replaced MIT license with **NPDL-1.0** (No Paid Distribution License).
+- New license terms allow free use/modification/redistribution but prohibit paid distribution or paid hosted/API delivery without a separate commercial license.
+- Updated package metadata (`license: SEE LICENSE IN LICENSE`) and README license badges/section.
+
 3.2.6 — Recommendation & Detection Regression Hardening (2026-02-17)
 --------------------------------------------------------------------
 
