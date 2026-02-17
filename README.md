@@ -9,7 +9,7 @@
   </p>
   <p align="center">
     AI-powered CLI that analyzes your hardware and recommends optimal LLM models<br/>
-    Deterministic scoring across <b>35+ curated models</b> with hardware-calibrated memory estimation
+    Deterministic scoring across <b>200+ dynamic models</b> (35+ curated fallback) with hardware-calibrated memory estimation
   </p>
 </p>
 
