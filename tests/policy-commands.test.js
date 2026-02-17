@@ -5,6 +5,11 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const BIN_PATH = path.resolve(__dirname, '..', 'bin', 'enhanced_cli.js');
+const INVALID_POLICY_FIXTURE = path.resolve(
+    __dirname,
+    'policy-fixtures',
+    'policy-invalid-schema.yaml'
+);
 
 function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
@@ -50,13 +55,7 @@ function run() {
         assert.strictEqual(customInitResult.status, 0, stripAnsi(customInitResult.stderr || customInitResult.stdout));
         assert.ok(fs.existsSync(customPolicyPath), 'custom policy path should be created');
 
-        fs.writeFileSync(policyPath, `version: "x"
-org: ""
-mode: invalid
-rules: "bad"
-reporting:
-  formats: ["json", "xml"]
-`, 'utf8');
+        fs.copyFileSync(INVALID_POLICY_FIXTURE, policyPath);
 
         const invalidResult = runCli(['policy', 'validate'], tempDir);
         assert.notStrictEqual(invalidResult.status, 0, 'invalid policy should fail validation');

@@ -3,9 +3,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const YAML = require('yaml');
 
 const BIN_PATH = path.resolve(__dirname, '..', 'bin', 'enhanced_cli.js');
+const FIXTURES_DIR = path.resolve(__dirname, 'policy-fixtures');
 
 function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
@@ -22,19 +22,10 @@ function runCli(args, cwd) {
     });
 }
 
-function readPolicy(policyPath) {
-    return YAML.parse(fs.readFileSync(policyPath, 'utf8'));
-}
-
-function writePolicy(policyPath, policy) {
-    fs.writeFileSync(policyPath, YAML.stringify(policy), 'utf8');
-}
-
-function initPolicyFile(tempDir) {
-    const policyPath = path.join(tempDir, 'policy.yaml');
-    const initResult = runCli(['policy', 'init', '--file', policyPath], tempDir);
-    assert.strictEqual(initResult.status, 0, stripAnsi(initResult.stderr || initResult.stdout));
-    assert.ok(fs.existsSync(policyPath), 'policy.yaml should be created');
+function preparePolicyFixture(tempDir, fixtureName) {
+    const fixturePath = path.join(FIXTURES_DIR, fixtureName);
+    const policyPath = path.join(tempDir, fixtureName);
+    fs.copyFileSync(fixturePath, policyPath);
     return policyPath;
 }
 
@@ -73,10 +64,6 @@ function runEnforceModeExportTest(tempDir, policyPath) {
 }
 
 function runAuditAllFormatsTest(tempDir, policyPath) {
-    const policy = readPolicy(policyPath);
-    policy.mode = 'audit';
-    writePolicy(policyPath, policy);
-
     const outDir = path.join(tempDir, 'audit-all');
     const result = runCli(
         [
@@ -136,22 +123,40 @@ function runAuditAllFormatsTest(tempDir, policyPath) {
     assert.strictEqual(sarifPayload.version, '2.1.0', 'sarif report should use SARIF v2.1.0');
 }
 
-function runExceptionsSuppressionTest(tempDir, policyPath) {
-    const policy = readPolicy(policyPath);
-    policy.mode = 'enforce';
-    policy.enforcement = {
-        ...(policy.enforcement || {}),
-        allow_exceptions: true
-    };
-    policy.exceptions = [
-        {
-            model: '*',
-            reason: 'CI blanket exception for policy pipeline test',
-            approver: 'qa@example.com'
-        }
-    ];
-    writePolicy(policyPath, policy);
+function runCompliantPolicyPassTest(tempDir, policyPath) {
+    const outFile = path.join(tempDir, 'compliant-report.json');
+    const result = runCli(
+        [
+            'audit',
+            'export',
+            '--policy',
+            policyPath,
+            '--command',
+            'check',
+            '--format',
+            'json',
+            '--runtime',
+            'ollama',
+            '--no-verbose',
+            '--out',
+            outFile
+        ],
+        tempDir
+    );
 
+    assert.strictEqual(
+        result.status,
+        0,
+        `compliant enforce run should exit with code 0\nSTDOUT:\n${stripAnsi(result.stdout)}\nSTDERR:\n${stripAnsi(result.stderr)}`
+    );
+
+    const report = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+    assert.strictEqual(report.policy.mode, 'enforce');
+    assert.strictEqual(report.enforcement.should_block, false);
+    assert.strictEqual(report.summary.fail_count, 0, 'compliant fixture should produce zero failures');
+}
+
+function runExceptionsSuppressionTest(tempDir, policyPath) {
     const outFile = path.join(tempDir, 'exceptions-report.json');
     const result = runCli(
         [
@@ -196,10 +201,15 @@ function run() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-policy-e2e-'));
 
     try {
-        const policyPath = initPolicyFile(tempDir);
-        runEnforceModeExportTest(tempDir, policyPath);
-        runAuditAllFormatsTest(tempDir, policyPath);
-        runExceptionsSuppressionTest(tempDir, policyPath);
+        const violationsPolicy = preparePolicyFixture(tempDir, 'policy-valid-violations.yaml');
+        const auditPolicy = preparePolicyFixture(tempDir, 'policy-valid-audit.yaml');
+        const compliantPolicy = preparePolicyFixture(tempDir, 'policy-valid-compliant.yaml');
+        const exceptionsPolicy = preparePolicyFixture(tempDir, 'policy-exception-override.yaml');
+
+        runEnforceModeExportTest(tempDir, violationsPolicy);
+        runAuditAllFormatsTest(tempDir, auditPolicy);
+        runCompliantPolicyPassTest(tempDir, compliantPolicy);
+        runExceptionsSuppressionTest(tempDir, exceptionsPolicy);
         console.log('policy-e2e-integration.test.js: OK');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });

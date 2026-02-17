@@ -1,3 +1,5 @@
+const { normalizeLicense, UNKNOWN_VALUE } = require('../provenance/model-provenance');
+
 const NOOP_POLICY = {
     version: 1,
     org: 'default',
@@ -271,8 +273,8 @@ class PolicyEngine {
         if (!isPlainObject(complianceRules)) return;
 
         const approvedLicenses = asArray(complianceRules.approved_licenses)
-            .map((license) => toLowerString(license))
-            .filter(Boolean);
+            .map((license) => normalizeLicense(license))
+            .filter((license) => license && license !== UNKNOWN_VALUE);
 
         if (approvedLicenses.length === 0) return;
 
@@ -410,11 +412,17 @@ class PolicyEngine {
 
     getModelLicense(model) {
         const raw =
-            toLowerString(model.license) ||
-            toLowerString(model.license_id) ||
-            toLowerString(model.licenseId);
+            model?.provenance?.license ??
+            model?.license ??
+            model?.license_id ??
+            model?.licenseId;
+        const normalized = normalizeLicense(raw);
 
-        return raw;
+        if (!normalized || normalized === UNKNOWN_VALUE) {
+            return null;
+        }
+
+        return normalized;
     }
 
     resolveBackend(model, context) {

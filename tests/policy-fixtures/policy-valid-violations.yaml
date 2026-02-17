@@ -1,0 +1,19 @@
+version: 1
+org: fixture-org
+mode: enforce
+
+rules:
+  models:
+    allow:
+      - "__no_model_should_match__:*"
+  runtime:
+    local_only: false
+  compliance: {}
+
+enforcement:
+  on_violation: error
+  exit_code: 3
+  allow_exceptions: false
+
+reporting:
+  formats: ["json", "csv", "sarif"]

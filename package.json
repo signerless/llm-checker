@@ -18,6 +18,7 @@
     "test:policy": "node tests/policy-commands.test.js",
     "test:policy-cli": "node tests/policy-cli-enforcement.js",
     "test:policy-engine": "node tests/policy-engine.test.js",
+    "test:policy-audit": "node tests/policy-audit-reporter.test.js",
     "test:policy-e2e": "node tests/policy-e2e-integration.test.js",
     "test:hardware-detector": "node tests/hardware-detector-regression.js",
     "test:all": "node tests/run-all-tests.js",

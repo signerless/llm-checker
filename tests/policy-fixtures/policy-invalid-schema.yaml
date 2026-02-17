@@ -1,0 +1,6 @@
+version: "x"
+org: ""
+mode: invalid
+rules: "bad"
+reporting:
+  formats: ["json", "xml"]

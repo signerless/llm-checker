@@ -143,6 +143,30 @@ function runRuntimeAndComplianceTests() {
         isLocal: true
     });
     assert.ok(missingLicense.violations.some((violation) => violation.code === 'LICENSE_MISSING'));
+
+    const normalizedEngine = new PolicyEngine({
+        mode: 'enforce',
+        rules: {
+            compliance: {
+                approved_licenses: ['MIT License', 'Apache 2.0']
+            }
+        }
+    });
+
+    const normalizedLicense = normalizedEngine.evaluateModel(
+        createModel({ license: 'mit' }),
+        {
+            backend: 'metal',
+            ramGB: 64,
+            isLocal: true
+        }
+    );
+
+    assert.strictEqual(
+        normalizedLicense.pass,
+        true,
+        'license aliases should normalize to canonical values for policy evaluation'
+    );
 }
 
 function runDeterministicAndAttachmentTests() {

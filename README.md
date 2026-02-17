@@ -93,14 +93,14 @@ npm install sql.js
 
 LLM Checker is published in all primary channels:
 
-- npm (latest): [`llm-checker@3.2.1`](https://www.npmjs.com/package/llm-checker)
-- GitHub Release: [`v3.2.1` (2026-02-17)](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.1)
+- npm (latest): [`llm-checker@3.2.3`](https://www.npmjs.com/package/llm-checker)
+- GitHub Release: [`v3.2.3`](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.3)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
-### v3.2.1 Highlights
+### v3.2.3 Highlights
 
 - Added vLLM/MLX runtime support and speculative decoding estimation.
-- Improved GPU detection, added DGX Spark/GB10 support, strengthened Node runtime guards, and updated tooling comparison notes.
+- Improved GPU detection, added DGX Spark/GB10 support, strengthened Node runtime guards, and updated policy/provenance workflows.
 
 ### Optional: Install from GitHub Packages
 
@@ -110,7 +110,7 @@ echo "@pavelevich:registry=https://npm.pkg.github.com" >> ~/.npmrc
 echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
 
 # 2) Install
-npm install -g @pavelevich/llm-checker@3.2.1
+npm install -g @pavelevich/llm-checker@3.2.3
 ```
 
 ---
@@ -266,9 +266,47 @@ llm-checker audit export --policy ./policy.yaml --command check --format all --o
 - `--format all` honors `reporting.formats` in your policy (falls back to `json,csv,sarif`).
 - In `enforce` mode with blocking violations, reports are still written before non-zero exit.
 
+### Integration Examples (SIEM / CI Artifacts)
+
+```bash
+# CI artifact (JSON) for post-processing in pipeline jobs
+llm-checker audit export --policy ./policy.yaml --command check --format json --out ./reports/policy-report.json
+
+# Flat CSV for SIEM ingestion (Splunk/ELK/DataDog pipelines)
+llm-checker audit export --policy ./policy.yaml --command check --format csv --out ./reports/policy-report.csv
+
+# SARIF for security/code-scanning tooling integrations
+llm-checker audit export --policy ./policy.yaml --command check --format sarif --out ./reports/policy-report.sarif
+```
+
+### GitHub Actions Policy Gate (Copy-Paste)
+
+```yaml
+name: Policy Gate
+on: [pull_request]
+
+jobs:
+  policy-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: node bin/enhanced_cli.js check --policy ./policy.yaml --runtime ollama --no-verbose
+      - if: always()
+        run: node bin/enhanced_cli.js audit export --policy ./policy.yaml --command check --format all --runtime ollama --no-verbose --out-dir ./policy-reports
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: policy-audit-reports
+          path: ./policy-reports
+```
+
 ### Provenance Fields in Reports
 
-Each finding includes normalized model provenance fields:
+`check`, `recommend`, and `audit export` outputs include normalized model provenance fields:
 
 - `source`
 - `registry`
@@ -276,7 +314,8 @@ Each finding includes normalized model provenance fields:
 - `license`
 - `digest`
 
-If a field is unavailable from model metadata, reports use `"unknown"` instead of omitting the field. This keeps downstream parsers deterministic.
+If a field is unavailable from model metadata, outputs use `"unknown"` instead of omitting the field. This keeps downstream parsers deterministic.
+License values are canonicalized for policy checks (for example `MIT License` -> `mit`, `Apache 2.0` -> `apache-2.0`).
 
 ### AI Commands
 
@@ -359,7 +398,7 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 LLM Checker prioritizes the full scraped Ollama model cache (all families/sizes/variants) and falls back to a built-in curated catalog when cache is unavailable.
 
-The curated fallback catalog includes 35+ models from the most popular Ollama families:
+The curated fallback catalog includes 35+ models from the most popular Ollama families (used only when the dynamic scraped pool is unavailable):
 
 | Family | Models | Best For |
 |--------|--------|----------|
@@ -484,10 +523,10 @@ The selector automatically picks the best quantization that fits your available 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │  Hardware       │────>│  Model          │────>│  Deterministic  │
-│  Detection      │     │  Catalog (35+)  │     │  Selector       │
+│  Detection      │     │  Catalog Pool    │     │  Selector       │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
-   Detects GPU/CPU         JSON catalog +           4D scoring
+   Detects GPU/CPU         Dynamic + fallback       4D scoring
    Memory / Backend        Installed models         Per-category weights
    Usable memory calc      Auto-dedup               Memory calibration
                                                         │
@@ -559,7 +598,7 @@ src/
     deterministic-selector.js  # Primary selection algorithm
     scoring-config.js          # Centralized scoring weights
     scoring-engine.js          # Advanced scoring (smart-recommend)
-    catalog.json               # Curated fallback catalog (35+ models)
+    catalog.json               # Curated fallback catalog (35+ models, only if dynamic pool unavailable)
   ai/
     multi-objective-selector.js  # Multi-objective optimization
     ai-check-selector.js        # LLM-based evaluation
