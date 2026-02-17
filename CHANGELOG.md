@@ -1,6 +1,13 @@
 Changelog
 =========
 
+3.2.8 — Multimodal Classification Hotfix (2026-02-17)
+-----------------------------------------------------
+
+- Fixed false multimodal recommendations caused by noisy `input_types` metadata (for example, coding models incorrectly marked as image-capable by upstream scraping noise).
+- Hardened modality inference: `input_types=image` alone is no longer enough; recommendation logic now also requires explicit multimodal metadata or strong vision naming/context hints.
+- Added deterministic regression coverage to ensure coding-only models are excluded from multimodal picks when metadata is ambiguous.
+
 3.2.7 — License Update: No Paid Distribution (2026-02-17)
 ----------------------------------------------------------
 

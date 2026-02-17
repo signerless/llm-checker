@@ -97,6 +97,12 @@ LLM Checker is published in all primary channels:
 - GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
+### v3.2.8 Highlights
+
+- Fixed multimodal recommendation false positives from noisy metadata.
+- Coding-only models with incidental `input_types: image` flags are no longer treated as vision models.
+- Added regression tests to keep multimodal category picks aligned with true vision-capable models.
+
 ### v3.2.7 Highlights
 
 - License updated to **NPDL-1.0**: paid redistribution and paid hosted/API delivery now require a separate commercial license.
