@@ -1,6 +1,25 @@
 Changelog
 =========
 
+3.2.6 — Recommendation & Detection Regression Hardening (2026-02-17)
+--------------------------------------------------------------------
+
+- Recommend: enforce feasible 30B-class coverage for capable discrete multi-GPU profiles (non-speed objectives).
+- Recommend: add deterministic regression for dual-GPU 36GB aggregate VRAM scenarios.
+- Hardware detection: preserve heterogeneous multi-GPU inventory summaries (e.g. mixed V100/P40/M40).
+- Hardware mapping/fallbacks:
+  - Added AMD Radeon AI PRO R9700 (PCI ID `7551`) support path.
+  - Added NVIDIA GTX 1070 Ti (`1b82`) fallback mapping.
+  - Re-verified Linux RX 7900 XTX non-ROCm fallback detection path.
+- Docs: updated distribution/install notes and recommend optimization profile examples.
+
+3.2.5 — Deterministic Selector Memory Modeling Fixes (2026-02-17)
+------------------------------------------------------------------
+
+- MoE memory estimation: fixed active-parameter memory path for deterministic model selection.
+- Added deterministic regression coverage for MoE active/fallback parameter handling.
+- Improved deterministic recommendation stability for memory-fit edge cases.
+
 3.0.7 — Fix TPS Estimation (2025-12-31)
 ---------------------------------------
 

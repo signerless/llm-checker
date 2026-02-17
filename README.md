@@ -93,14 +93,19 @@ npm install sql.js
 
 LLM Checker is published in all primary channels:
 
-- npm (latest): [`llm-checker@3.2.4`](https://www.npmjs.com/package/llm-checker)
-- GitHub Release: [`v3.2.4`](https://github.com/Pavelevich/llm-checker/releases/tag/v3.2.4)
+- npm (latest): [`llm-checker@latest`](https://www.npmjs.com/package/llm-checker)
+- GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
 - GitHub Packages: [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
-### v3.2.4 Highlights
+### v3.2.6 Highlights
 
-- Fixed `recommend` hardware-profile handling so discrete VRAM limits are honored consistently.
-- Added deterministic selector regression coverage for 24GB VRAM fit behavior.
+- Recommendation engine now enforces feasible 30B-class coverage on high-capacity discrete multi-GPU setups (for non-speed objectives).
+- Heterogeneous GPU inventories are preserved in output summaries and downstream recommendation inputs.
+- Added and validated fallback mappings/paths for:
+  - AMD Radeon AI PRO R9700 (PCI ID `7551`)
+  - NVIDIA GTX 1070 Ti (device `1b82`)
+  - Linux RX 7900 XTX detection via non-ROCm fallbacks (`lspci`/`sysfs`)
+- Expanded deterministic and hardware regression coverage for multi-GPU and unified-memory edge cases.
 
 ### Optional: Install from GitHub Packages
 
@@ -110,7 +115,7 @@ echo "@pavelevich:registry=https://npm.pkg.github.com" >> ~/.npmrc
 echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
 
 # 2) Install
-npm install -g @pavelevich/llm-checker@3.2.4
+npm install -g @pavelevich/llm-checker@latest
 ```
 
 ---
@@ -354,6 +359,16 @@ Metal:
 
 ```bash
 llm-checker recommend
+```
+
+Use optimization profiles to steer ranking by intent:
+
+```bash
+llm-checker recommend --optimize balanced
+llm-checker recommend --optimize speed
+llm-checker recommend --optimize quality
+llm-checker recommend --optimize context
+llm-checker recommend --optimize coding
 ```
 
 ```
