@@ -8,6 +8,7 @@ const path = require('path');
 
 const TESTS = [
     { name: 'AMD GPU detection', file: 'amd-gpu-detection.test.js', category: 'Hardware' },
+    { name: 'CUDA Jetson detection', file: 'cuda-jetson-detection.test.js', category: 'Hardware' },
     { name: 'Hardware simulation scoring', file: 'hardware-simulation-tests.js', category: 'Hardware' },
     { name: 'Hardware detector regression', file: 'hardware-detector-regression.js', category: 'Hardware' },
     { name: 'Deterministic model pool', file: 'deterministic-model-pool-check.js', category: 'Recommendations' },
