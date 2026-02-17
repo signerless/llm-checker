@@ -71,6 +71,13 @@ class HardwareSpecs {
             'NVIDIA GeForce RTX 3060 Ti': { score: 75, vram: 8, tdp: 200, dedicated: true },
             'NVIDIA GeForce RTX 3060': { score: 70, vram: 12, tdp: 170, dedicated: true },
 
+            // NVIDIA Data Center / Workstation
+            'NVIDIA H100': { score: 100, vram: 80, tdp: 700, dedicated: true },
+            'NVIDIA A100': { score: 94, vram: 80, tdp: 400, dedicated: true },
+            'NVIDIA Tesla P100': { score: 74, vram: 16, tdp: 250, dedicated: true },
+            'NVIDIA GB10 Grace Blackwell': { score: 96, vram: 96, tdp: 140, dedicated: true },
+            'NVIDIA DGX Spark (GB10)': { score: 96, vram: 96, tdp: 140, dedicated: true },
+
             // AMD RX 7000 Series
             'AMD Radeon RX 7900 XTX': { score: 92, vram: 24, tdp: 355, dedicated: true },
             'AMD Radeon RX 7900 XT': { score: 88, vram: 20, tdp: 300, dedicated: true },

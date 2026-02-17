@@ -1,10 +1,12 @@
 const si = require('systeminformation');
+const UnifiedDetector = require('./unified-detector');
 
 class HardwareDetector {
     constructor() {
         this.cache = null;
         this.cacheExpiry = 5 * 60 * 1000;
         this.cacheTime = 0;
+        this.unifiedDetector = new UnifiedDetector();
     }
 
     async getSystemInfo(forceFresh = false) {
@@ -30,6 +32,8 @@ class HardwareDetector {
                 os: this.processOSInfo(osInfo),
                 timestamp: Date.now()
             };
+
+            await this.enrichWithUnifiedHardware(systemInfo);
 
             this.cache = systemInfo;
             this.cacheTime = Date.now();
@@ -93,9 +97,15 @@ class HardwareDetector {
         const validGPUs = controllers.filter(gpu => {
             const model = (gpu.model || '').toLowerCase();
             const vendor = (gpu.vendor || '').toLowerCase();
+            const hasKnownModelSignature = this.looksLikeRealGPUModel(model);
             
             // Skip GPUs with empty/invalid data (like virtualized GPUs)
-            if (!model || !vendor || model === 'unknown' || vendor === '') {
+            if (!model || model === 'unknown') {
+                return false;
+            }
+
+            // Some passthrough/virtualized setups report empty vendor while model is valid
+            if ((!vendor || vendor === '') && !hasKnownModelSignature) {
                 return false;
             }
             
@@ -181,7 +191,7 @@ class HardwareDetector {
 
         return {
             model: enhancedModel,
-            vendor: primaryGPU.vendor || 'Unknown',
+            vendor: primaryGPU.vendor || this.inferVendorFromGPUModel(enhancedModel, 'Unknown'),
             vram: effectiveVRAM,
             vramPerGPU: vram, // VRAM of primary GPU for reference
             vramDynamic: primaryGPU.vramDynamic || false,
@@ -192,11 +202,52 @@ class HardwareDetector {
             all: controllers.map(gpu => ({
                 model: gpu.model,
                 vram: this.normalizeVRAM(gpu.vram || 0),
-                vendor: gpu.vendor
+                vendor: gpu.vendor || this.inferVendorFromGPUModel(gpu.model, 'Unknown')
             })),
             displays: displays.length,
             score: this.calculateGPUScore(primaryGPU)
         };
+    }
+
+    async enrichWithUnifiedHardware(systemInfo) {
+        try {
+            const unified = await this.unifiedDetector.detect();
+            if (!unified || !unified.summary || !unified.primary) {
+                return;
+            }
+
+            const primaryType = unified.primary.type || 'cpu';
+            if (primaryType === 'cpu') {
+                return;
+            }
+
+            const summary = unified.summary;
+            const backendInfo = unified.backends?.[primaryType]?.info || {};
+            const backendGPUs = Array.isArray(backendInfo.gpus) ? backendInfo.gpus : [];
+            const gpuCount = summary.gpuCount || backendGPUs.length || systemInfo.gpu.gpuCount || 1;
+
+            const totalVRAM = typeof summary.totalVRAM === 'number' ? summary.totalVRAM : systemInfo.gpu.vram;
+            const perGPUVRAM = backendGPUs[0]?.memory?.total
+                || (gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / gpuCount) : 0);
+
+            const modelFromUnified = summary.gpuModel || systemInfo.gpu.model;
+            const vendor = this.inferVendorFromGPUModel(modelFromUnified, systemInfo.gpu.vendor);
+
+            systemInfo.gpu = {
+                ...systemInfo.gpu,
+                model: modelFromUnified,
+                vendor,
+                vram: totalVRAM || systemInfo.gpu.vram,
+                vramPerGPU: perGPUVRAM || systemInfo.gpu.vramPerGPU || 0,
+                dedicated: primaryType !== 'metal',
+                gpuCount,
+                isMultiGPU: Boolean(summary.isMultiGPU || gpuCount > 1),
+                backend: primaryType,
+                driverVersion: backendInfo.driver || systemInfo.gpu.driverVersion
+            };
+        } catch (error) {
+            // Keep systeminformation-only results when backend-specific detection is unavailable
+        }
     }
 
     processSystemInfo(system) {
@@ -298,6 +349,10 @@ class HardwareDetector {
     estimateVRAMFromModel(model) {
         if (!model) return 0;
         const modelLower = model.toLowerCase();
+
+        // NVIDIA data-center / workstation
+        if (modelLower.includes('gb10') || modelLower.includes('grace blackwell') || modelLower.includes('dgx spark')) return 96;
+        if (modelLower.includes('tesla p100') || modelLower.includes('p100')) return 16;
         
         // NVIDIA RTX 50 series
         if (modelLower.includes('rtx 5090')) return 32;
@@ -398,6 +453,7 @@ class HardwareDetector {
 
         // Bonus por marcas/modelos específicos
         if (model.includes('rtx 5090')) score += 30;
+        else if (model.includes('gb10') || model.includes('grace blackwell') || model.includes('dgx spark')) score += 28;
         else if (model.includes('rtx 5080')) score += 27;
         else if (model.includes('rtx 5070')) score += 24;
         else if (model.includes('rtx 5060')) score += 21;
@@ -407,6 +463,7 @@ class HardwareDetector {
         else if (model.includes('rtx 30')) score += 18;
         else if (model.includes('rtx 20')) score += 15;
         else if (model.includes('gtx 16')) score += 12;
+        else if (model.includes('tesla p100') || model.includes('p100')) score += 14;
         else if (model.includes('apple m')) score += 15;
 
         return Math.min(Math.round(score), 100);
@@ -497,9 +554,10 @@ class HardwareDetector {
      */
     getGPUTier(model) {
         const modelLower = model.toLowerCase();
-        
+
         // NVIDIA RTX series
         if (modelLower.includes('rtx 50')) return 100;
+        if (modelLower.includes('gb10') || modelLower.includes('grace blackwell') || modelLower.includes('dgx spark')) return 98;
         if (modelLower.includes('rtx 4090')) return 95;
         if (modelLower.includes('rtx 40')) return 90;
         if (modelLower.includes('rtx 3090')) return 85;
@@ -511,6 +569,7 @@ class HardwareDetector {
         // NVIDIA Professional
         if (modelLower.includes('a100')) return 98;
         if (modelLower.includes('h100')) return 99;
+        if (modelLower.includes('tesla p100') || modelLower.includes('p100')) return 78;
         if (modelLower.includes('tesla')) return 75;
         if (modelLower.includes('quadro')) return 65;
         
@@ -543,6 +602,49 @@ class HardwareDetector {
         if (vendorLower.includes('intel')) return 1;
         if (vendorLower.includes('apple')) return 3;
         return 0;
+    }
+
+    looksLikeRealGPUModel(model) {
+        if (!model) return false;
+        const modelLower = model.toLowerCase();
+
+        const gpuMarkers = [
+            'nvidia', 'geforce', 'rtx', 'gtx', 'tesla', 'quadro',
+            'amd', 'radeon', 'rx ', 'instinct',
+            'intel', 'arc', 'iris', 'uhd',
+            'apple', 'm1', 'm2', 'm3', 'm4',
+            'gb10', 'blackwell'
+        ];
+
+        return gpuMarkers.some(marker => modelLower.includes(marker));
+    }
+
+    inferVendorFromGPUModel(model, fallback = 'Unknown') {
+        if (!model) return fallback;
+        const modelLower = model.toLowerCase();
+
+        if (modelLower.includes('nvidia') || modelLower.includes('geforce') ||
+            modelLower.includes('rtx') || modelLower.includes('gtx') ||
+            modelLower.includes('tesla') || modelLower.includes('quadro') ||
+            modelLower.includes('gb10') || modelLower.includes('blackwell')) {
+            return 'NVIDIA';
+        }
+
+        if (modelLower.includes('amd') || modelLower.includes('radeon') || modelLower.includes('instinct')) {
+            return 'AMD';
+        }
+
+        if (modelLower.includes('intel') || modelLower.includes('arc') ||
+            modelLower.includes('iris') || modelLower.includes('uhd')) {
+            return 'Intel';
+        }
+
+        if (modelLower.includes('apple') || modelLower.includes('m1') ||
+            modelLower.includes('m2') || modelLower.includes('m3') || modelLower.includes('m4')) {
+            return 'Apple';
+        }
+
+        return fallback;
     }
 
     async runQuickBenchmark() {

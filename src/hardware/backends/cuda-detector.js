@@ -209,8 +209,34 @@ class CUDADetector {
             architecture: 'Unknown'
         };
 
+        // NVIDIA GB10 / Grace Blackwell (DGX Spark)
+        if (nameLower.includes('gb10') || nameLower.includes('grace blackwell') ||
+            nameLower.includes('dgx spark') || nameLower.includes('blackwell')) {
+            capabilities.tensorCores = true;
+            capabilities.bf16 = true;
+            capabilities.fp8 = true;
+            capabilities.computeCapability = '10.0';
+            capabilities.architecture = 'Grace Blackwell';
+        }
+        // H100 (Hopper)
+        else if (nameLower.includes('h100') || nameLower.includes('h200')) {
+            capabilities.tensorCores = true;
+            capabilities.bf16 = true;
+            capabilities.fp8 = true;
+            capabilities.nvlink = true;
+            capabilities.computeCapability = '9.0';
+            capabilities.architecture = 'Hopper';
+        }
+        // Tesla P100 (Pascal)
+        else if (nameLower.includes('p100') || nameLower.includes('tesla p100')) {
+            capabilities.tensorCores = false;
+            capabilities.bf16 = false;
+            capabilities.fp8 = false;
+            capabilities.computeCapability = '6.0';
+            capabilities.architecture = 'Pascal';
+        }
         // RTX 50 series (Blackwell)
-        if (nameLower.includes('rtx 50') || nameLower.includes('rtx50')) {
+        else if (nameLower.includes('rtx 50') || nameLower.includes('rtx50')) {
             capabilities.tensorCores = true;
             capabilities.bf16 = true;
             capabilities.fp8 = true;
@@ -257,15 +283,6 @@ class CUDADetector {
             capabilities.architecture = 'Volta';
             capabilities.nvlink = true;
         }
-        // H100 (Hopper)
-        else if (nameLower.includes('h100') || nameLower.includes('h200')) {
-            capabilities.tensorCores = true;
-            capabilities.bf16 = true;
-            capabilities.fp8 = true;
-            capabilities.nvlink = true;
-            capabilities.computeCapability = '9.0';
-            capabilities.architecture = 'Hopper';
-        }
 
         return capabilities;
     }
@@ -311,6 +328,9 @@ class CUDADetector {
             'rtx 2060': 80,
 
             // Data center
+            'gb10': 95,
+            'grace blackwell': 95,
+            'dgx spark': 95,
             'h100': 400,
             'h200': 450,
             'a100': 300,
@@ -318,7 +338,8 @@ class CUDADetector {
             'l4': 150,
             'a40': 180,
             't4': 70,
-            'v100': 120
+            'v100': 120,
+            'p100': 45
         };
 
         for (const [model, speed] of Object.entries(speedMap)) {

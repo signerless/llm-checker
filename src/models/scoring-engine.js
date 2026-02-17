@@ -170,6 +170,7 @@ class ScoringEngine {
             // NVIDIA - based on real llama.cpp/Ollama benchmarks
             'cuda_h100': 120,    // ~100-140 TPS for 7B Q4
             'cuda_a100': 90,     // ~80-100 TPS for 7B Q4
+            'cuda_gb10': 95,     // Grace Blackwell / DGX Spark class
             'cuda_4090': 70,     // ~60-80 TPS for 7B Q4
             'cuda_4080': 55,     // ~50-60 TPS for 7B Q4
             'cuda_3090': 50,     // ~45-55 TPS for 7B Q4
@@ -177,6 +178,7 @@ class ScoringEngine {
             'cuda_3070': 32,     // ~28-35 TPS for 7B Q4
             'cuda_3060': 25,     // ~20-28 TPS for 7B Q4
             'cuda_2080': 28,     // ~25-30 TPS for 7B Q4
+            'cuda_p100': 30,     // Tesla P100 class
             'cuda_default': 30,
 
             // AMD - slightly lower than equivalent NVIDIA
@@ -518,8 +520,10 @@ class ScoringEngine {
         const gpuModel = (hardware.summary.gpuModel || '').toLowerCase();
 
         if (backend === 'cuda') {
+            if (gpuModel.includes('gb10') || gpuModel.includes('grace blackwell') || gpuModel.includes('dgx spark')) return 'cuda_gb10';
             if (gpuModel.includes('h100')) return 'cuda_h100';
             if (gpuModel.includes('a100')) return 'cuda_a100';
+            if (gpuModel.includes('p100')) return 'cuda_p100';
             if (gpuModel.includes('4090')) return 'cuda_4090';
             if (gpuModel.includes('4080')) return 'cuda_4080';
             if (gpuModel.includes('3090')) return 'cuda_3090';

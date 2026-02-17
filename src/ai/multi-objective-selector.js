@@ -387,6 +387,9 @@ class MultiObjectiveSelector {
         // 2) Memory bandwidth (20%) - simplified estimation
         let memBandwidthGBs = 50; // fallback
         const gpu = gpuModel.toLowerCase();
+        if (gpu.includes('gb10') || gpu.includes('grace blackwell') || gpu.includes('dgx spark')) memBandwidthGBs = 1000;
+        else if (gpu.includes('h100')) memBandwidthGBs = 3000;
+        else if (gpu.includes('a100')) memBandwidthGBs = 2039;
         if (gpu.includes('m4 pro')) memBandwidthGBs = 273;
         else if (gpu.includes('m4')) memBandwidthGBs = 120;
         else if (gpu.includes('rtx 4090')) memBandwidthGBs = 1008;
@@ -398,7 +401,10 @@ class MultiObjectiveSelector {
         
         // 3) Compute (20%) - simplified estimation
         let compute = 0;
-        if (gpu.includes('m4 pro')) compute = clamp(28 / 80);  // Match main algorithm
+        if (gpu.includes('gb10') || gpu.includes('grace blackwell') || gpu.includes('dgx spark')) compute = clamp(180 / 80);
+        else if (gpu.includes('h100')) compute = clamp(320 / 80);
+        else if (gpu.includes('a100')) compute = clamp(250 / 80);
+        else if (gpu.includes('m4 pro')) compute = clamp(28 / 80);  // Match main algorithm
         else if (gpu.includes('m4')) compute = clamp(15 / 80);
         else if (gpu.includes('rtx 4090')) compute = clamp(165 / 80);
         else if (gpu.includes('rtx 4080')) compute = clamp(121 / 80);
@@ -448,6 +454,10 @@ class MultiObjectiveSelector {
         
         // Special flagship GPU detection by model name
         if (gpuModel.toLowerCase().includes('rtx 50') || 
+            gpuModel.toLowerCase().includes('gb10') ||
+            gpuModel.toLowerCase().includes('grace blackwell') ||
+            gpuModel.toLowerCase().includes('dgx spark') ||
+            gpuModel.toLowerCase().includes('blackwell') ||
             gpuModel.toLowerCase().includes('h100') || 
             gpuModel.toLowerCase().includes('a100')) {
             tier = 'flagship';
@@ -599,7 +609,11 @@ class MultiObjectiveSelector {
         
         // NVIDIA GPU optimizations
         if (gpu.includes('nvidia') || gpu.includes('geforce') || gpu.includes('rtx') || gpu.includes('gtx')) {
-            if (gpu.includes('rtx 50')) {
+            if (gpu.includes('gb10') || gpu.includes('grace blackwell') || gpu.includes('dgx spark')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.6, 32);
+                specs.memoryEfficiency = 0.96;
+                specs.backendOptimization = 1.25;
+            } else if (gpu.includes('rtx 50')) {
                 // RTX 50xx series - flagship tier with massive VRAM + excellent offload
                 specs.offloadCapacity = Math.min(ramGB * 0.5, 24);
                 specs.memoryEfficiency = 0.95;
@@ -732,7 +746,15 @@ class MultiObjectiveSelector {
         // GPU-based calculation (dedicated GPU only)
         if (vramGB > 0 && !gpuModel.toLowerCase().includes('iris') && !gpuModel.toLowerCase().includes('integrated')) {
             let gpuTPS = 20; // Conservative GPU baseline
-            if (gpuModel.toLowerCase().includes('rtx 50')) {
+            if (gpuModel.toLowerCase().includes('gb10') ||
+                gpuModel.toLowerCase().includes('grace blackwell') ||
+                gpuModel.toLowerCase().includes('dgx spark')) {
+                gpuTPS = 85; // GB10 / Grace Blackwell class
+            } else if (gpuModel.toLowerCase().includes('h100')) {
+                gpuTPS = 120;
+            } else if (gpuModel.toLowerCase().includes('a100')) {
+                gpuTPS = 95;
+            } else if (gpuModel.toLowerCase().includes('rtx 50')) {
                 gpuTPS = 60; // RTX 50 series - more realistic
             } else if (gpuModel.toLowerCase().includes('rtx 40')) {
                 gpuTPS = 45; // RTX 40 series  
@@ -740,6 +762,8 @@ class MultiObjectiveSelector {
                 gpuTPS = 35; // RTX 30 series
             } else if (gpuModel.toLowerCase().includes('rtx 20')) {
                 gpuTPS = 25; // RTX 20 series
+            } else if (gpuModel.toLowerCase().includes('p100')) {
+                gpuTPS = 32; // Tesla P100 class
             } else if (vramGB >= 8) {
                 gpuTPS = 30; // Other high-end GPUs
             } else if (vramGB >= 4) {
