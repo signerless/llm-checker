@@ -10,9 +10,9 @@
   "main": "src/index.js",
   "scripts": {
     "test": "node tests/run-all-tests.js",
-    "test:gpu": "node tests/gpu-detection/multi-gpu.test.js",
-    "test:platform": "node tests/platform-tests/cross-platform.test.js",
-    "test:ui": "node tests/ui-tests/interface.test.js",
+    "test:gpu": "node tests/amd-gpu-detection.test.js",
+    "test:platform": "node tests/hardware-simulation-tests.js",
+    "test:ui": "node tests/ui-cli-smoke.test.js",
     "test:runtime": "node tests/runtime-specdec-tests.js",
     "test:deterministic-pool": "node tests/deterministic-model-pool-check.js",
     "test:policy": "node tests/policy-commands.test.js",

@@ -114,10 +114,25 @@ async function runProvidedHardwareProfileIsHonored() {
     assert.ok(!generalIds.includes('deepfit:70b'), '70B variant should be rejected for 24GB VRAM fit');
 }
 
+async function runUndefinedHardwareFallsBackSafely() {
+    const selector = new DeterministicModelSelector();
+    const allModels = buildSyntheticOllamaModels();
+
+    selector.getInstalledModels = async () => [];
+    selector.getHardware = async () => buildHighEndHardware();
+
+    const recommendations = await selector.getBestModelsForHardware(undefined, allModels);
+    const generalIds = (recommendations.general?.bestModels || []).map((m) => m.model_identifier);
+
+    assert.ok(generalIds.length > 0, 'general recommendations should be generated when hardware is omitted');
+    assert.ok(generalIds.every((id) => id.startsWith('unitmega:')), 'fallback hardware path should still use provided allModels');
+}
+
 async function runAll() {
     await runSelectModelsUsesProvidedPool();
     await runGetBestModelsForHardwareUsesAllModels();
     await runProvidedHardwareProfileIsHonored();
+    await runUndefinedHardwareFallsBackSafely();
     console.log('deterministic-model-pool-check: OK');
 }
 

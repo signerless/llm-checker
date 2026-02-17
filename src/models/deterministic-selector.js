@@ -1389,22 +1389,22 @@ class DeterministicModelSelector {
         };
     }
 
-    mapHardwareTier(hardware) {
+    mapHardwareTier(hardware = {}) {
         let ram, cores;
 
-        if (hardware.memory && hardware.memory.totalGB) {
+        if (hardware?.memory?.totalGB) {
             ram = hardware.memory.totalGB;
-        } else if (hardware.memory && hardware.memory.total) {
+        } else if (hardware?.memory?.total) {
             ram = hardware.memory.total;
-        } else if (hardware.total_ram_gb) {
+        } else if (hardware?.total_ram_gb) {
             ram = hardware.total_ram_gb;
         } else {
             ram = 8;
         }
 
-        if (hardware.cpu && hardware.cpu.cores) {
+        if (hardware?.cpu?.cores) {
             cores = hardware.cpu.cores;
-        } else if (hardware.cpu_cores) {
+        } else if (hardware?.cpu_cores) {
             cores = hardware.cpu_cores;
         } else {
             cores = 4;
@@ -1470,14 +1470,14 @@ class DeterministicModelSelector {
                 });
 
                 recommendations[category] = {
-                    tier: this.mapHardwareTier(hardware),
+                    tier: this.mapHardwareTier(normalizedHardware),
                     bestModels: result.candidates.map(candidate => this.mapCandidateToLegacyFormat(candidate)),
                     totalEvaluated: result.total_evaluated,
                     category: this.getCategoryInfo(category)
                 };
             } catch (error) {
                 recommendations[category] = {
-                    tier: this.mapHardwareTier(hardware),
+                    tier: this.mapHardwareTier(normalizedHardware),
                     bestModels: [],
                     totalEvaluated: 0,
                     category: this.getCategoryInfo(category)
