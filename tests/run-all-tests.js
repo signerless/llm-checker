@@ -12,6 +12,7 @@ const TESTS = [
     { name: 'Hardware simulation scoring', file: 'hardware-simulation-tests.js', category: 'Hardware' },
     { name: 'Hardware detector regression', file: 'hardware-detector-regression.js', category: 'Hardware' },
     { name: 'Deterministic model pool', file: 'deterministic-model-pool-check.js', category: 'Recommendations' },
+    { name: 'Ollama capacity planner', file: 'ollama-capacity-planner.test.js', category: 'Ollama' },
     { name: 'Runtime + speculative decoding', file: 'runtime-specdec-tests.js', category: 'Runtime' },
     { name: 'CLI interface smoke', file: 'ui-cli-smoke.test.js', category: 'UI' },
     { name: 'Calibration schema', file: 'calibration-schema.test.js', category: 'Calibration' },

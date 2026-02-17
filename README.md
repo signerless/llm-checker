@@ -309,6 +309,7 @@ Claude will automatically call the right tools and give you actionable results.
 | `recommend` | Intelligent recommendations by category (coding, reasoning, multimodal, etc.) |
 | `calibrate` | Generate calibration result + routing policy artifacts from a JSONL prompt suite |
 | `installed` | Rank your installed Ollama models by compatibility |
+| `ollama-plan` | Compute safe Ollama runtime env vars (`NUM_CTX`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) for selected local models |
 
 ### Advanced Commands (require `sql.js`)
 

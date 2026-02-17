@@ -24,6 +24,7 @@ function run() {
     assert.ok(stripAnsi(help.stdout).includes('Usage: llm-checker'), 'top-level help should include CLI usage');
     assert.ok(stripAnsi(help.stdout).includes('recommend'), 'top-level help should list recommend command');
     assert.ok(stripAnsi(help.stdout).includes('calibrate'), 'top-level help should list calibrate command');
+    assert.ok(stripAnsi(help.stdout).includes('ollama-plan'), 'top-level help should list ollama-plan command');
 
     const recommendHelp = runCli(['recommend', '--help']);
     assert.strictEqual(recommendHelp.status, 0, stripAnsi(recommendHelp.stderr || recommendHelp.stdout));
@@ -52,6 +53,17 @@ function run() {
     assert.ok(
         stripAnsi(aiRunHelp.stdout).includes('--calibrated [file]'),
         'ai-run help should expose calibrated routing option'
+    );
+
+    const ollamaPlanHelp = runCli(['ollama-plan', '--help']);
+    assert.strictEqual(ollamaPlanHelp.status, 0, stripAnsi(ollamaPlanHelp.stderr || ollamaPlanHelp.stdout));
+    assert.ok(
+        stripAnsi(ollamaPlanHelp.stdout).includes('Plan safe Ollama runtime settings for selected local models'),
+        'ollama-plan help should describe command purpose'
+    );
+    assert.ok(
+        stripAnsi(ollamaPlanHelp.stdout).includes('--objective <mode>'),
+        'ollama-plan help should expose objective option'
     );
 
     console.log('ui-cli-smoke.test.js: OK');
