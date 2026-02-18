@@ -1,0 +1,41 @@
+version: 1
+org: your-org
+mode: audit
+rules:
+  models:
+    allow:
+      - qwen2.5-coder:*
+      - llama3.1:*
+    deny:
+      - "*uncensored*"
+    max_size_gb: 24
+    max_params_b: 32
+    allowed_quantizations:
+      - Q4_K_M
+      - Q5_K_M
+      - Q8_0
+  runtime:
+    required_backends:
+      - metal
+      - cuda
+    min_ram_gb: 32
+    local_only: true
+  compliance:
+    approved_licenses:
+      - mit
+      - apache-2.0
+      - llama
+enforcement:
+  on_violation: warn
+  exit_code: 3
+  allow_exceptions: true
+exceptions:
+  - model: deepseek-r1:32b
+    reason: Approved PoC
+    approver: security@example.com
+    expires_at: 2026-06-30
+reporting:
+  formats:
+    - json
+    - csv
+    - sarif

@@ -1,0 +1,180 @@
+{
+  "backends": {
+    "cpu": {
+      "available": true,
+      "info": {
+        "brand": "Apple M4 Pro",
+        "vendor": "Apple",
+        "cores": {
+          "physical": 12,
+          "logical": 12,
+          "performance": 6,
+          "efficiency": 6
+        },
+        "frequency": {
+          "base": 2400,
+          "max": 2400
+        },
+        "cache": {
+          "l1d": 64,
+          "l1i": 128,
+          "l2": 4,
+          "l3": 0
+        },
+        "capabilities": {
+          "sse": false,
+          "sse2": false,
+          "sse3": false,
+          "ssse3": false,
+          "sse4_1": false,
+          "sse4_2": false,
+          "avx": false,
+          "avx2": false,
+          "avx512": false,
+          "avx512_vnni": false,
+          "amx": false,
+          "fma": false,
+          "f16c": true,
+          "neon": true,
+          "sve": false,
+          "dotprod": true,
+          "bestSimd": "NEON"
+        },
+        "architecture": "arm64",
+        "backend": "cpu",
+        "speedCoefficient": 70
+      }
+    },
+    "metal": {
+      "available": true,
+      "info": {
+        "chip": "Apple M4 Pro",
+        "variant": "pro",
+        "generation": 4,
+        "cores": {
+          "performance": 8,
+          "efficiency": 4,
+          "total": 12
+        },
+        "gpu": {
+          "cores": 16,
+          "model": "Apple M4 Pro"
+        },
+        "neuralEngine": {
+          "cores": 0
+        },
+        "memory": {
+          "unified": 24,
+          "bandwidth": 273
+        },
+        "capabilities": {
+          "metal": true,
+          "metalVersion": "4",
+          "fp16": true,
+          "int8": true,
+          "amx": true
+        },
+        "backend": "metal",
+        "speedCoefficient": 270
+      }
+    }
+  },
+  "primary": {
+    "type": "metal",
+    "name": "Apple Metal",
+    "info": {
+      "chip": "Apple M4 Pro",
+      "variant": "pro",
+      "generation": 4,
+      "cores": {
+        "performance": 8,
+        "efficiency": 4,
+        "total": 12
+      },
+      "gpu": {
+        "cores": 16,
+        "model": "Apple M4 Pro"
+      },
+      "neuralEngine": {
+        "cores": 0
+      },
+      "memory": {
+        "unified": 24,
+        "bandwidth": 273
+      },
+      "capabilities": {
+        "metal": true,
+        "metalVersion": "4",
+        "fp16": true,
+        "int8": true,
+        "amx": true
+      },
+      "backend": "metal",
+      "speedCoefficient": 270
+    }
+  },
+  "cpu": {
+    "brand": "Apple M4 Pro",
+    "vendor": "Apple",
+    "cores": {
+      "physical": 12,
+      "logical": 12,
+      "performance": 6,
+      "efficiency": 6
+    },
+    "frequency": {
+      "base": 2400,
+      "max": 2400
+    },
+    "cache": {
+      "l1d": 64,
+      "l1i": 128,
+      "l2": 4,
+      "l3": 0
+    },
+    "capabilities": {
+      "sse": false,
+      "sse2": false,
+      "sse3": false,
+      "ssse3": false,
+      "sse4_1": false,
+      "sse4_2": false,
+      "avx": false,
+      "avx2": false,
+      "avx512": false,
+      "avx512_vnni": false,
+      "amx": false,
+      "fma": false,
+      "f16c": true,
+      "neon": true,
+      "sve": false,
+      "dotprod": true,
+      "bestSimd": "NEON"
+    },
+    "architecture": "arm64",
+    "backend": "cpu",
+    "speedCoefficient": 70
+  },
+  "summary": {
+    "bestBackend": "metal",
+    "backendName": "Apple Metal",
+    "totalVRAM": 24,
+    "effectiveMemory": 17,
+    "speedCoefficient": 270,
+    "isMultiGPU": false,
+    "gpuCount": 1,
+    "gpuModel": "Apple M4 Pro",
+    "gpuInventory": "Apple M4 Pro",
+    "gpuModels": [
+      {
+        "name": "Apple M4 Pro",
+        "count": 1
+      }
+    ],
+    "hasHeterogeneousGPU": false,
+    "cpuModel": "Apple M4 Pro",
+    "systemRAM": 24
+  },
+  "fingerprint": "apple-apple-m4-pro-24gb",
+  "timestamp": 1771419210820
+}

@@ -1,0 +1,337 @@
+- 📋 Loading models database...
+✔ ✅ Found 213 models (showing 3)
+[
+  {
+    "model_identifier": "llama3.1",
+    "model_name": "llama3.1",
+    "description": "",
+    "labels": [],
+    "pulls": 0,
+    "tags": [
+      "llama3.1:latest",
+      "llama3.1:8b",
+      "llama3.1:70b",
+      "llama3.1:405b"
+    ],
+    "last_updated": "Unknown",
+    "url": "https://ollama.com/library/llama3.1",
+    "namespace": null,
+    "model_type": "official",
+    "variants": [
+      {
+        "tag": "llama3.1:latest",
+        "size": "unknown",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.1:latest",
+        "estimated_size_gb": 1,
+        "real_size_gb": 4.9,
+        "categories": [
+          "chat"
+        ]
+      },
+      {
+        "tag": "llama3.1:8b",
+        "size": "8b",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.1:8b",
+        "estimated_size_gb": 8,
+        "real_size_gb": 4.9,
+        "categories": [
+          "chat"
+        ]
+      },
+      {
+        "tag": "llama3.1:70b",
+        "size": "70b",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.1:70b",
+        "estimated_size_gb": 70,
+        "real_size_gb": 43,
+        "categories": [
+          "chat"
+        ]
+      },
+      {
+        "tag": "llama3.1:405b",
+        "size": "405b",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.1:405b",
+        "estimated_size_gb": 405,
+        "real_size_gb": 243,
+        "categories": [
+          "chat"
+        ]
+      }
+    ],
+    "detailed_description": "Llama 3.1 is a new state-of-the-art model from Meta available in 8B, 70B and 405B parameter sizes.",
+    "parameters": {},
+    "quantizations": [],
+    "model_sizes": [
+      "8b",
+      "70b",
+      "405b",
+      "4.9gb",
+      "43gb",
+      "243gb",
+      "952b"
+    ],
+    "category": "talking",
+    "use_cases": [
+      "chat",
+      "conversation",
+      "assistant"
+    ],
+    "main_size": "8b",
+    "actual_pulls": 0,
+    "context_length": "128K",
+    "input_types": [
+      "text",
+      "image",
+      "code"
+    ],
+    "detailed_scraped_at": "2026-02-18T08:17:27.647Z",
+    "categories": [
+      "chat"
+    ],
+    "primary_category": "chat"
+  },
+  {
+    "model_identifier": "deepseek-r1",
+    "model_name": "deepseek-r1",
+    "description": "",
+    "labels": [],
+    "pulls": 0,
+    "tags": [
+      "deepseek-r1:671b",
+      "deepseek-r1:8b",
+      "deepseek-r1:1.5b",
+      "deepseek-r1:7b",
+      "deepseek-r1:14b",
+      "deepseek-r1:32b",
+      "deepseek-r1:70b",
+      "deepseek-r1:latest"
+    ],
+    "last_updated": "Unknown",
+    "url": "https://ollama.com/library/deepseek-r1",
+    "namespace": null,
+    "model_type": "official",
+    "variants": [
+      {
+        "tag": "deepseek-r1:671b",
+        "size": "671b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:671b",
+        "estimated_size_gb": 671,
+        "real_size_gb": 404,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:8b",
+        "size": "8b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:8b",
+        "estimated_size_gb": 8,
+        "real_size_gb": 5.2,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:1.5b",
+        "size": "1.5b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:1.5b",
+        "estimated_size_gb": 1.5,
+        "real_size_gb": 1.1,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:7b",
+        "size": "7b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:7b",
+        "estimated_size_gb": 7,
+        "real_size_gb": 4.7,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:14b",
+        "size": "14b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:14b",
+        "estimated_size_gb": 14,
+        "real_size_gb": 9,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:32b",
+        "size": "32b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:32b",
+        "estimated_size_gb": 32,
+        "real_size_gb": 20,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:70b",
+        "size": "70b",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:70b",
+        "estimated_size_gb": 70,
+        "real_size_gb": 43,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      },
+      {
+        "tag": "deepseek-r1:latest",
+        "size": "unknown",
+        "quantization": "Q4_0",
+        "command": "ollama pull deepseek-r1:latest",
+        "estimated_size_gb": 1,
+        "real_size_gb": 5.2,
+        "categories": [
+          "chat",
+          "reasoning"
+        ]
+      }
+    ],
+    "detailed_description": "DeepSeek-R1 is a family of open reasoning models with performance approaching that of leading models, such as O3 and Gemini 2.5 Pro.",
+    "parameters": {},
+    "quantizations": [],
+    "model_sizes": [
+      "1.5b",
+      "7b",
+      "8b",
+      "14b",
+      "32b",
+      "70b",
+      "671b",
+      "5.2gb",
+      "1.1gb",
+      "4.7gb",
+      "9.0gb",
+      "20gb",
+      "43gb",
+      "404gb"
+    ],
+    "category": "reasoning",
+    "use_cases": [
+      "reasoning",
+      "mathematics",
+      "logic"
+    ],
+    "main_size": "1.5b",
+    "actual_pulls": 0,
+    "context_length": "160K",
+    "input_types": [
+      "text",
+      "image",
+      "code"
+    ],
+    "detailed_scraped_at": "2026-02-18T08:17:27.855Z",
+    "categories": [
+      "chat",
+      "reasoning"
+    ],
+    "primary_category": "reasoning"
+  },
+  {
+    "model_identifier": "llama3.2",
+    "model_name": "llama3.2",
+    "description": "",
+    "labels": [],
+    "pulls": 0,
+    "tags": [
+      "llama3.2:1b",
+      "llama3.2:latest",
+      "llama3.2:3b"
+    ],
+    "last_updated": "Unknown",
+    "url": "https://ollama.com/library/llama3.2",
+    "namespace": null,
+    "model_type": "official",
+    "variants": [
+      {
+        "tag": "llama3.2:1b",
+        "size": "1b",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.2:1b",
+        "estimated_size_gb": 1,
+        "real_size_gb": 1.3,
+        "categories": [
+          "chat"
+        ]
+      },
+      {
+        "tag": "llama3.2:latest",
+        "size": "unknown",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.2:latest",
+        "estimated_size_gb": 1,
+        "real_size_gb": 2,
+        "categories": [
+          "chat"
+        ]
+      },
+      {
+        "tag": "llama3.2:3b",
+        "size": "3b",
+        "quantization": "Q4_0",
+        "command": "ollama pull llama3.2:3b",
+        "estimated_size_gb": 3,
+        "real_size_gb": 2,
+        "categories": [
+          "chat"
+        ]
+      }
+    ],
+    "detailed_description": "Meta's Llama 3.2 goes small with 1B and 3B models.",
+    "parameters": {},
+    "quantizations": [],
+    "model_sizes": [
+      "1b",
+      "3b",
+      "2.0gb",
+      "1.3gb",
+      "929b",
+      "2.6b"
+    ],
+    "category": "talking",
+    "use_cases": [
+      "chat",
+      "conversation",
+      "assistant"
+    ],
+    "main_size": "1b",
+    "actual_pulls": 0,
+    "context_length": "128K",
+    "input_types": [
+      "text",
+      "image",
+      "code"
+    ],
+    "detailed_scraped_at": "2026-02-18T08:17:27.748Z",
+    "categories": [
+      "chat"
+    ],
+    "primary_category": "chat"
+  }
+]

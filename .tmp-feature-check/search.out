@@ -1,0 +1,1606 @@
+{
+  "topPicks": {
+    "best": {
+      "variant": {
+        "id": 21272,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    },
+    "balanced": {
+      "variant": {
+        "id": 21272,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    },
+    "fast": {
+      "variant": {
+        "id": 21272,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    },
+    "quality": {
+      "variant": {
+        "id": 21272,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    }
+  },
+  "categories": {
+    "excellent": [],
+    "recommended": [
+      {
+        "variant": {
+          "id": 21272,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 97,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21278,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct-q4_1",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 97,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21280,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct-q4_K_M",
+          "params_b": 32,
+          "quant": "Q4_K_M",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 97,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": "Q4_K_M",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21282,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct-q5_1",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 97,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21700,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 98,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21861,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b-base",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 98,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21867,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b-base-q4_1",
+          "params_b": 32,
+          "quant": null,
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 98,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": null,
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21868,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b-base-q4_K_S",
+          "params_b": 32,
+          "quant": "Q4_K_S",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 97,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": "Q4_K_S",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21869,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b-base-q4_K_M",
+          "params_b": 32,
+          "quant": "Q4_K_M",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 79,
+          "components": {
+            "quality": 98,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": "Q4_K_M",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21177,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b",
+          "params_b": 32,
+          "quant": "Q4_0",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 78,
+          "components": {
+            "quality": 95,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": "Q4_0",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21277,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct-q4_0",
+          "params_b": 32,
+          "quant": "Q4_0",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 78,
+          "components": {
+            "quality": 95,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": "Q4_0",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21279,
+          "model_id": "qwen2.5",
+          "tag": "qwen2.5:32b-instruct-q4_K_S",
+          "params_b": 32,
+          "quant": "Q4_K_S",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\"]",
+          "type": "official",
+          "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 78,
+          "components": {
+            "quality": 96,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5",
+            "params": 32,
+            "quant": "Q4_K_S",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21866,
+          "model_id": "qwen2.5-coder",
+          "tag": "qwen2.5-coder:32b-base-q4_0",
+          "params_b": 32,
+          "quant": "Q4_0",
+          "size_gb": 16,
+          "context_length": 131072,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:08",
+          "model_name": "qwen2.5",
+          "family": "qwen2.5",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 78,
+          "components": {
+            "quality": 96,
+            "speed": 67,
+            "fit": 43,
+            "context": 100
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen2.5-coder",
+            "params": 32,
+            "quant": "Q4_0",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      }
+    ],
+    "acceptable": [
+      {
+        "variant": {
+          "id": 21311,
+          "model_id": "qwen3",
+          "tag": "qwen3:32b",
+          "params_b": 32,
+          "quant": "Q4_0",
+          "size_gb": 16,
+          "context_length": 4096,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen3",
+          "family": "qwen",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 65,
+          "components": {
+            "quality": 70,
+            "speed": 67,
+            "fit": 43,
+            "context": 68
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen3",
+            "params": 32,
+            "quant": "Q4_0",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      {
+        "variant": {
+          "id": 21348,
+          "model_id": "qwen3",
+          "tag": "qwen3:32b-q4_K_M",
+          "params_b": 32,
+          "quant": "Q4_K_M",
+          "size_gb": 16,
+          "context_length": 4096,
+          "input_types": "[\"text\"]",
+          "is_moe": 0,
+          "expert_count": null,
+          "created_at": "2026-02-18 12:33:06",
+          "model_name": "qwen3",
+          "family": "qwen",
+          "pulls": 0,
+          "capabilities": "[\"coding\",\"reasoning\"]",
+          "type": "official",
+          "description": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models.",
+          "policyResult": {
+            "pass": true,
+            "mode": "audit",
+            "violationCount": 0,
+            "violations": [],
+            "rationale": [
+              "Policy evaluation passed with zero violations."
+            ]
+          }
+        },
+        "score": {
+          "final": 65,
+          "components": {
+            "quality": 72,
+            "speed": 67,
+            "fit": 43,
+            "context": 68
+          },
+          "weights": {
+            "Q": 0.4,
+            "S": 0.35,
+            "F": 0.15,
+            "C": 0.1
+          },
+          "meta": {
+            "useCase": "general",
+            "family": "qwen3",
+            "params": 32,
+            "quant": "Q4_K_M",
+            "estimatedTPS": 11,
+            "estimatedSize": 16,
+            "runtime": "ollama",
+            "moe": {
+              "isMoE": false,
+              "assumptionSource": "dense_params",
+              "activeParamsB": null,
+              "totalParamsB": null,
+              "speedMultiplier": 1,
+              "overheadMultiplier": 1
+            }
+          }
+        },
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      }
+    ],
+    "marginal": [],
+    "notRecommended": []
+  },
+  "all": [
+    {
+      "variant": {
+        "id": 21272,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    },
+    {
+      "variant": {
+        "id": 21278,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct-q4_1",
+        "params_b": 32,
+        "quant": null,
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": null,
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    },
+    {
+      "variant": {
+        "id": 21280,
+        "model_id": "qwen2.5",
+        "tag": "qwen2.5:32b-instruct-q4_K_M",
+        "params_b": 32,
+        "quant": "Q4_K_M",
+        "size_gb": 16,
+        "context_length": 131072,
+        "input_types": "[\"text\"]",
+        "is_moe": 0,
+        "expert_count": null,
+        "created_at": "2026-02-18 12:33:06",
+        "model_name": "qwen2.5",
+        "family": "qwen2.5",
+        "pulls": 0,
+        "capabilities": "[\"coding\"]",
+        "type": "official",
+        "description": "Qwen2.5 models are pretrained on Alibaba&#39;s latest large-scale dataset, encompassing up to 18 trillion tokens. The model supports up to 128K tokens and has multilingual support. ",
+        "policyResult": {
+          "pass": true,
+          "mode": "audit",
+          "violationCount": 0,
+          "violations": [],
+          "rationale": [
+            "Policy evaluation passed with zero violations."
+          ]
+        }
+      },
+      "score": {
+        "final": 79,
+        "components": {
+          "quality": 97,
+          "speed": 67,
+          "fit": 43,
+          "context": 100
+        },
+        "weights": {
+          "Q": 0.4,
+          "S": 0.35,
+          "F": 0.15,
+          "C": 0.1
+        },
+        "meta": {
+          "useCase": "general",
+          "family": "qwen2.5",
+          "params": 32,
+          "quant": "Q4_K_M",
+          "estimatedTPS": 11,
+          "estimatedSize": 16,
+          "runtime": "ollama",
+          "moe": {
+            "isMoE": false,
+            "assumptionSource": "dense_params",
+            "activeParamsB": null,
+            "totalParamsB": null,
+            "speedMultiplier": 1,
+            "overheadMultiplier": 1
+          }
+        }
+      },
+      "policyResult": {
+        "pass": true,
+        "mode": "audit",
+        "violationCount": 0,
+        "violations": [],
+        "rationale": [
+          "Policy evaluation passed with zero violations."
+        ]
+      }
+    }
+  ],
+  "hardware": {
+    "description": "Apple M4 Pro (24GB Unified Memory)",
+    "tier": "medium_high",
+    "maxSize": 15,
+    "backend": "metal"
+  },
+  "policy": {
+    "mode": "audit",
+    "active": false
+  },
+  "insights": [
+    {
+      "type": "info",
+      "message": "Apple Silicon detected. Unified memory allows running larger models efficiently."
+    },
+    {
+      "type": "success",
+      "message": "Good match found. qwen2.5:32b-instruct should perform well."
+    },
+    {
+      "type": "warning",
+      "message": "Top recommendation uses most available memory. Close other applications before running."
+    }
+  ],
+  "meta": {
+    "totalCandidates": 15,
+    "afterFiltering": 15,
+    "useCase": "general"
+  }
+}

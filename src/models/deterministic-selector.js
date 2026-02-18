@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
+const fetch = require('../utils/fetch');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
 const {
     parseBillionsValue: parseMoEBillionsValue,

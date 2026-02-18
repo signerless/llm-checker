@@ -1,0 +1,94 @@
+- Analyzing installed models...
+✔ Found 9 installed models
+[
+  {
+    "name": "codellama:latest",
+    "displayName": "codellama latest",
+    "size": "7B",
+    "fileSizeGB": 3.6,
+    "quantization": "Q4_0",
+    "useCase": "coding",
+    "score": 79,
+    "command": "ollama run codellama:latest"
+  },
+  {
+    "name": "llava:7b",
+    "displayName": "llava 7b",
+    "size": "7B",
+    "fileSizeGB": 4.4,
+    "quantization": "Q4_0",
+    "useCase": "multimodal",
+    "score": 79,
+    "command": "ollama run llava:7b"
+  },
+  {
+    "name": "codellama:7b",
+    "displayName": "codellama 7b",
+    "size": "7B",
+    "fileSizeGB": 3.6,
+    "quantization": "Q4_0",
+    "useCase": "coding",
+    "score": 79,
+    "command": "ollama run codellama:7b"
+  },
+  {
+    "name": "llama3.2:3b",
+    "displayName": "llama3.2 3b",
+    "size": "3.2B",
+    "fileSizeGB": 1.9,
+    "quantization": "Q4_K_M",
+    "useCase": "general",
+    "score": 79,
+    "command": "ollama run llama3.2:3b"
+  },
+  {
+    "name": "llama3.2:1b",
+    "displayName": "llama3.2 1b",
+    "size": "1.2B",
+    "fileSizeGB": 1.2,
+    "quantization": "Q8_0",
+    "useCase": "general",
+    "score": 79,
+    "command": "ollama run llama3.2:1b"
+  },
+  {
+    "name": "qwen2.5-coder:7b",
+    "displayName": "qwen2.5-coder 7b",
+    "size": "7.6B",
+    "fileSizeGB": 4.4,
+    "quantization": "Q4_K_M",
+    "useCase": "coding",
+    "score": 78,
+    "command": "ollama run qwen2.5-coder:7b"
+  },
+  {
+    "name": "qwen2.5-coder:1.5b",
+    "displayName": "qwen2.5-coder 1.5b",
+    "size": "1.5B",
+    "fileSizeGB": 0.9,
+    "quantization": "Q4_K_M",
+    "useCase": "coding",
+    "score": 78,
+    "command": "ollama run qwen2.5-coder:1.5b"
+  },
+  {
+    "name": "deepseek-v3.1:671b-cloud",
+    "displayName": "deepseek-v3.1 671b-cloud",
+    "size": "671.0B",
+    "fileSizeGB": 0,
+    "quantization": "FP8_E4M3",
+    "useCase": "general",
+    "score": 75,
+    "command": "ollama run deepseek-v3.1:671b-cloud"
+  },
+  {
+    "name": "gpt-oss:20b",
+    "displayName": "gpt-oss 20b",
+    "size": "20.9B",
+    "fileSizeGB": 12.8,
+    "quantization": "MXFP4",
+    "useCase": "general",
+    "score": 70,
+    "command": "ollama run gpt-oss:20b"
+  }
+]

@@ -1,7 +1,11 @@
 const assert = require('assert');
+const { Command } = require('commander');
 const {
     __private: {
         tokenizeArgString,
+        getRequiredOptionPrompts,
+        buildRequiredOptionArgs,
+        normalizeVariadicValue,
         buildCommandCatalog,
         buildPrimaryCommands,
         getVisibleCommands,
@@ -30,6 +34,43 @@ function run() {
 
     assert.strictEqual(truncateText('short', 10), 'short');
     assert.strictEqual(truncateText('abcdefghij', 6), 'abc...');
+    assert.deepStrictEqual(
+        normalizeVariadicValue('qwen2.5-coder:7b llama3.2:3b,mistral:7b'),
+        ['qwen2.5-coder:7b', 'llama3.2:3b', 'mistral:7b']
+    );
+
+    const calibrateCommand = new Command('calibrate');
+    calibrateCommand.requiredOption('--suite <file>', 'Prompt suite path');
+    calibrateCommand.requiredOption('--models <identifiers...>', 'Models');
+    calibrateCommand.requiredOption('--output <file>', 'Output path');
+    calibrateCommand.option('--runtime <runtime>', 'Runtime backend', 'ollama');
+    calibrateCommand.option('--dry-run', 'Dry run mode');
+
+    const requiredOptionPrompts = getRequiredOptionPrompts({ command: calibrateCommand });
+    assert.deepStrictEqual(
+        requiredOptionPrompts.map((entry) => entry.optionFlags),
+        ['--suite <file>', '--models <identifiers...>', '--output <file>'],
+        'only mandatory options should be discovered for interactive prompts'
+    );
+
+    const requiredOptionArgs = buildRequiredOptionArgs(requiredOptionPrompts, {
+        required_suite: './suite.jsonl',
+        required_models: 'qwen2.5-coder:7b, llama3.2:3b',
+        required_output: './calibration.json'
+    });
+    assert.deepStrictEqual(
+        requiredOptionArgs,
+        [
+            '--suite',
+            './suite.jsonl',
+            '--models',
+            'qwen2.5-coder:7b',
+            'llama3.2:3b',
+            '--output',
+            './calibration.json'
+        ],
+        'required prompt answers should translate to runnable CLI args'
+    );
 
     const mockProgram = {
         commands: [

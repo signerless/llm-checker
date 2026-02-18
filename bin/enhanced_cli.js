@@ -57,6 +57,7 @@ const COMMAND_HEADER_LABELS = {
     'smart-recommend': 'Smart Recommend',
     search: 'Model Search',
     sync: 'Database Sync',
+    'mcp-setup': 'Claude MCP Setup',
     check: 'Compatibility Check',
     installed: 'Installed Models',
     'ai-check': 'AI Check',
@@ -612,6 +613,60 @@ async function checkOllamaAndExit() {
     }
 }
 
+function quoteCliArg(value) {
+    const stringValue = String(value ?? '');
+    if (!stringValue) return '""';
+    if (/^[A-Za-z0-9._:/=-]+$/.test(stringValue)) return stringValue;
+    return `"${stringValue.replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+function getClaudeDesktopConfigPath() {
+    const homeDir = os.homedir();
+    if (process.platform === 'darwin') {
+        return path.join(homeDir, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+    }
+    if (process.platform === 'win32') {
+        const appData = process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming');
+        return path.join(appData, 'Claude', 'claude_desktop_config.json');
+    }
+    return path.join(homeDir, '.config', 'Claude', 'claude_desktop_config.json');
+}
+
+function buildClaudeMcpSetup(useNpx = false, serverName = 'llm-checker') {
+    const normalizedServerName = String(serverName || 'llm-checker').trim() || 'llm-checker';
+    const runner = useNpx ? ['npx', 'llm-checker-mcp'] : ['llm-checker-mcp'];
+    const claudeArgs = ['mcp', 'add', normalizedServerName, '--', ...runner];
+    const commandLine = ['claude', ...claudeArgs].map(quoteCliArg).join(' ');
+    const desktopServerConfig = useNpx
+        ? { command: 'npx', args: ['llm-checker-mcp'] }
+        : { command: 'llm-checker-mcp', args: [] };
+
+    return {
+        serverName: normalizedServerName,
+        useNpx: Boolean(useNpx),
+        claudeArgs,
+        commandLine,
+        desktopConfigPath: getClaudeDesktopConfigPath(),
+        desktopConfig: {
+            mcpServers: {
+                [normalizedServerName]: desktopServerConfig
+            }
+        }
+    };
+}
+
+async function runExternalCommand(command, args) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, {
+            stdio: 'inherit',
+            env: process.env
+        });
+
+        child.on('error', reject);
+        child.on('close', (code) => resolve(code));
+    });
+}
+
 function parsePositiveIntegerOption(rawValue, optionName) {
     const parsed = Number(rawValue);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -629,13 +684,32 @@ function parseNonNegativeNumberOption(rawValue, optionName) {
 }
 
 function selectModelsForPlan(installedModels, requestedModels = []) {
+    const runnableModels = (installedModels || []).filter((model) => {
+        const name = String(model?.name || '').toLowerCase();
+        const source = String(model?.source || '').toLowerCase();
+        const type = String(model?.type || model?.model_type || '').toLowerCase();
+        const fileSizeGB = Number(model?.fileSizeGB) || 0;
+
+        const cloudTagged = (
+            name.includes('-cloud') ||
+            name.endsWith(':cloud') ||
+            source.includes('cloud') ||
+            type === 'cloud' ||
+            type === 'remote' ||
+            type === 'hosted'
+        );
+
+        // Keep only models that are actually present locally for memory planning.
+        return !(cloudTagged && fileSizeGB <= 0);
+    });
+
     const requested = Array.isArray(requestedModels)
         ? requestedModels.map((model) => String(model || '').trim()).filter(Boolean)
         : [];
 
     if (!requested.length) {
         return {
-            selected: installedModels.slice(),
+            selected: runnableModels.slice(),
             missing: []
         };
     }
@@ -647,24 +721,24 @@ function selectModelsForPlan(installedModels, requestedModels = []) {
     for (const request of requested) {
         const normalized = request.toLowerCase();
 
-        let match = installedModels.find(
+        let match = runnableModels.find(
             (model) => String(model.name || '').toLowerCase() === normalized
         );
 
         if (!match) {
-            match = installedModels.find((model) =>
+            match = runnableModels.find((model) =>
                 String(model.name || '').toLowerCase().startsWith(`${normalized}:`)
             );
         }
 
         if (!match) {
-            match = installedModels.find(
+            match = runnableModels.find(
                 (model) => String(model.family || '').toLowerCase() === normalized
             );
         }
 
         if (!match) {
-            match = installedModels.find((model) =>
+            match = runnableModels.find((model) =>
                 String(model.name || '').toLowerCase().includes(normalized)
             );
         }
@@ -2438,6 +2512,78 @@ function displayPolicySummary(commandName, policyConfig, evaluation, enforcement
 
     console.log(chalk.magenta('╰' + '─'.repeat(65)));
 }
+
+program
+    .command('mcp-setup')
+    .description('Show or apply Claude MCP setup for llm-checker')
+    .option('--name <server-name>', 'MCP server name in Claude', 'llm-checker')
+    .option('--npx', 'Use npx llm-checker-mcp instead of global llm-checker-mcp')
+    .option('--apply', 'Run `claude mcp add ...` automatically')
+    .option('-j, --json', 'Output setup details as JSON')
+    .action(async (options) => {
+        const primarySetup = buildClaudeMcpSetup(Boolean(options.npx), options.name);
+        const alternateSetup = buildClaudeMcpSetup(!Boolean(options.npx), options.name);
+
+        if (options.json) {
+            console.log(JSON.stringify({
+                recommended: {
+                    command: 'claude',
+                    args: primarySetup.claudeArgs,
+                    commandLine: primarySetup.commandLine
+                },
+                alternatives: [
+                    {
+                        command: 'claude',
+                        args: alternateSetup.claudeArgs,
+                        commandLine: alternateSetup.commandLine
+                    }
+                ],
+                claudeDesktop: {
+                    configPath: primarySetup.desktopConfigPath,
+                    snippet: primarySetup.desktopConfig
+                }
+            }, null, 2));
+            return;
+        }
+
+        showAsciiArt('mcp-setup');
+
+        console.log(chalk.blue.bold('\nClaude Code MCP Setup'));
+        console.log(chalk.white('\nRecommended command:'));
+        console.log(chalk.cyan(`  ${primarySetup.commandLine}`));
+
+        console.log(chalk.white('\nAlternative command:'));
+        console.log(chalk.gray(`  ${alternateSetup.commandLine}`));
+
+        console.log(chalk.white('\nClaude Desktop config path (manual):'));
+        console.log(chalk.gray(`  ${primarySetup.desktopConfigPath}`));
+        console.log(chalk.white('\nConfig snippet:'));
+        console.log(chalk.gray(JSON.stringify(primarySetup.desktopConfig, null, 2)));
+
+        if (!options.apply) {
+            console.log(chalk.green('\nTip: run with --apply to execute the command automatically.'));
+            return;
+        }
+
+        console.log(chalk.blue('\nApplying MCP setup via Claude CLI...\n'));
+        try {
+            const exitCode = await runExternalCommand('claude', primarySetup.claudeArgs);
+            if (exitCode === 0) {
+                console.log(chalk.green('\nClaude MCP setup applied successfully.'));
+            } else {
+                console.error(chalk.red(`\nClaude command exited with code ${exitCode}.`));
+                process.exit(exitCode || 1);
+            }
+        } catch (error) {
+            if (error && error.code === 'ENOENT') {
+                console.error(chalk.red('Could not find `claude` in PATH.'));
+                console.log(chalk.yellow('Run the printed command manually once Claude CLI is installed.'));
+            } else {
+                console.error(chalk.red(`Failed to apply MCP setup: ${error.message}`));
+            }
+            process.exit(1);
+        }
+    });
 
 const policyCommand = program
     .command('policy')

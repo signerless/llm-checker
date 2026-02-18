@@ -1,0 +1,17 @@
+
+ POLICY SUMMARY (AUDIT CHECK) 
+╭─────────────────────────────────────────────────────────────────
+│ File: ~/llm-checker/.tmp-feature-check/policy.yaml
+│ Mode: audit | Action: warn
+│ Total checked: 19
+│ Pass: 0 | Fail: 19
+│ Suppressed: 0 | Exceptions: 0
+│ Top violations:
+│   - BACKEND_NOT_ALLOWED: 19
+│   - INSUFFICIENT_RAM: 19
+│   - LICENSE_MISSING: 19
+│ Audit mode: violations reported, command exits with code 0
+╰─────────────────────────────────────────────────────────────────
+
+ AUDIT EXPORT 
+JSON: ~/llm-checker/.tmp-feature-check/audit-auditmode.json

@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-02-18T12:52:57.994Z",
+  "selection": {
+    "requested": [],
+    "selected": [
+      "codellama:latest",
+      "qwen2.5-coder:7b",
+      "llava:7b",
+      "codellama:7b",
+      "gpt-oss:20b",
+      "llama3.2:3b",
+      "llama3.2:1b",
+      "qwen2.5-coder:1.5b"
+    ],
+    "missing": []
+  },
+  "plan": {
+    "objective": "balanced",
+    "inputs": {
+      "targetContext": 8192,
+      "targetConcurrency": 2
+    },
+    "hardware": {
+      "backend": "metal",
+      "backendName": "Apple Metal",
+      "rawCapacityGB": 17,
+      "reserveGB": 2,
+      "memoryBudgetGB": 15
+    },
+    "models": [
+      {
+        "name": "gpt-oss:20b",
+        "size": "20.9B",
+        "fileSizeGB": 12.8,
+        "paramsB": 20.9,
+        "estimatedBaseMemoryGB": 13.5
+      }
+    ],
+    "envelope": {
+      "context": {
+        "requested": 8192,
+        "recommended": 3674,
+        "min_safe": 2048,
+        "max_for_parallel_1": 3674,
+        "max_for_recommended_parallel": 3674
+      },
+      "parallel": {
+        "requested": 2,
+        "recommended": 1,
+        "max_at_requested_ctx": 0
+      },
+      "loaded_models": {
+        "requested": 2,
+        "recommended": 1,
+        "max_at_recommended_settings": 1
+      }
+    },
+    "recommendation": {
+      "num_ctx": 3674,
+      "num_parallel": 1,
+      "max_loaded_models": 1,
+      "max_queue": 4,
+      "keep_alive": "15m",
+      "flash_attention": "1"
+    },
+    "memory": {
+      "budgetGB": 15,
+      "requestedEstimatedGB": 20.19,
+      "recommendedEstimatedGB": 15,
+      "utilizationPercent": 100
+    },
+    "risk": {
+      "level": "critical",
+      "score": 100
+    },
+    "fallback": {
+      "num_ctx": 3674,
+      "num_parallel": 1,
+      "max_loaded_models": 1,
+      "estimated_memory_gb": 15
+    },
+    "shell": {
+      "env": {
+        "OLLAMA_NUM_CTX": "3674",
+        "OLLAMA_NUM_PARALLEL": "1",
+        "OLLAMA_MAX_LOADED_MODELS": "1",
+        "OLLAMA_MAX_QUEUE": "4",
+        "OLLAMA_KEEP_ALIVE": "15m",
+        "OLLAMA_FLASH_ATTENTION": "1"
+      }
+    },
+    "notes": [
+      "Requested settings exceed available memory budget; reduced settings are recommended.",
+      "Context reduced from 8192 to 3674 to avoid memory pressure.",
+      "Parallelism reduced from 2 to 1 to keep memory stable.",
+      "Loaded models capped at 1 for this objective and memory budget."
+    ]
+  }
+}

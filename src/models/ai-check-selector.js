@@ -10,7 +10,7 @@ const { OllamaNativeScraper } = require('../ollama/native-scraper');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const fetch = require('node-fetch');
+const fetch = require('../utils/fetch');
 
 class AICheckSelector {
     constructor() {

@@ -1,0 +1,68 @@
+
+llm-checker | Recommendations
+---------------------------------------
+Generating recommendations... done
+
+ SYSTEM INFORMATION 
+╭──────────────────────────────────────────────────
+│ CPU: M4 Pro (12 cores, 2.4GHz)
+│ Architecture: Apple Silicon
+│ RAM: 24GB
+│ GPU: Apple M4 Pro
+│ VRAM: 24GB (Integrated)
+│ Hardware Tier: HIGH
+╰
+
+ INTELLIGENT RECOMMENDATIONS BY CATEGORY 
+╭─────────────────────────────────────────────────────────────────
+│ Hardware Tier: HIGH | Models Analyzed: 213
+│ Optimization: BALANCED
+│
+│ BEST OVERALL: yi:latest
+│    Command: ollama pull yi:latest
+│    Score: 88/100 | Category: general
+│    Quantization: Q4_K_M
+│
+│ Coding (Coding):
+│    deepseek-coder:6.7b (6.7B)
+│    Score: 87/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull deepseek-coder:6.7b
+│
+│ Reasoning (Reasoning):
+│    deepseek-coder-v2:latest (16B)
+│    Score: 91/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull deepseek-coder-v2:latest
+│
+│ Multimodal (Multimodal):
+│    qwen2.5vl:7b (7B)
+│    Score: 87/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull qwen2.5vl:7b
+│
+│ Creative (Creative):
+│    yi:latest (6B)
+│    Score: 87/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull yi:latest
+│
+│ Talking (Chat):
+│    yi:latest (6B)
+│    Score: 87/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull yi:latest
+│
+│ Reading (Reading):
+│    qwen3:1.7b (1.7B)
+│    Score: 84/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull qwen3:1.7b
+│
+│ General (General):
+│    yi:latest (6B)
+│    Score: 88/100 | Pulls: 0
+│    Quantization: Q4_K_M
+│    Command: ollama pull yi:latest
+│
+╰
