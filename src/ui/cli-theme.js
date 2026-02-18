@@ -1,6 +1,9 @@
 'use strict';
 
 const chalk = require('chalk');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 // Adapted from ~/Downloads/ascii-motion-cli.tsx frame model.
 const THEME_DARK = {
@@ -45,6 +48,8 @@ const MASCOT_MASK = [
 
 const DEFAULT_LOOP = true;
 const FRAMES_PER_SECOND = 14;
+const DEFAULT_BANNER_SOURCE = path.join(os.homedir(), 'Downloads', 'ascii-motion-cli.tsx');
+let cachedExternalBanner = null;
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,8 +62,177 @@ function clearTerminal() {
 function fitLine(line, width) {
     const value = String(line || '');
     if (value.length <= width) return value;
+    if (value.trim().length === 0) return ' '.repeat(width);
     if (width <= 3) return value.slice(0, width);
     return `${value.slice(0, width - 3)}...`;
+}
+
+function extractBalanced(source, startIndex, openChar, closeChar) {
+    if (startIndex < 0 || source[startIndex] !== openChar) return null;
+
+    let depth = 0;
+    let inString = null;
+    let escape = false;
+
+    for (let index = startIndex; index < source.length; index += 1) {
+        const char = source[index];
+
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                escape = true;
+                continue;
+            }
+
+            if (char === inString) {
+                inString = null;
+            }
+
+            continue;
+        }
+
+        if (char === '"' || char === '\'' || char === '`') {
+            inString = char;
+            continue;
+        }
+
+        if (char === openChar) {
+            depth += 1;
+        } else if (char === closeChar) {
+            depth -= 1;
+            if (depth === 0) {
+                return source.slice(startIndex, index + 1);
+            }
+        }
+    }
+
+    return null;
+}
+
+function extractAssignedLiteral(source, constName, openChar, closeChar) {
+    const marker = `const ${constName}`;
+    const markerIndex = source.indexOf(marker);
+    if (markerIndex < 0) return null;
+
+    const equalsIndex = source.indexOf('=', markerIndex);
+    if (equalsIndex < 0) return null;
+
+    const startIndex = source.indexOf(openChar, equalsIndex);
+    if (startIndex < 0) return null;
+
+    return extractBalanced(source, startIndex, openChar, closeChar);
+}
+
+function evaluateLiteral(literal) {
+    if (!literal) return null;
+    try {
+        return Function(`"use strict"; return (${literal});`)();
+    } catch {
+        return null;
+    }
+}
+
+function parseNumericConstant(source, constName) {
+    const match = source.match(new RegExp(`const\\s+${constName}\\s*=\\s*(\\d+(?:\\.\\d+)?)`));
+    if (!match) return null;
+    const parsed = Number.parseFloat(match[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getLongestFrameLine(frames) {
+    let longest = 0;
+    for (const frame of frames) {
+        const rows = Array.isArray(frame.content) ? frame.content : [];
+        for (const row of rows) {
+            longest = Math.max(longest, String(row || '').length);
+        }
+    }
+    return longest;
+}
+
+function normalizeExternalFrame(frame, contentWidth, defaultDuration) {
+    const sourceRows = Array.isArray(frame.content) ? frame.content : [];
+    const content = sourceRows.map((line) => fitLine(line, contentWidth).padEnd(contentWidth, ' '));
+    const duration = Number.isFinite(frame.duration) ? frame.duration : defaultDuration;
+
+    return {
+        duration,
+        content,
+        fgColors: frame.fgColors && typeof frame.fgColors === 'object' ? frame.fgColors : {},
+        bgColors: frame.bgColors && typeof frame.bgColors === 'object' ? frame.bgColors : {}
+    };
+}
+
+function loadExternalBanner(sourceFile) {
+    const filePath = sourceFile || process.env.LLM_CHECKER_BANNER_SOURCE || DEFAULT_BANNER_SOURCE;
+    let mtimeMs = -1;
+
+    try {
+        const stat = fs.statSync(filePath);
+        mtimeMs = stat.mtimeMs;
+    } catch {
+        cachedExternalBanner = {
+            filePath,
+            mtimeMs: -1,
+            payload: null
+        };
+        return null;
+    }
+
+    if (
+        cachedExternalBanner &&
+        cachedExternalBanner.filePath === filePath &&
+        cachedExternalBanner.mtimeMs === mtimeMs
+    ) {
+        return cachedExternalBanner.payload;
+    }
+
+    try {
+        const source = fs.readFileSync(filePath, 'utf8');
+        const framesLiteral = extractAssignedLiteral(source, 'FRAMES', '[', ']');
+        const darkThemeLiteral = extractAssignedLiteral(source, 'THEME_DARK', '{', '}');
+        const lightThemeLiteral = extractAssignedLiteral(source, 'THEME_LIGHT', '{', '}');
+
+        const frames = evaluateLiteral(framesLiteral);
+        const themeDark = evaluateLiteral(darkThemeLiteral);
+        const themeLight = evaluateLiteral(lightThemeLiteral);
+        const canvasWidth = parseNumericConstant(source, 'CANVAS_WIDTH');
+
+        if (!Array.isArray(frames) || frames.length === 0) {
+            cachedExternalBanner = {
+                filePath,
+                mtimeMs,
+                payload: null
+            };
+            return null;
+        }
+
+        const payload = {
+            frames,
+            themeDark: themeDark && typeof themeDark === 'object' ? themeDark : {},
+            themeLight: themeLight && typeof themeLight === 'object' ? themeLight : {},
+            canvasWidth: Number.isFinite(canvasWidth) ? canvasWidth : null
+        };
+
+        cachedExternalBanner = {
+            filePath,
+            mtimeMs,
+            payload
+        };
+
+        return payload;
+    } catch {
+        cachedExternalBanner = {
+            filePath,
+            mtimeMs,
+            payload: null
+        };
+        return null;
+    }
 }
 
 function buildScanline(width, row, phase) {
@@ -153,16 +327,17 @@ function createFrameData(progress, phase, contentWidth, frameDuration) {
     };
 }
 
-function resolveTheme(hasDarkBackground) {
-    return hasDarkBackground ? THEME_DARK : THEME_LIGHT;
+function resolveTheme(hasDarkBackground, externalTheme = null) {
+    const base = hasDarkBackground ? THEME_DARK : THEME_LIGHT;
+    if (!externalTheme || typeof externalTheme !== 'object') return base;
+    return { ...base, ...externalTheme };
 }
 
-function resolveTerminalWidth(preferredWidth) {
+function resolveTerminalWidth(preferredWidth, maxContentWidth) {
     const terminalWidth = process.stdout.columns || preferredWidth;
     const maxWidth = Math.max(24, terminalWidth - 2);
-
-    const sourceRows = buildRows(0);
-    const longestLine = sourceRows.reduce((max, row) => Math.max(max, row.text.length), 0);
+    const fallbackLongest = buildRows(0).reduce((max, row) => Math.max(max, row.text.length), 0);
+    const longestLine = Math.max(0, maxContentWidth || fallbackLongest);
     const minWidth = longestLine + 4;
 
     return Math.min(Math.max(preferredWidth, minWidth), maxWidth);
@@ -173,8 +348,45 @@ function makeFrames(options = {}) {
         frameCount = 16,
         width = 74,
         hasDarkBackground = true,
-        frameDurationMs = Math.round(1000 / FRAMES_PER_SECOND)
+        frameDurationMs = Math.round(1000 / FRAMES_PER_SECOND),
+        sourceFile
     } = options;
+
+    const externalBanner = loadExternalBanner(sourceFile);
+    if (externalBanner) {
+        const longestExternalLine = Math.max(
+            getLongestFrameLine(externalBanner.frames),
+            externalBanner.canvasWidth || 0
+        );
+        const resolvedWidth = resolveTerminalWidth(width, longestExternalLine);
+        const contentWidth = resolvedWidth - 4;
+        const externalTheme = hasDarkBackground
+            ? externalBanner.themeDark
+            : externalBanner.themeLight;
+        const theme = resolveTheme(hasDarkBackground, externalTheme);
+
+        const sourceFrames = externalBanner.frames.length > 0
+            ? externalBanner.frames
+            : [{ content: [''], fgColors: {}, bgColors: {}, duration: frameDurationMs }];
+
+        const externalFrames = sourceFrames.map((frame) =>
+            normalizeExternalFrame(frame, contentWidth, frameDurationMs)
+        );
+
+        if (frameCount <= 1) {
+            return {
+                width: resolvedWidth,
+                theme,
+                frames: [externalFrames[externalFrames.length - 1]]
+            };
+        }
+
+        return {
+            width: resolvedWidth,
+            theme,
+            frames: externalFrames
+        };
+    }
 
     const resolvedWidth = resolveTerminalWidth(width);
     const contentWidth = resolvedWidth - 4;
@@ -211,11 +423,12 @@ function applyBg(text, color) {
 function drawFrame(frame, width, theme) {
     const top = `+${'-'.repeat(width - 2)}+`;
     const bottom = `+${'-'.repeat(width - 2)}+`;
+    const contentWidth = width - 4;
 
     console.log(applyFg(top, theme.border));
 
     for (let y = 0; y < frame.content.length; y += 1) {
-        const row = frame.content[y];
+        const row = fitLine(frame.content[y] || '', contentWidth).padEnd(contentWidth, ' ');
         let renderedRow = '';
 
         for (let x = 0; x < row.length; x += 1) {
@@ -224,8 +437,12 @@ function drawFrame(frame, width, theme) {
             const fgColorKey = frame.fgColors[key];
             const bgColorKey = frame.bgColors[key];
 
-            const fgColor = fgColorKey ? theme[fgColorKey] : theme.logo;
-            const bgColor = bgColorKey ? theme[bgColorKey] : undefined;
+            const fgColor = fgColorKey
+                ? (theme[fgColorKey] || fgColorKey)
+                : (theme.logo || 'white');
+            const bgColor = bgColorKey
+                ? (theme[bgColorKey] || bgColorKey)
+                : undefined;
 
             let styled = applyFg(char, fgColor);
             if (bgColor) styled = applyBg(styled, bgColor);
