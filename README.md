@@ -1,16 +1,12 @@
 <p align="center">
-  <img src="assets/llm-checker-logo.gif" alt="LLM Checker Animated Logo" width="760">
+  <img src="https://raw.githubusercontent.com/Pavelevich/llm-checker/main/assets/llm-checker-logo.gif" alt="LLM Checker Animated Logo" width="760">
 </p>
 
+<h1 align="center">LLM Checker</h1>
+<p align="center"><strong>Intelligent Ollama Model Selector</strong></p>
 <p align="center">
-  <h1 align="center">LLM Checker</h1>
-  <p align="center">
-    <strong>Intelligent Ollama Model Selector</strong>
-  </p>
-  <p align="center">
-    AI-powered CLI that analyzes your hardware and recommends optimal LLM models<br/>
-    Deterministic scoring across <b>200+ dynamic models</b> (35+ curated fallback) with hardware-calibrated memory estimation
-  </p>
+  AI-powered CLI that analyzes your hardware and recommends optimal LLM models<br/>
+  Deterministic scoring across <b>200+ dynamic models</b> (35+ curated fallback) with hardware-calibrated memory estimation
 </p>
 
 <p align="center">
