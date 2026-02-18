@@ -47,7 +47,7 @@ const {
     buildComplianceReport,
     serializeComplianceReport
 } = require('../src/policy/audit-reporter');
-const { renderCommandHeader } = require('../src/ui/cli-theme');
+const { renderCommandHeader, renderPersistentBanner } = require('../src/ui/cli-theme');
 const { launchInteractivePanel } = require('../src/ui/interactive-panel');
 const policyManager = new PolicyManager();
 const calibrationManager = new CalibrationManager();
@@ -4105,6 +4105,8 @@ async function bootstrapCli() {
     }
 
     if (userArgs.length === 0) {
+        renderPersistentBanner();
+        console.log('');
         program.outputHelp();
         return;
     }

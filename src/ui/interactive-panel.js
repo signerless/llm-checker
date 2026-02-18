@@ -131,13 +131,47 @@ function getVisibleCommands(state, catalog, primaryCommands) {
     });
 }
 
-function renderPanel(state, catalog, primaryCommands) {
+function getCommandWindow(commands, selectedIndex, maxRows) {
+    const total = commands.length;
+    if (total <= maxRows) {
+        return {
+            start: 0,
+            end: total,
+            items: commands
+        };
+    }
+
+    const half = Math.floor(maxRows / 2);
+    let start = Math.max(0, selectedIndex - half);
+    if (start + maxRows > total) {
+        start = total - maxRows;
+    }
+
+    const end = Math.min(total, start + maxRows);
+    return {
+        start,
+        end,
+        items: commands.slice(start, end)
+    };
+}
+
+function renderPanel(state, catalog, primaryCommands, options = {}) {
+    const colorPhase = Number.isFinite(options.colorPhase) ? options.colorPhase : 0;
     const width = Math.max(76, Math.min(process.stdout.columns || 100, 128));
     const separator = '-'.repeat(width - 2);
     const visibleCommands = getVisibleCommands(state, catalog, primaryCommands);
+    const maxCommandRows = Math.max(6, Math.min(16, (process.stdout.rows || 40) - 28));
+    const selectedIndex =
+        visibleCommands.length > 0
+            ? Math.max(0, Math.min(state.selected, visibleCommands.length - 1))
+            : 0;
+    if (selectedIndex !== state.selected) {
+        state.selected = selectedIndex;
+    }
+    const commandWindow = getCommandWindow(visibleCommands, selectedIndex, maxCommandRows);
 
     clearTerminal();
-    renderPersistentBanner();
+    renderPersistentBanner(undefined, { colorPhase });
     console.log('');
     console.log(chalk.gray(separator));
     const inputLabel = state.paletteOpen ? `/${state.query}` : '';
@@ -155,9 +189,16 @@ function renderPanel(state, catalog, primaryCommands) {
     } else {
         const commandCol = 26;
         const descCol = Math.max(18, width - commandCol - 8);
+        const hiddenAbove = commandWindow.start;
+        const hiddenBelow = visibleCommands.length - commandWindow.end;
 
-        visibleCommands.forEach((item, index) => {
-            const active = index === state.selected;
+        if (hiddenAbove > 0) {
+            console.log(chalk.gray(`... ${hiddenAbove} command(s) above`));
+        }
+
+        commandWindow.items.forEach((item, index) => {
+            const globalIndex = commandWindow.start + index;
+            const active = globalIndex === selectedIndex;
             const commandText = truncateText(`/${item.name}`, commandCol).padEnd(commandCol, ' ');
             const description = truncateText(item.description, descCol);
 
@@ -169,6 +210,10 @@ function renderPanel(state, catalog, primaryCommands) {
                 console.log(`${chalk.gray(commandText)} ${chalk.gray(description)}`);
             }
         });
+
+        if (hiddenBelow > 0) {
+            console.log(chalk.gray(`... ${hiddenBelow} command(s) below`));
+        }
     }
 
     console.log('');
@@ -250,16 +295,43 @@ async function launchInteractivePanel(options) {
         paletteOpen: false,
         query: '',
         selected: 0,
-        busy: false
+        busy: false,
+        colorPhase: 0
+    };
+
+    const renderNow = () => {
+        renderPanel(state, catalog, primaryCommands, { colorPhase: state.colorPhase });
     };
 
     await animateBanner({ text: appName });
-    renderPanel(state, catalog, primaryCommands);
+    renderNow();
 
     readline.emitKeypressEvents(process.stdin);
 
     return new Promise((resolve) => {
+        const shouldPulseBanner =
+            process.stdout.isTTY &&
+            process.env.LLM_CHECKER_DISABLE_ANIMATION !== '1';
+        let pulseTimer = null;
+
+        const stopBannerPulse = () => {
+            if (pulseTimer) {
+                clearInterval(pulseTimer);
+                pulseTimer = null;
+            }
+        };
+
+        const startBannerPulse = () => {
+            if (!shouldPulseBanner || pulseTimer) return;
+            pulseTimer = setInterval(() => {
+                if (state.busy) return;
+                state.colorPhase = (state.colorPhase + 1) % 1024;
+                renderNow();
+            }, 120);
+        };
+
         const stopInteractiveMode = () => {
+            stopBannerPulse();
             process.stdin.off('keypress', onKeypress);
             if (process.stdin.isTTY) process.stdin.setRawMode(false);
             process.stdin.pause();
@@ -269,6 +341,8 @@ async function launchInteractivePanel(options) {
             process.stdin.on('keypress', onKeypress);
             if (process.stdin.isTTY) process.stdin.setRawMode(true);
             process.stdin.resume();
+            startBannerPulse();
+            renderNow();
         };
 
         const exitPanel = () => {
@@ -301,7 +375,6 @@ async function launchInteractivePanel(options) {
             } finally {
                 state.busy = false;
                 startInteractiveMode();
-                renderPanel(state, catalog, primaryCommands);
             }
         };
 
@@ -328,7 +401,7 @@ async function launchInteractivePanel(options) {
                     const direction = key.name === 'up' ? -1 : 1;
                     state.selected =
                         (state.selected + direction + visibleCommands.length) % visibleCommands.length;
-                    renderPanel(state, catalog, primaryCommands);
+                    renderNow();
                 }
                 return;
             }
@@ -345,7 +418,7 @@ async function launchInteractivePanel(options) {
                 state.paletteOpen = true;
                 state.query = '';
                 state.selected = 0;
-                renderPanel(state, catalog, primaryCommands);
+                renderNow();
                 return;
             }
 
@@ -353,7 +426,7 @@ async function launchInteractivePanel(options) {
                 state.paletteOpen = false;
                 state.query = '';
                 state.selected = 0;
-                renderPanel(state, catalog, primaryCommands);
+                renderNow();
                 return;
             }
 
@@ -365,7 +438,7 @@ async function launchInteractivePanel(options) {
                 if (state.query.length > 0) {
                     state.query = state.query.slice(0, -1);
                     state.selected = 0;
-                    renderPanel(state, catalog, primaryCommands);
+                    renderNow();
                 }
                 return;
             }
@@ -373,7 +446,7 @@ async function launchInteractivePanel(options) {
             if (str && !key.ctrl && !key.meta && /^[a-zA-Z0-9._:-]$/.test(str)) {
                 state.query += str;
                 state.selected = 0;
-                renderPanel(state, catalog, primaryCommands);
+                renderNow();
             }
         };
 

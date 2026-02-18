@@ -49,7 +49,14 @@ const MASCOT_MASK = [
 const DEFAULT_LOOP = true;
 const FRAMES_PER_SECOND = 14;
 const DEFAULT_BANNER_SOURCE = path.join(os.homedir(), 'Downloads', 'ascii-motion-cli.tsx');
+const DEFAULT_TEXT_BANNER_SOURCE = path.join(
+    os.homedir(),
+    'Desktop',
+    'llm-checker',
+    'banner-profesional-v2.txt'
+);
 let cachedExternalBanner = null;
+let cachedTextBanner = null;
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -232,6 +239,192 @@ function loadExternalBanner(sourceFile) {
             payload: null
         };
         return null;
+    }
+}
+
+function loadTextBanner(sourceFile) {
+    const filePath =
+        sourceFile ||
+        process.env.LLM_CHECKER_TEXT_BANNER_SOURCE ||
+        DEFAULT_TEXT_BANNER_SOURCE;
+    let mtimeMs = -1;
+
+    try {
+        const stat = fs.statSync(filePath);
+        mtimeMs = stat.mtimeMs;
+    } catch {
+        cachedTextBanner = {
+            filePath,
+            mtimeMs: -1,
+            lines: null
+        };
+        return null;
+    }
+
+    if (
+        cachedTextBanner &&
+        cachedTextBanner.filePath === filePath &&
+        cachedTextBanner.mtimeMs === mtimeMs
+    ) {
+        return cachedTextBanner.lines;
+    }
+
+    try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const lines = String(raw).split(/\r?\n/);
+        cachedTextBanner = {
+            filePath,
+            mtimeMs,
+            lines
+        };
+        return lines;
+    } catch {
+        cachedTextBanner = {
+            filePath,
+            mtimeMs,
+            lines: null
+        };
+        return null;
+    }
+}
+
+function drawTextBanner(lines, options = {}) {
+    const colorPhase = Number.isFinite(options.colorPhase)
+        ? Math.max(0, Math.floor(options.colorPhase))
+        : 0;
+    const terminalWidth = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
+        ? process.stdout.columns
+        : null;
+
+    const centerToWidth = (text, width) => {
+        const value = String(text || '').replace(/\s+$/g, '');
+        if (!Number.isFinite(width) || width <= 0) return value;
+        if (value.length >= width) return value.slice(0, width);
+        const left = Math.floor((width - value.length) / 2);
+        const right = width - value.length - left;
+        return `${' '.repeat(left)}${value}${' '.repeat(right)}`;
+    };
+
+    const fitLogoToWidth = (text, width) => {
+        if (!Number.isFinite(width) || width <= 0) return String(text || '');
+
+        const base = String(text || '').replace(/\s+$/g, '');
+        if (base.length <= width) {
+            return centerToWidth(base, width);
+        }
+
+        // Do not distort glyphs. If still too wide, degrade to readable fallback.
+        return centerToWidth(width >= 24 ? 'LLM-CHECKER' : 'LLM', width);
+    };
+
+    const colorizeDosRebelLine = (text) => {
+        const solidPalette = ['#F8FAFC', '#E2ECFF', '#DBEAFE', '#E2ECFF'];
+        const shadePalette = ['#93C5FD', '#60A5FA', '#38BDF8', '#22D3EE', '#38BDF8', '#60A5FA'];
+        let out = '';
+        for (let index = 0; index < text.length; index += 1) {
+            const ch = text[index];
+            if (ch === '█') {
+                const tone = solidPalette[(index + colorPhase) % solidPalette.length];
+                out += chalk.hex(tone)(ch);
+            } else if (ch === '░' || ch === '▒' || ch === '▓') {
+                const tone = shadePalette[(index + colorPhase) % shadePalette.length];
+                out += chalk.hex(tone)(ch);
+            } else {
+                out += ch;
+            }
+        }
+        return out;
+    };
+
+    for (const line of lines) {
+        if (!line) {
+            console.log('');
+            continue;
+        }
+
+        if (/^\s*\+[-+]+\+\s*$/.test(line)) {
+            if (terminalWidth && terminalWidth >= 10) {
+                const inner = Math.max(6, terminalWidth - 4);
+                console.log(chalk.hex('#0066FF')(` +${'-'.repeat(inner)}+ `));
+            } else {
+                console.log(chalk.hex('#0066FF')(line));
+            }
+            continue;
+        }
+
+        const frameMatch = line.match(/^(\s*\|)(.*)(\|\s*)$/);
+        if (!frameMatch) {
+            console.log(line);
+            continue;
+        }
+
+        const left = chalk.hex('#0066FF')(frameMatch[1]);
+        const right = chalk.hex('#0066FF')(frameMatch[3]);
+        const content = frameMatch[2];
+        const maxInnerWidth = terminalWidth
+            ? Math.max(0, terminalWidth - (frameMatch[1].length + frameMatch[3].length))
+            : null;
+        const isDosRebelLike =
+            content.includes('█') ||
+            content.includes('░') ||
+            content.includes('▒') ||
+            content.includes('▓');
+
+        let fittedContent = content;
+        if (Number.isFinite(maxInnerWidth)) {
+            if (isDosRebelLike) {
+                fittedContent = fitLogoToWidth(content, maxInnerWidth);
+            } else {
+                const trimmed = content.trim();
+                fittedContent = trimmed.length === 0
+                    ? ' '.repeat(maxInnerWidth)
+                    : centerToWidth(trimmed, maxInnerWidth);
+            }
+        }
+
+        let inner = fittedContent;
+
+        if (
+            fittedContent.includes('INTELLIGENT OLLAMA MODEL SELECTOR') ||
+            fittedContent.includes('Deterministic scoring across 35+ curated models') ||
+            fittedContent.includes('Run: llm-checker recommend')
+        ) {
+            inner = chalk.hex('#60A5FA')(fittedContent);
+        } else if (
+            fittedContent.includes('[35+ MODELS]') ||
+            fittedContent.includes('[4D SCORING]') ||
+            fittedContent.includes('[MULTI-GPU]') ||
+            fittedContent.includes('[MCP SERVER]')
+        ) {
+            inner = chalk.hex('#A7F3D0')(fittedContent);
+        } else if (
+            fittedContent.includes('AI-powered CLI for hardware-aware local LLM recommendations')
+        ) {
+            inner = chalk.hex('#C7D2FE')(fittedContent);
+        } else if (
+            fittedContent.includes('github.com/Pavelevich/llm-checker') ||
+            fittedContent.includes('npmjs.com/package/llm-checker')
+        ) {
+            inner = chalk.hex('#3B82F6')(fittedContent);
+        } else if (fittedContent.includes('Install: npm install -g llm-checker')) {
+            inner = chalk.hex('#F8FAFC')(fittedContent);
+        } else if (
+            fittedContent.includes('█') ||
+            fittedContent.includes('░') ||
+            fittedContent.includes('▒') ||
+            fittedContent.includes('▓')
+        ) {
+            inner = colorizeDosRebelLine(fittedContent);
+        } else if (
+            /[_\\\/|]/.test(fittedContent) ||
+            fittedContent.includes('____') ||
+            fittedContent.includes('▀') ||
+            fittedContent.includes('▄')
+        ) {
+            inner = chalk.hex('#F8FAFC')(fittedContent);
+        }
+
+        console.log(left + inner + right);
     }
 }
 
@@ -473,11 +666,29 @@ async function animateBanner(options = {}) {
         process.stdout.isTTY &&
         process.env.LLM_CHECKER_DISABLE_ANIMATION !== '1';
 
+    const frameDurationMs = frameDelayMs || Math.round(1000 / FRAMES_PER_SECOND);
     const prepared = makeFrames({
         frameCount: Math.max(1, frames),
         hasDarkBackground,
-        frameDurationMs: frameDelayMs || Math.round(1000 / FRAMES_PER_SECOND)
+        frameDurationMs
     });
+    const textBanner = loadTextBanner();
+
+    if (textBanner && textBanner.length > 0) {
+        if (!shouldAnimate) {
+            clearTerminal();
+            drawTextBanner(textBanner);
+            return;
+        }
+
+        const textFrames = Math.max(10, Math.min(24, frames));
+        for (let frameIndex = 0; frameIndex < textFrames; frameIndex += 1) {
+            clearTerminal();
+            drawTextBanner(textBanner, { colorPhase: frameIndex });
+            await sleep(frameDurationMs);
+        }
+        return;
+    }
 
     if (!shouldAnimate || prepared.frames.length <= 1) {
         clearTerminal();
@@ -492,7 +703,13 @@ async function animateBanner(options = {}) {
     }
 }
 
-function renderPersistentBanner(width = 74) {
+function renderPersistentBanner(width = 74, options = {}) {
+    const textBanner = loadTextBanner();
+    if (textBanner && textBanner.length > 0) {
+        drawTextBanner(textBanner, options);
+        return;
+    }
+
     const prepared = makeFrames({ frameCount: 1, width });
     drawFrame(prepared.frames[0], prepared.width, prepared.theme);
 }

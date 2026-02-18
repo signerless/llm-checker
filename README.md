@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="llmlogo.jpg" alt="LLM Checker Logo" width="200">
+  <img src="assets/llm-checker-logo.gif" alt="LLM Checker Animated Logo" width="760">
 </p>
 
 <p align="center">
