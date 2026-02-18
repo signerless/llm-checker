@@ -15,6 +15,7 @@ const TESTS = [
     { name: 'Ollama capacity planner', file: 'ollama-capacity-planner.test.js', category: 'Ollama' },
     { name: 'Runtime + speculative decoding', file: 'runtime-specdec-tests.js', category: 'Runtime' },
     { name: 'CLI interface smoke', file: 'ui-cli-smoke.test.js', category: 'UI' },
+    { name: 'CLI interactive panel helpers', file: 'cli-interactive-panel.test.js', category: 'UI' },
     { name: 'Calibration schema', file: 'calibration-schema.test.js', category: 'Calibration' },
     { name: 'Calibration command', file: 'calibrate-command.test.js', category: 'Calibration' },
     { name: 'Calibration end-to-end', file: 'calibration-e2e-integration.test.js', category: 'Calibration' },

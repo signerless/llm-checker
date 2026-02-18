@@ -47,126 +47,30 @@ const {
     buildComplianceReport,
     serializeComplianceReport
 } = require('../src/policy/audit-reporter');
+const { renderCommandHeader } = require('../src/ui/cli-theme');
+const { launchInteractivePanel } = require('../src/ui/interactive-panel');
 const policyManager = new PolicyManager();
 const calibrationManager = new CalibrationManager();
 
-// ASCII Art for each command - Large text banners
-const ASCII_ART = {
-    'hw-detect': `
- ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗    ██╗ █████╗ ██████╗ ███████╗
- ██║  ██║██╔══██╗██╔══██╗██╔══██╗██║    ██║██╔══██╗██╔══██╗██╔════╝
- ███████║███████║██████╔╝██║  ██║██║ █╗ ██║███████║██████╔╝█████╗
- ██╔══██║██╔══██║██╔══██╗██║  ██║██║███╗██║██╔══██║██╔══██╗██╔══╝
- ██║  ██║██║  ██║██║  ██║██████╔╝╚███╔███╔╝██║  ██║██║  ██║███████╗
- ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
-                      DETECTION`,
-
-    'smart-recommend': `
- ███████╗███╗   ███╗ █████╗ ██████╗ ████████╗
- ██╔════╝████╗ ████║██╔══██╗██╔══██╗╚══██╔══╝
- ███████╗██╔████╔██║███████║██████╔╝   ██║
- ╚════██║██║╚██╔╝██║██╔══██║██╔══██╗   ██║
- ███████║██║ ╚═╝ ██║██║  ██║██║  ██║   ██║
- ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
-          RECOMMEND - AI Powered`,
-
-    'search': `
- ███████╗███████╗ █████╗ ██████╗  ██████╗██╗  ██╗
- ██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝██║  ██║
- ███████╗█████╗  ███████║██████╔╝██║     ███████║
- ╚════██║██╔══╝  ██╔══██║██╔══██╗██║     ██╔══██║
- ███████║███████╗██║  ██║██║  ██║╚██████╗██║  ██║
- ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
-            6900+ Models Available`,
-
-    'sync': `
- ███████╗██╗   ██╗███╗   ██╗ ██████╗
- ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝
- ███████╗ ╚████╔╝ ██╔██╗ ██║██║
- ╚════██║  ╚██╔╝  ██║╚██╗██║██║
- ███████║   ██║   ██║ ╚████║╚██████╗
- ╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
-      Database Synchronization`,
-
-    'check': `
-  ██████╗██╗  ██╗███████╗ ██████╗██╗  ██╗
- ██╔════╝██║  ██║██╔════╝██╔════╝██║ ██╔╝
- ██║     ███████║█████╗  ██║     █████╔╝
- ██║     ██╔══██║██╔══╝  ██║     ██╔═██╗
- ╚██████╗██║  ██║███████╗╚██████╗██║  ██╗
-  ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝
-       Compatibility Analysis`,
-
-    'installed': `
- ██╗███╗   ██╗███████╗████████╗ █████╗ ██╗     ██╗     ███████╗██████╗
- ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗██║     ██║     ██╔════╝██╔══██╗
- ██║██╔██╗ ██║███████╗   ██║   ███████║██║     ██║     █████╗  ██║  ██║
- ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║     ██║     ██╔══╝  ██║  ██║
- ██║██║ ╚████║███████║   ██║   ██║  ██║███████╗███████╗███████╗██████╔╝
- ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═════╝
-                     Local Models`,
-
-    'ai-check': `
-  █████╗ ██╗      ██████╗██╗  ██╗███████╗ ██████╗██╗  ██╗
- ██╔══██╗██║     ██╔════╝██║  ██║██╔════╝██╔════╝██║ ██╔╝
- ███████║██║     ██║     ███████║█████╗  ██║     █████╔╝
- ██╔══██║██║     ██║     ██╔══██║██╔══╝  ██║     ██╔═██╗
- ██║  ██║██║     ╚██████╗██║  ██║███████╗╚██████╗██║  ██╗
- ╚═╝  ╚═╝╚═╝      ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝
-          AI-Powered Evaluation`,
-
-    'ai-run': `
-  █████╗ ██╗    ██████╗ ██╗   ██╗███╗   ██╗
- ██╔══██╗██║    ██╔══██╗██║   ██║████╗  ██║
- ███████║██║    ██████╔╝██║   ██║██╔██╗ ██║
- ██╔══██║██║    ██╔══██╗██║   ██║██║╚██╗██║
- ██║  ██║██║    ██║  ██║╚██████╔╝██║ ╚████║
- ╚═╝  ╚═╝╚═╝    ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-        Launch & Execute Model`,
-
-    'demo': `
- ██████╗ ███████╗███╗   ███╗ ██████╗
- ██╔══██╗██╔════╝████╗ ████║██╔═══██╗
- ██║  ██║█████╗  ██╔████╔██║██║   ██║
- ██║  ██║██╔══╝  ██║╚██╔╝██║██║   ██║
- ██████╔╝███████╗██║ ╚═╝ ██║╚██████╔╝
- ╚═════╝ ╚══════╝╚═╝     ╚═╝ ╚═════╝
-       Interactive Preview`,
-
-    'ollama': `
-  ██████╗ ██╗     ██╗      █████╗ ███╗   ███╗ █████╗
- ██╔═══██╗██║     ██║     ██╔══██╗████╗ ████║██╔══██╗
- ██║   ██║██║     ██║     ███████║██╔████╔██║███████║
- ██║   ██║██║     ██║     ██╔══██║██║╚██╔╝██║██╔══██║
- ╚██████╔╝███████╗███████╗██║  ██║██║ ╚═╝ ██║██║  ██║
-  ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝
-            Status & Integration`,
-
-    'recommend': `
- ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ███╗███╗   ███╗███████╗███╗   ██╗██████╗
- ██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗ ████║████╗ ████║██╔════╝████╗  ██║██╔══██╗
- ██████╔╝█████╗  ██║     ██║   ██║██╔████╔██║██╔████╔██║█████╗  ██╔██╗ ██║██║  ██║
- ██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╔╝██║██║╚██╔╝██║██╔══╝  ██║╚██╗██║██║  ██║
- ██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚═╝ ██║██║ ╚═╝ ██║███████╗██║ ╚████║██████╔╝
- ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═══╝╚═════╝
-                         Top Picks For You`,
-
-    'list-models': `
- ███╗   ███╗ ██████╗ ██████╗ ███████╗██╗     ███████╗
- ████╗ ████║██╔═══██╗██╔══██╗██╔════╝██║     ██╔════╝
- ██╔████╔██║██║   ██║██║  ██║█████╗  ██║     ███████╗
- ██║╚██╔╝██║██║   ██║██║  ██║██╔══╝  ██║     ╚════██║
- ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗███████╗███████║
- ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚══════╝
-            Browse All Available`
+const COMMAND_HEADER_LABELS = {
+    'hw-detect': 'Hardware Detection',
+    'smart-recommend': 'Smart Recommend',
+    search: 'Model Search',
+    sync: 'Database Sync',
+    check: 'Compatibility Check',
+    installed: 'Installed Models',
+    'ai-check': 'AI Check',
+    'ai-run': 'AI Run',
+    demo: 'Demo',
+    ollama: 'Ollama Integration',
+    recommend: 'Recommendations',
+    'list-models': 'Model Catalog'
 };
 
-// Function to display ASCII art for a command
+// Kept as function name for backwards compatibility in command handlers.
 function showAsciiArt(command) {
-    if (ASCII_ART[command]) {
-        console.log(chalk.cyan(ASCII_ART[command]));
-        console.log('');
-    }
+    const label = COMMAND_HEADER_LABELS[command] || command;
+    renderCommandHeader(label);
 }
 
 // Function to search Ollama models by use case
@@ -4183,4 +4087,35 @@ program
         }
     });
 
-program.parse();
+async function bootstrapCli() {
+    const userArgs = process.argv.slice(2);
+    const shouldLaunchPanel =
+        userArgs.length === 0 &&
+        process.stdin.isTTY &&
+        process.stdout.isTTY &&
+        process.env.LLM_CHECKER_DISABLE_PANEL !== '1';
+
+    if (shouldLaunchPanel) {
+        await launchInteractivePanel({
+            program,
+            binaryPath: __filename,
+            appName: 'llm-checker'
+        });
+        return;
+    }
+
+    if (userArgs.length === 0) {
+        program.outputHelp();
+        return;
+    }
+
+    await program.parseAsync(process.argv);
+}
+
+bootstrapCli().catch((error) => {
+    console.error(chalk.red('CLI bootstrap failed:'), error.message);
+    if (process.env.DEBUG) {
+        console.error(error.stack);
+    }
+    process.exit(1);
+});
