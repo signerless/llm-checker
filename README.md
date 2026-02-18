@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="llmlogo.jpg" alt="LLM Checker Logo" width="200">
+  <img src="assets/llm-checker-logo.gif" alt="LLM Checker Animated Logo" width="760">
 </p>
 
 <p align="center">
@@ -317,6 +317,26 @@ After setup, you can ask Claude things like:
 - *"How much RAM is Ollama using right now?"*
 
 Claude will automatically call the right tools and give you actionable results.
+
+---
+
+## Interactive CLI Panel
+
+Running `llm-checker` with no arguments now opens an interactive panel (TTY terminals):
+
+- animated startup banner
+- main command list with descriptions
+- type `/` to open all commands
+- use up/down arrows to select a command
+- press `Enter` to execute
+- add optional extra flags before run (example: `--json --limit 5`)
+
+For scripting and automation, direct command invocation remains unchanged:
+
+```bash
+llm-checker check --use-case coding --limit 3
+llm-checker search "qwen coder" --json
+```
 
 ---
 

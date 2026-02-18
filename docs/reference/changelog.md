@@ -1,6 +1,24 @@
 Changelog
 =========
 
+3.5.0 — Interactive CLI Panel + Unified Visual Style (2026-02-18)
+------------------------------------------------------------------
+
+- Added interactive panel mode when running `llm-checker` with no arguments on TTY terminals:
+  - startup animated banner
+  - main command list with descriptions
+  - `/` opens full command list
+  - keyboard navigation with up/down + Enter to execute
+  - command filtering while typing in slash mode
+- Added argument capture flow from interactive panel:
+  - required prompt for `search <query>`
+  - optional free-form extra parameters for any selected command (for example `--json --limit 5`)
+- Replaced large per-command ASCII banners with a minimal, consistent command header style.
+- Kept direct non-interactive command invocation unchanged (`llm-checker <command> ...`).
+- Added helper regression coverage for interactive panel internals:
+  - `tests/cli-interactive-panel.test.js`
+- Included the new UI test in the unified test runner (`tests/run-all-tests.js`).
+
 3.4.1 — Jetson/CUDA Output + Packaging Channel Clarification (2026-02-17)
 --------------------------------------------------------------------------
 
