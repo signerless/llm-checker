@@ -2,6 +2,14 @@
 
 const chalk = require('chalk');
 
+const ASCII_BANNER_LINES = [
+    ' _      _      __  __    ____ _               _             ',
+    '| |    | |    |  \\/  |  / ___| |__   ___  ___| | _____ _ __ ',
+    "| |    | |    | |\\/| | | |   | '_ \\ / _ \\/ __| |/ / _ \\ '__|",
+    '| |___ | |___ | |  | | | |___| | | |  __/ (__|   <  __/ |   ',
+    '|_____||_____||_|  |_|  \\____|_| |_|\\___|\\___|_|\\_\\___|_|   '
+];
+
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -10,39 +18,36 @@ function clearTerminal() {
     process.stdout.write('\x1b[2J\x1b[0f');
 }
 
-function buildShimmerText(text, frameIndex) {
-    const cursor = frameIndex % (text.length + 6);
-    return text
-        .split('')
-        .map((char, index) => {
-            const distance = Math.abs(index - (cursor - 3));
-            if (distance === 0) return chalk.cyanBright.bold(char);
-            if (distance <= 1) return chalk.cyan(char);
-            return chalk.gray(char);
-        })
-        .join('');
+function revealLine(line, progress) {
+    const normalized = Math.max(0, Math.min(1, progress));
+    const visibleChars = Math.floor(line.length * normalized);
+    const visible = line.slice(0, visibleChars);
+    const hidden = line.slice(visibleChars);
+    return chalk.cyanBright(visible) + chalk.gray(hidden);
 }
 
-function drawBannerFrame(text, frameIndex, width = 72) {
+function drawBannerFrame(frameIndex, totalFrames, width = 74) {
+    const progress = totalFrames <= 1 ? 1 : frameIndex / (totalFrames - 1);
     const top = `+${'-'.repeat(width - 2)}+`;
     const bottom = `+${'-'.repeat(width - 2)}+`;
-    const shimmerText = buildShimmerText(text, frameIndex);
-    const subtitle = chalk.gray('Interactive command panel');
     const contentWidth = width - 4;
-    const line1 = shimmerText.padEnd(contentWidth, ' ');
-    const line2 = subtitle.padEnd(contentWidth, ' ');
 
     console.log(chalk.gray(top));
-    console.log(chalk.gray('| ') + line1 + chalk.gray(' |'));
-    console.log(chalk.gray('| ') + line2 + chalk.gray(' |'));
+    for (const line of ASCII_BANNER_LINES) {
+        const rendered = revealLine(line, progress).padEnd(contentWidth, ' ');
+        console.log(chalk.gray('| ') + rendered + chalk.gray(' |'));
+    }
+    const byline = chalk.yellow('by Pavelevich');
+    const subtitle = chalk.gray('Interactive command panel');
+    console.log(chalk.gray('| ') + byline.padEnd(contentWidth, ' ') + chalk.gray(' |'));
+    console.log(chalk.gray('| ') + subtitle.padEnd(contentWidth, ' ') + chalk.gray(' |'));
     console.log(chalk.gray(bottom));
 }
 
 async function animateBanner(options = {}) {
     const {
-        text = 'llm-checker',
-        frames = 14,
-        frameDelayMs = 38,
+        frames = 16,
+        frameDelayMs = 34,
         enabled = true
     } = options;
 
@@ -53,15 +58,19 @@ async function animateBanner(options = {}) {
 
     if (!shouldAnimate) {
         clearTerminal();
-        drawBannerFrame(text, 0);
+        drawBannerFrame(1, 1);
         return;
     }
 
     for (let frameIndex = 0; frameIndex < frames; frameIndex += 1) {
         clearTerminal();
-        drawBannerFrame(text, frameIndex);
+        drawBannerFrame(frameIndex, frames);
         await sleep(frameDelayMs);
     }
+}
+
+function renderPersistentBanner(width = 74) {
+    drawBannerFrame(1, 1, width);
 }
 
 function renderCommandHeader(commandLabel) {
@@ -73,8 +82,9 @@ function renderCommandHeader(commandLabel) {
 
 module.exports = {
     animateBanner,
+    renderPersistentBanner,
     renderCommandHeader,
     __private: {
-        buildShimmerText
+        revealLine
     }
 };

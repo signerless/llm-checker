@@ -4,7 +4,7 @@ const chalk = require('chalk');
 const inquirer = require('inquirer');
 const readline = require('readline');
 const { spawn } = require('child_process');
-const { animateBanner } = require('./cli-theme');
+const { animateBanner, renderPersistentBanner } = require('./cli-theme');
 
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
@@ -137,6 +137,8 @@ function renderPanel(state, catalog, primaryCommands) {
     const visibleCommands = getVisibleCommands(state, catalog, primaryCommands);
 
     clearTerminal();
+    renderPersistentBanner();
+    console.log('');
     console.log(chalk.gray(separator));
     const inputLabel = state.paletteOpen ? `/${state.query}` : '';
     console.log(`${chalk.white.bold('>')} ${chalk.white(inputLabel)}${chalk.gray('|')}`);
