@@ -26,6 +26,24 @@ function run() {
     assert.ok(stripAnsi(help.stdout).includes('calibrate'), 'top-level help should list calibrate command');
     assert.ok(stripAnsi(help.stdout).includes('ollama-plan'), 'top-level help should list ollama-plan command');
 
+    const commandHelp = runCli(['help']);
+    assert.strictEqual(commandHelp.status, 0, stripAnsi(commandHelp.stderr || commandHelp.stdout));
+    assert.ok(
+        stripAnsi(commandHelp.stdout).includes('Show all commands and how to use them'),
+        'help command should be listed and described'
+    );
+
+    const commandHelpRecommend = runCli(['help', 'recommend']);
+    assert.strictEqual(
+        commandHelpRecommend.status,
+        0,
+        stripAnsi(commandHelpRecommend.stderr || commandHelpRecommend.stdout)
+    );
+    assert.ok(
+        stripAnsi(commandHelpRecommend.stdout).includes('Usage: llm-checker recommend'),
+        'help <command> should show detailed usage for that command'
+    );
+
     const recommendHelp = runCli(['recommend', '--help']);
     assert.strictEqual(recommendHelp.status, 0, stripAnsi(recommendHelp.stderr || recommendHelp.stdout));
     assert.ok(

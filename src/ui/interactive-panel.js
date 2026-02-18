@@ -8,6 +8,7 @@ const { animateBanner, renderPersistentBanner } = require('./cli-theme');
 
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
+    'help',
     'recommend',
     'ai-run',
     'ollama-plan',
@@ -226,6 +227,7 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
 async function collectCommandArgs(commandMeta) {
     const prompts = [];
     const requiredPrompts = REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
+    const promptOptionalArgs = commandMeta.name !== 'help';
 
     for (const requiredPrompt of requiredPrompts) {
         prompts.push({
@@ -236,12 +238,18 @@ async function collectCommandArgs(commandMeta) {
         });
     }
 
-    prompts.push({
-        type: 'input',
-        name: 'extraArgs',
-        message: 'Optional extra params (example: --json --limit 5):',
-        default: ''
-    });
+    if (promptOptionalArgs) {
+        prompts.push({
+            type: 'input',
+            name: 'extraArgs',
+            message: 'Optional extra params (example: --json --limit 5):',
+            default: ''
+        });
+    }
+
+    if (prompts.length === 0) {
+        return [];
+    }
 
     const answers = await inquirer.prompt(prompts);
     const args = [];
@@ -251,9 +259,11 @@ async function collectCommandArgs(commandMeta) {
         if (value) args.push(value);
     }
 
-    const extraArgs = String(answers.extraArgs || '').trim();
-    if (extraArgs) {
-        args.push(...tokenizeArgString(extraArgs));
+    if (promptOptionalArgs) {
+        const extraArgs = String(answers.extraArgs || '').trim();
+        if (extraArgs) {
+            args.push(...tokenizeArgString(extraArgs));
+        }
     }
 
     return args;

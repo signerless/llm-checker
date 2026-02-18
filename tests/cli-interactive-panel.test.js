@@ -35,6 +35,7 @@ function run() {
         commands: [
             createMockCommand('recommend', 'Recommend models'),
             createMockCommand('check', 'Check compatibility'),
+            createMockCommand('help', 'Show all commands and how to use them'),
             createMockCommand('search', 'Search models'),
             createMockCommand('sync', 'Sync database')
         ]
@@ -45,7 +46,8 @@ function run() {
 
     const primary = buildPrimaryCommands(catalog);
     assert.strictEqual(primary[0].name, 'check', 'primary ordering should prioritize check');
-    assert.strictEqual(primary[1].name, 'recommend', 'primary ordering should prioritize recommend');
+    assert.strictEqual(primary[1].name, 'help', 'primary ordering should prioritize help');
+    assert.strictEqual(primary[2].name, 'recommend', 'primary ordering should prioritize recommend');
 
     const stateClosed = { paletteOpen: false, query: '', selected: 0 };
     const visibleClosed = getVisibleCommands(stateClosed, catalog, primary);
@@ -77,4 +79,3 @@ if (require.main === module) {
 }
 
 module.exports = { run };
-
