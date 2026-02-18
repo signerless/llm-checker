@@ -1,34 +1,28 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Pavelevich/llm-checker/main/assets/llm-checker-logo.gif" alt="LLM Checker Animated Logo" width="760">
-</p>
+# LLM Checker
 
-<h1 align="center">LLM Checker</h1>
-<p align="center"><strong>Intelligent Ollama Model Selector</strong></p>
-<p align="center">
-  AI-powered CLI that analyzes your hardware and recommends optimal LLM models<br/>
-  Deterministic scoring across <b>200+ dynamic models</b> (35+ curated fallback) with hardware-calibrated memory estimation
-</p>
+![LLM Checker Animated Logo](https://raw.githubusercontent.com/Pavelevich/llm-checker/main/assets/llm-checker-logo.gif)
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/llm-checker"><img src="https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF" alt="npm downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-NPDL--1.0-CC3300?style=flat-square" alt="License"></a>
-  <a href="https://discord.gg/mnmYrA7T"><img src="https://img.shields.io/discord/1457032977849520374?style=flat-square&color=0066FF&label=Discord" alt="Discord"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D16-0066FF?style=flat-square" alt="Node.js"></a>
-</p>
+**Intelligent Ollama Model Selector**
 
-<p align="center">
-  <a href="#start-here-2-minutes">Start Here</a> &bull;
-  <a href="#installation">Installation</a> &bull;
-  <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#calibration-quick-start-10-minutes">Calibration Quick Start</a> &bull;
-  <a href="https://github.com/Pavelevich/llm-checker/tree/main/docs">Docs</a> &bull;
-  <a href="#claude-code-mcp">Claude MCP</a> &bull;
-  <a href="#commands">Commands</a> &bull;
-  <a href="#scoring-system">Scoring</a> &bull;
-  <a href="#supported-hardware">Hardware</a> &bull;
-  <a href="https://discord.gg/mnmYrA7T"><img src="https://cdn.simpleicons.org/discord/0066FF" alt="Discord" width="14" height="14"> Discord</a>
-</p>
+AI-powered CLI that analyzes your hardware and recommends optimal LLM models.  
+Deterministic scoring across **200+ dynamic models** (35+ curated fallback) with hardware-calibrated memory estimation.
+
+[![npm version](https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
+[![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
+[![License](https://img.shields.io/badge/License-NPDL--1.0-CC3300?style=flat-square)](LICENSE)
+[![Discord](https://img.shields.io/discord/1457032977849520374?style=flat-square&color=0066FF&label=Discord)](https://discord.gg/mnmYrA7T)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D16-0066FF?style=flat-square)](https://nodejs.org/)
+
+[Start Here](#start-here-2-minutes) •
+[Installation](#installation) •
+[Quick Start](#quick-start) •
+[Calibration Quick Start](#calibration-quick-start-10-minutes) •
+[Docs](https://github.com/Pavelevich/llm-checker/tree/main/docs) •
+[Claude MCP](#claude-code-mcp) •
+[Commands](#commands) •
+[Scoring](#scoring-system) •
+[Hardware](#supported-hardware) •
+[Discord](https://discord.gg/mnmYrA7T)
 
 ---
 
@@ -873,11 +867,9 @@ See [LICENSE](https://github.com/Pavelevich/llm-checker/blob/main/LICENSE) for f
 
 ---
 
-<p align="center">
-  <a href="https://github.com/Pavelevich/llm-checker">GitHub</a> &bull;
-  <a href="https://github.com/Pavelevich/llm-checker/releases">Releases</a> &bull;
-  <a href="https://www.npmjs.com/package/llm-checker">npm</a> &bull;
-  <a href="https://github.com/users/Pavelevich/packages/npm/package/llm-checker">GitHub Packages</a> &bull;
-  <a href="https://github.com/Pavelevich/llm-checker/issues">Issues</a> &bull;
-  <a href="https://discord.gg/mnmYrA7T">Discord</a>
-</p>
+[GitHub](https://github.com/Pavelevich/llm-checker) •
+[Releases](https://github.com/Pavelevich/llm-checker/releases) •
+[npm](https://www.npmjs.com/package/llm-checker) •
+[GitHub Packages](https://github.com/users/Pavelevich/packages/npm/package/llm-checker) •
+[Issues](https://github.com/Pavelevich/llm-checker/issues) •
+[Discord](https://discord.gg/mnmYrA7T)
