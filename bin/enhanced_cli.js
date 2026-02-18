@@ -391,6 +391,79 @@ program
 
 const logger = getLogger({ console: false });
 
+function canRenderColoredHelp() {
+    if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
+    if (process.env.NO_COLOR) return false;
+    if (process.env.FORCE_COLOR === '0') return false;
+    return Boolean(process.stdout.isTTY || process.env.FORCE_COLOR);
+}
+
+function colorizeHelpInformation(helpText) {
+    const raw = String(helpText || '');
+    if (!raw || !canRenderColoredHelp()) {
+        return raw;
+    }
+
+    const sectionColor = chalk.hex('#22D3EE').bold;
+    const usageLabelColor = chalk.hex('#60A5FA').bold;
+    const usageValueColor = chalk.hex('#F8FAFC').bold;
+    const optionColor = chalk.hex('#A7F3D0');
+    const commandColor = chalk.hex('#93C5FD').bold;
+    const placeholderColor = chalk.hex('#F59E0B');
+    const descriptionColor = chalk.hex('#D1D5DB');
+    const defaultColor = chalk.hex('#C7D2FE');
+
+    const colorizePlaceholders = (value) =>
+        String(value || '').replace(/(\[[^\]]+\]|<[^>]+>)/g, (token) => placeholderColor(token));
+
+    return raw
+        .split('\n')
+        .map((line) => {
+            if (!line.trim()) return line;
+
+            const usageMatch = line.match(/^(\s*)(Usage:)(\s*)(.+)$/);
+            if (usageMatch) {
+                return `${usageMatch[1]}${usageLabelColor(usageMatch[2])}${usageMatch[3]}${usageValueColor(usageMatch[4])}`;
+            }
+
+            const sectionMatch = line.match(/^(\s*)(Options:|Commands:|Enterprise policy examples:|Calibrated routing examples:)\s*$/);
+            if (sectionMatch) {
+                return `${sectionMatch[1]}${sectionColor(sectionMatch[2])}`;
+            }
+
+            if (/^\s*\$ /.test(line.trimStart())) {
+                return line.replace(/\$ .+$/, (commandText) => chalk.hex('#60A5FA')(commandText));
+            }
+
+            if (/^\s*-/.test(line)) {
+                const optionLine = line.match(/^(\s+)(.+?)(\s{2,})(.+)$/);
+                if (optionLine) {
+                    return (
+                        optionLine[1] +
+                        optionColor(colorizePlaceholders(optionLine[2])) +
+                        optionLine[3] +
+                        descriptionColor(optionLine[4])
+                    );
+                }
+            }
+
+            if (/^\s+[a-z0-9]/i.test(line)) {
+                const commandLine = line.match(/^(\s+)(.+?)(\s{2,})(.+)$/);
+                if (commandLine) {
+                    return (
+                        commandLine[1] +
+                        commandColor(colorizePlaceholders(commandLine[2])) +
+                        commandLine[3] +
+                        descriptionColor(commandLine[4])
+                    );
+                }
+            }
+
+            return defaultColor(line);
+        })
+        .join('\n');
+}
+
 function findCommandByName(commandName) {
     const requested = String(commandName || '').trim();
     if (!requested) return null;
@@ -414,7 +487,7 @@ if (!program.commands.some((cmd) => cmd.name() === 'help')) {
             console.log('');
 
             if (!commandName) {
-                program.outputHelp();
+                console.log(colorizeHelpInformation(program.helpInformation()));
                 return;
             }
 
@@ -431,7 +504,7 @@ if (!program.commands.some((cmd) => cmd.name() === 'help')) {
                 return;
             }
 
-            target.outputHelp();
+            console.log(colorizeHelpInformation(target.helpInformation()));
         });
 }
 
