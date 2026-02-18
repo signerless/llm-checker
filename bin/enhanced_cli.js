@@ -391,6 +391,50 @@ program
 
 const logger = getLogger({ console: false });
 
+function findCommandByName(commandName) {
+    const requested = String(commandName || '').trim();
+    if (!requested) return null;
+
+    return program.commands.find((cmd) => {
+        if (cmd.name() === requested) return true;
+        try {
+            return cmd.aliases().includes(requested);
+        } catch {
+            return false;
+        }
+    }) || null;
+}
+
+if (!program.commands.some((cmd) => cmd.name() === 'help')) {
+    program
+        .command('help [command]')
+        .description('Show all commands and how to use them')
+        .action((commandName) => {
+            renderPersistentBanner();
+            console.log('');
+
+            if (!commandName) {
+                program.outputHelp();
+                return;
+            }
+
+            const target = findCommandByName(commandName);
+            if (!target) {
+                const available = program.commands
+                    .map((cmd) => cmd.name())
+                    .filter((name) => name !== 'help')
+                    .sort((a, b) => a.localeCompare(b))
+                    .join(', ');
+                console.error(chalk.red(`Unknown command: ${commandName}`));
+                console.log(chalk.gray(`Available commands: ${available}`));
+                process.exitCode = 1;
+                return;
+            }
+
+            target.outputHelp();
+        });
+}
+
 // Ollama installation helper
 function getOllamaInstallInstructions() {
     const platform = os.platform();
