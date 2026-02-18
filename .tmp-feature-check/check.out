@@ -1,0 +1,31 @@
+
+llm-checker | Compatibility Check
+-------------------------------------------
+Analyzing your system... done
+
+SYSTEM SUMMARY
+──────────────────────────────────────────────────
+CPU: M4 Pro (12 cores)
+Memory: 24GB RAM
+GPU: Apple M4 Pro
+Architecture: Apple Silicon
+Hardware Tier: HIGH
+
+RECOMMENDED MODEL
+──────────────────────────────────────────────────
+Model: Llama 3.1 8B
+Size: 4.9GB
+Compatibility Score: 72.3/100
+Reason: Best general-purpose model for your hardware
+Estimated Speed: 41 tokens/sec
+Runtime: Ollama
+Status: Available for installation
+
+Pull: ollama pull llama3.1:8b
+
+QUICK START
+──────────────────────────────────────────────────
+1. Install the recommended model:
+   ollama pull llama3.1:8b
+2. Start using it:
+   ollama run llama3.1:8b

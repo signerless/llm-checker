@@ -25,6 +25,7 @@ function run() {
     assert.ok(stripAnsi(help.stdout).includes('recommend'), 'top-level help should list recommend command');
     assert.ok(stripAnsi(help.stdout).includes('calibrate'), 'top-level help should list calibrate command');
     assert.ok(stripAnsi(help.stdout).includes('ollama-plan'), 'top-level help should list ollama-plan command');
+    assert.ok(stripAnsi(help.stdout).includes('mcp-setup'), 'top-level help should list mcp-setup command');
 
     const commandHelp = runCli(['help']);
     assert.strictEqual(commandHelp.status, 0, stripAnsi(commandHelp.stderr || commandHelp.stdout));
@@ -82,6 +83,23 @@ function run() {
     assert.ok(
         stripAnsi(ollamaPlanHelp.stdout).includes('--objective <mode>'),
         'ollama-plan help should expose objective option'
+    );
+
+    const mcpSetupHelp = runCli(['mcp-setup', '--help']);
+    assert.strictEqual(mcpSetupHelp.status, 0, stripAnsi(mcpSetupHelp.stderr || mcpSetupHelp.stdout));
+    assert.ok(
+        stripAnsi(mcpSetupHelp.stdout).includes('Show or apply Claude MCP setup for llm-checker'),
+        'mcp-setup help should describe command purpose'
+    );
+
+    const mcpSetupJson = runCli(['mcp-setup', '--json']);
+    assert.strictEqual(mcpSetupJson.status, 0, stripAnsi(mcpSetupJson.stderr || mcpSetupJson.stdout));
+    const parsedMcpSetup = JSON.parse(stripAnsi(mcpSetupJson.stdout));
+    assert.strictEqual(parsedMcpSetup.recommended.command, 'claude', 'mcp-setup json should target claude CLI');
+    assert.ok(
+        Array.isArray(parsedMcpSetup.recommended.args) &&
+            parsedMcpSetup.recommended.args.slice(0, 2).join(' ') === 'mcp add',
+        'mcp-setup json should include claude mcp add args'
     );
 
     console.log('ui-cli-smoke.test.js: OK');

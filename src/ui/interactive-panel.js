@@ -9,6 +9,7 @@ const { animateBanner, renderPersistentBanner } = require('./cli-theme');
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
     'help',
+    'mcp-setup',
     'recommend',
     'ai-run',
     'ollama-plan',
@@ -87,6 +88,90 @@ function tokenizeArgString(rawInput = '') {
     }
 
     return tokens;
+}
+
+function getRequiredOptionPrompts(commandMeta) {
+    const commandOptions = Array.isArray(commandMeta?.command?.options)
+        ? commandMeta.command.options
+        : [];
+
+    const isMandatoryOption = (option) => {
+        if (!option) return false;
+        if (typeof option.mandatory === 'boolean') {
+            return option.mandatory;
+        }
+        return Boolean(option.required);
+    };
+
+    return commandOptions
+        .filter((option) => isMandatoryOption(option))
+        .map((option) => {
+            const flag = option.long || option.short || option.flags.split(/[,\s|]+/).find((token) => token.startsWith('-'));
+            const attributeName =
+                typeof option.attributeName === 'function'
+                    ? option.attributeName()
+                    : String(flag || 'required').replace(/^-+/, '').replace(/[^a-zA-Z0-9]+/g, '_');
+            const optionType = typeof option.isBoolean === 'function' && option.isBoolean() ? 'boolean' : 'value';
+            const promptName = `required_${attributeName}`;
+            const optionFlags = option.flags || flag || attributeName;
+            const message =
+                optionType === 'boolean'
+                    ? `Required flag ${optionFlags} (enable?):`
+                    : `Required option ${optionFlags}:`;
+
+            return {
+                promptName,
+                flag,
+                optionFlags,
+                variadic: Boolean(option.variadic),
+                optionType,
+                message
+            };
+        })
+        .filter((entry) => Boolean(entry.flag));
+}
+
+function normalizeVariadicValue(rawValue) {
+    const tokens = tokenizeArgString(rawValue);
+    const values = [];
+
+    tokens.forEach((token) => {
+        String(token)
+            .split(',')
+            .map((piece) => piece.trim())
+            .filter(Boolean)
+            .forEach((piece) => values.push(piece));
+    });
+
+    return values;
+}
+
+function buildRequiredOptionArgs(requiredOptionPrompts, answers) {
+    const args = [];
+
+    requiredOptionPrompts.forEach((entry) => {
+        const answer = answers ? answers[entry.promptName] : undefined;
+
+        if (entry.optionType === 'boolean') {
+            if (answer) args.push(entry.flag);
+            return;
+        }
+
+        const rawValue = String(answer || '').trim();
+        if (!rawValue) return;
+
+        if (entry.variadic) {
+            const values = normalizeVariadicValue(rawValue);
+            if (values.length > 0) {
+                args.push(entry.flag, ...values);
+            }
+            return;
+        }
+
+        args.push(entry.flag, rawValue);
+    });
+
+    return args;
 }
 
 function buildCommandCatalog(program) {
@@ -227,6 +312,7 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
 async function collectCommandArgs(commandMeta) {
     const prompts = [];
     const requiredPrompts = REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
+    const requiredOptionPrompts = getRequiredOptionPrompts(commandMeta);
     const promptOptionalArgs = commandMeta.name !== 'help';
 
     for (const requiredPrompt of requiredPrompts) {
@@ -234,7 +320,36 @@ async function collectCommandArgs(commandMeta) {
             type: 'input',
             name: requiredPrompt.name,
             message: requiredPrompt.message,
+            prefix: ' ',
             validate: requiredPrompt.validate
+        });
+    }
+
+    for (const requiredOptionPrompt of requiredOptionPrompts) {
+        prompts.push({
+            type: requiredOptionPrompt.optionType === 'boolean' ? 'confirm' : 'input',
+            name: requiredOptionPrompt.promptName,
+            message: requiredOptionPrompt.message,
+            prefix: ' ',
+            default: requiredOptionPrompt.optionType === 'boolean' ? true : '',
+            validate:
+                requiredOptionPrompt.optionType === 'boolean'
+                    ? undefined
+                    : (value) => {
+                          const trimmed = String(value || '').trim();
+                          if (!trimmed) {
+                              return `Provide a value for ${requiredOptionPrompt.optionFlags}`;
+                          }
+
+                          if (requiredOptionPrompt.variadic) {
+                              const values = normalizeVariadicValue(trimmed);
+                              if (values.length === 0) {
+                                  return `Provide at least one value for ${requiredOptionPrompt.optionFlags}`;
+                              }
+                          }
+
+                          return true;
+                      }
         });
     }
 
@@ -243,6 +358,7 @@ async function collectCommandArgs(commandMeta) {
             type: 'input',
             name: 'extraArgs',
             message: 'Optional extra params (example: --json --limit 5):',
+            prefix: ' ',
             default: ''
         });
     }
@@ -258,6 +374,8 @@ async function collectCommandArgs(commandMeta) {
         const value = String(answers[requiredPrompt.name] || '').trim();
         if (value) args.push(value);
     }
+
+    args.push(...buildRequiredOptionArgs(requiredOptionPrompts, answers));
 
     if (promptOptionalArgs) {
         const extraArgs = String(answers.extraArgs || '').trim();
@@ -371,7 +489,8 @@ async function launchInteractivePanel(options) {
                     {
                         type: 'input',
                         name: 'continue',
-                        message: 'Press Enter to return to the panel'
+                        message: 'Press Enter to return to the panel',
+                        prefix: ' '
                     }
                 ]);
             } catch (error) {
@@ -379,7 +498,8 @@ async function launchInteractivePanel(options) {
                     {
                         type: 'input',
                         name: 'continue',
-                        message: `Command failed (${error.message}). Press Enter to continue`
+                        message: `Command failed (${error.message}). Press Enter to continue`,
+                        prefix: ' '
                     }
                 ]);
             } finally {
@@ -468,6 +588,9 @@ module.exports = {
     launchInteractivePanel,
     __private: {
         tokenizeArgString,
+        getRequiredOptionPrompts,
+        buildRequiredOptionArgs,
+        normalizeVariadicValue,
         buildCommandCatalog,
         buildPrimaryCommands,
         getVisibleCommands,

@@ -1,0 +1,51 @@
+
+llm-checker | Demo
+----------------------------
+
+LLM Checker - Enhanced Progress Demo
+This demonstrates the new step-by-step progress display with visual indicators
+────────────────────────────────────────────────────────────
+
+
+████░░░░░░░░░░░░░░░░ 20% [1/5] System Detection
+    └─ Scanning hardware specifications...
+    ├─ CPU detected: Apple M4 Pro (12 cores) (1.0s)
+    └─ Memory detected: 24GB unified memory (1.5s)
+      Apple M4 Pro, 24GB RAM, Apple Silicon GPU
+    └─ 1.5s
+
+████████░░░░░░░░░░░░ 40% [2/5] Database Sync
+    └─ Updating model database...
+    3,247 models in database
+      Database synchronized
+    └─ 801ms
+
+████████████░░░░░░░░ 60% [3/5] Compatibility Analysis
+    └─ Running mathematical heuristics...
+    ├─ Analyzing hardware requirements... (1.2s)
+    └─ Calculating performance scores... (1.8s)
+    127 compatible models found
+      Compatibility analysis complete
+    └─ 1.8s
+
+████████████████░░░░ 80% [4/5] AI Evaluation
+    └─ Running intelligent model selection...
+    ├─ Mathematical heuristics applied (914ms)
+    Top 15 models selected by AI
+      AI evaluation complete
+    └─ 919ms
+
+████████████████████ 100% [5/5] Smart Recommendations
+    └─ Generating personalized suggestions...
+    ├─ Analyzing use case: general (603ms)
+    └─ Generating Ollama commands... (1.0s)
+      23 recommendations generated
+    └─ 1.0s
+────────────────────────────────────────────────────────────
+LLM Model Analysis & Compatibility Demo complete!
+   Analysis complete! Found optimal models for your hardware
+   Total time: 6.0s
+
+Demo completed successfully!
+\nNow try running: llm-checker check
+For silent mode: llm-checker check --no-verbose

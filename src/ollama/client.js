@@ -1,4 +1,4 @@
-const fetch = require('node-fetch');
+const fetch = require('../utils/fetch');
 
 class OllamaClient {
     constructor(baseURL = null) {
@@ -377,6 +377,29 @@ class OllamaClient {
         }
     }
 
+    calculateTokensPerSecond(data, totalTimeMs) {
+        const evalCount = Number(data?.eval_count) || 0;
+        const evalDurationNs = Number(data?.eval_duration) || 0;
+        const totalSeconds = Math.max(0, Number(totalTimeMs) || 0) / 1000;
+
+        const evalTokensPerSecond = evalDurationNs > 0 && evalCount > 0
+            ? (evalCount / (evalDurationNs / 1_000_000_000))
+            : 0;
+
+        const endToEndTokensPerSecond = totalSeconds > 0 && evalCount > 0
+            ? (evalCount / totalSeconds)
+            : 0;
+
+        // Prefer eval-only throughput when available because it excludes load/setup overhead.
+        const preferred = evalTokensPerSecond > 0 ? evalTokensPerSecond : endToEndTokensPerSecond;
+
+        return {
+            tokensPerSecond: Math.round(preferred * 10) / 10,
+            evalTokensPerSecond: Math.round(evalTokensPerSecond * 10) / 10,
+            endToEndTokensPerSecond: Math.round(endToEndTokensPerSecond * 10) / 10
+        };
+    }
+
     async testModelPerformance(modelName, testPrompt = "Hello, how are you?") {
         const availability = await this.checkOllamaAvailability();
         if (!availability.available) {
@@ -413,13 +436,15 @@ class OllamaClient {
             const endTime = Date.now();
 
             const totalTime = endTime - startTime;
-            const tokensGenerated = data.eval_count || 50;
-            const tokensPerSecond = Math.round((tokensGenerated / (totalTime / 1000)) * 10) / 10;
+            const tokensGenerated = Number(data.eval_count) || 0;
+            const speed = this.calculateTokensPerSecond(data, totalTime);
 
             return {
                 success: true,
                 responseTime: totalTime,
-                tokensPerSecond,
+                tokensPerSecond: speed.tokensPerSecond,
+                evalTokensPerSecond: speed.evalTokensPerSecond,
+                endToEndTokensPerSecond: speed.endToEndTokensPerSecond,
                 tokensGenerated,
                 loadTime: data.load_duration ? Math.round(data.load_duration / 1000000) : null,
                 evalTime: data.eval_duration ? Math.round(data.eval_duration / 1000000) : null,

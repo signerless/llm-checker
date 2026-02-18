@@ -1,0 +1,62 @@
+
+llm-checker | Ollama Integration
+------------------------------------------
+- Checking Ollama integration...
+
+
+██░░░░░░░░░░░░░░░░░░ 13% [1/8] System Detection
+    └─ Scanning hardware specifications...
+    ├─ CPU detected: M4 Pro (12 cores) (525ms)
+    └─ Memory detected: 24GB unified memory (726ms)
+      M4 Pro, 24GB RAM, Apple M4 Pro
+    └─ 729ms
+    ├─ CPU detected: M4 Pro (12 cores) (729ms)
+    └─ Memory detected: 24GB unified memory (930ms)
+      M4 Pro, 24GB RAM, Apple M4 Pro
+    └─ 930ms
+
+█████░░░░░░░░░░░░░░░ 25% [2/8] Database Sync
+    └─ Loading model database...
+    177 models in database
+      Database synchronized
+    └─ 0ms
+
+███████░░░░░░░░░░░░░ 38% [3/8] Model Analysis
+    └─ Loading base model definitions...
+    Loaded 26 base models
+      Base models loaded
+    └─ 0ms
+
+██████████░░░░░░░░░░ 50% [4/8] Ollama Integration
+    └─ Connecting to Ollama and checking installed models...
+    Ollama connected with 9 locally installed models
+      Ollama integration complete
+    └─ 56ms
+
+████████████░░░░░░░░ 63% [5/8] Model Filtering
+    └─ Applying user-specified filters...
+    └─ Cloud models excluded (0ms)
+      26/26 models selected
+    └─ 0ms
+
+███████████████░░░░░ 75% [6/8] Compatibility Analysis
+    └─ Running mathematical heuristics and hardware matching...
+      11 compatible, 8 marginal
+    └─ 2ms
+
+█████████████████░░░ 88% [7/8] Performance Analysis
+    └─ Estimating model performance and speeds...
+      Performance data for 19 models
+    └─ 1ms
+
+████████████████████ 100% [8/8] Smart Recommendations
+    └─ Generating personalized model suggestions...
+    └─ Generating apple_silicon recommendations... (561ms)
+      6 recommendations generated
+    └─ 561ms
+────────────────────────────────────────────────────────────
+LLM Model Analysis & Compatibility Check complete!
+   Found 11 compatible (8 marginal) models for your hardware
+   Total time: 1.6s
+
+✔ Ollama integration active

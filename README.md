@@ -254,6 +254,12 @@ npm install -g llm-checker
 claude mcp add llm-checker -- llm-checker-mcp
 ```
 
+Or generate the exact command directly from the CLI:
+
+```bash
+llm-checker mcp-setup
+```
+
 Or with npx (no global install needed):
 
 ```bash
@@ -352,6 +358,7 @@ llm-checker search "qwen coder" --json
 | `calibrate` | Generate calibration result + routing policy artifacts from a JSONL prompt suite |
 | `installed` | Rank your installed Ollama models by compatibility |
 | `ollama-plan` | Compute safe Ollama runtime env vars (`NUM_CTX`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) for selected local models |
+| `mcp-setup` | Print/apply Claude MCP setup command and config snippet (`--apply`, `--json`, `--npx`) |
 
 ### Advanced Commands (require `sql.js`)
 
