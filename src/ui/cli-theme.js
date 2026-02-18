@@ -386,12 +386,13 @@ function drawTextBanner(lines, options = {}) {
 
         if (
             fittedContent.includes('INTELLIGENT OLLAMA MODEL SELECTOR') ||
-            fittedContent.includes('Deterministic scoring across 35+ curated models') ||
+            fittedContent.includes('Deterministic scoring across') ||
             fittedContent.includes('Run: llm-checker recommend')
         ) {
             inner = chalk.hex('#60A5FA')(fittedContent);
         } else if (
-            fittedContent.includes('[35+ MODELS]') ||
+            fittedContent.includes('[200+ DYNAMIC MODELS]') ||
+            fittedContent.includes('[35+ FALLBACK]') ||
             fittedContent.includes('[4D SCORING]') ||
             fittedContent.includes('[MULTI-GPU]') ||
             fittedContent.includes('[MCP SERVER]')
