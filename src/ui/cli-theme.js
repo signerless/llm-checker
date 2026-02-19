@@ -48,7 +48,9 @@ const MASCOT_MASK = [
 
 const DEFAULT_LOOP = true;
 const FRAMES_PER_SECOND = 14;
-const DEFAULT_BANNER_SOURCE = path.join(os.homedir(), 'Downloads', 'ascii-motion-cli.tsx');
+// Security: do not auto-load executable-style banner sources from user-writable folders.
+// External banner loading is opt-in via LLM_CHECKER_BANNER_SOURCE and supports JSON only.
+const DEFAULT_BANNER_SOURCE = null;
 const DEFAULT_TEXT_BANNER_SOURCE = path.join(
     os.homedir(),
     'Desktop',
@@ -74,80 +76,28 @@ function fitLine(line, width) {
     return `${value.slice(0, width - 3)}...`;
 }
 
-function extractBalanced(source, startIndex, openChar, closeChar) {
-    if (startIndex < 0 || source[startIndex] !== openChar) return null;
-
-    let depth = 0;
-    let inString = null;
-    let escape = false;
-
-    for (let index = startIndex; index < source.length; index += 1) {
-        const char = source[index];
-
-        if (inString) {
-            if (escape) {
-                escape = false;
-                continue;
-            }
-
-            if (char === '\\') {
-                escape = true;
-                continue;
-            }
-
-            if (char === inString) {
-                inString = null;
-            }
-
-            continue;
-        }
-
-        if (char === '"' || char === '\'' || char === '`') {
-            inString = char;
-            continue;
-        }
-
-        if (char === openChar) {
-            depth += 1;
-        } else if (char === closeChar) {
-            depth -= 1;
-            if (depth === 0) {
-                return source.slice(startIndex, index + 1);
-            }
-        }
-    }
-
-    return null;
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function extractAssignedLiteral(source, constName, openChar, closeChar) {
-    const marker = `const ${constName}`;
-    const markerIndex = source.indexOf(marker);
-    if (markerIndex < 0) return null;
-
-    const equalsIndex = source.indexOf('=', markerIndex);
-    if (equalsIndex < 0) return null;
-
-    const startIndex = source.indexOf(openChar, equalsIndex);
-    if (startIndex < 0) return null;
-
-    return extractBalanced(source, startIndex, openChar, closeChar);
-}
-
-function evaluateLiteral(literal) {
-    if (!literal) return null;
+function parseExternalBannerPayload(source) {
+    let parsed = null;
     try {
-        return Function(`"use strict"; return (${literal});`)();
+        parsed = JSON.parse(source);
     } catch {
         return null;
     }
-}
 
-function parseNumericConstant(source, constName) {
-    const match = source.match(new RegExp(`const\\s+${constName}\\s*=\\s*(\\d+(?:\\.\\d+)?)`));
-    if (!match) return null;
-    const parsed = Number.parseFloat(match[1]);
-    return Number.isFinite(parsed) ? parsed : null;
+    if (!isPlainObject(parsed)) return null;
+    const frames = Array.isArray(parsed.frames) ? parsed.frames : null;
+    if (!frames || frames.length === 0) return null;
+
+    return {
+        frames,
+        themeDark: isPlainObject(parsed.themeDark) ? parsed.themeDark : {},
+        themeLight: isPlainObject(parsed.themeLight) ? parsed.themeLight : {},
+        canvasWidth: Number.isFinite(parsed.canvasWidth) ? parsed.canvasWidth : null
+    };
 }
 
 function getLongestFrameLine(frames) {
@@ -176,6 +126,18 @@ function normalizeExternalFrame(frame, contentWidth, defaultDuration) {
 
 function loadExternalBanner(sourceFile) {
     const filePath = sourceFile || process.env.LLM_CHECKER_BANNER_SOURCE || DEFAULT_BANNER_SOURCE;
+    if (!filePath) return null;
+
+    const extension = path.extname(filePath).toLowerCase();
+    if (extension !== '.json') {
+        cachedExternalBanner = {
+            filePath,
+            mtimeMs: -1,
+            payload: null
+        };
+        return null;
+    }
+
     let mtimeMs = -1;
 
     try {
@@ -200,16 +162,8 @@ function loadExternalBanner(sourceFile) {
 
     try {
         const source = fs.readFileSync(filePath, 'utf8');
-        const framesLiteral = extractAssignedLiteral(source, 'FRAMES', '[', ']');
-        const darkThemeLiteral = extractAssignedLiteral(source, 'THEME_DARK', '{', '}');
-        const lightThemeLiteral = extractAssignedLiteral(source, 'THEME_LIGHT', '{', '}');
-
-        const frames = evaluateLiteral(framesLiteral);
-        const themeDark = evaluateLiteral(darkThemeLiteral);
-        const themeLight = evaluateLiteral(lightThemeLiteral);
-        const canvasWidth = parseNumericConstant(source, 'CANVAS_WIDTH');
-
-        if (!Array.isArray(frames) || frames.length === 0) {
+        const payload = parseExternalBannerPayload(source);
+        if (!payload) {
             cachedExternalBanner = {
                 filePath,
                 mtimeMs,
@@ -217,13 +171,6 @@ function loadExternalBanner(sourceFile) {
             };
             return null;
         }
-
-        const payload = {
-            frames,
-            themeDark: themeDark && typeof themeDark === 'object' ? themeDark : {},
-            themeLight: themeLight && typeof themeLight === 'object' ? themeLight : {},
-            canvasWidth: Number.isFinite(canvasWidth) ? canvasWidth : null
-        };
 
         cachedExternalBanner = {
             filePath,
