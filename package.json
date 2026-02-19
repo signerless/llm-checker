@@ -10,6 +10,7 @@
   "main": "src/index.js",
   "scripts": {
     "test": "node tests/run-all-tests.js",
+    "test:roadmap": "node tests/roadmap-tools.test.js",
     "test:gpu": "node tests/amd-gpu-detection.test.js",
     "test:platform": "node tests/hardware-simulation-tests.js",
     "test:ui": "node tests/ui-cli-smoke.test.js",
@@ -26,6 +27,10 @@
     "dev": "node bin/enhanced_cli.js",
     "start": "node bin/enhanced_cli.js",
     "check": "node bin/enhanced_cli.js check",
+    "gpu-plan": "node bin/enhanced_cli.js gpu-plan",
+    "verify-context": "node bin/enhanced_cli.js verify-context",
+    "amd-guard": "node bin/enhanced_cli.js amd-guard",
+    "toolcheck": "node bin/enhanced_cli.js toolcheck",
     "recommend": "node bin/enhanced_cli.js recommend",
     "ollama": "node bin/enhanced_cli.js ollama",
     "list-models": "node bin/enhanced_cli.js list-models",

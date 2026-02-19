@@ -4268,6 +4268,421 @@ program
     });
 
 program
+    .command('gpu-plan')
+    .description('Multi-GPU placement advisor with safe model-size envelopes')
+    .option('--model-size <gb>', 'Validate a target model size (e.g. 14 or 14GB)')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        if (!options.json) showAsciiArt('hw-detect');
+        const spinner = options.json ? null : ora('Building GPU placement plan...').start();
+
+        try {
+            const UnifiedDetector = require('../src/hardware/unified-detector');
+            const { buildGpuPlan } = require('../src/commands/roadmap-tools');
+
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+
+            const modelSizeGB = options.modelSize !== undefined ? parseFloat(options.modelSize) : null;
+            if (options.modelSize !== undefined && (!Number.isFinite(modelSizeGB) || modelSizeGB <= 0)) {
+                throw new Error('Invalid --model-size value. Use a positive number (GB).');
+            }
+
+            const plan = buildGpuPlan(hardware, { modelSizeGB });
+
+            if (options.json) {
+                console.log(JSON.stringify(plan, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('GPU placement plan ready');
+
+            console.log(chalk.blue.bold('\n=== Multi-GPU Placement Plan ==='));
+            console.log(`Backend: ${chalk.cyan((plan.backend || 'cpu').toUpperCase())}`);
+            console.log(`Detected GPUs: ${chalk.white(plan.gpuCount)}`);
+            console.log(`Total VRAM/Unified: ${chalk.green(`${plan.totalVRAM}GB`)}`);
+            console.log(`Single-GPU safe envelope: ${chalk.yellow(`${plan.singleMaxModelGB}GB`)}`);
+            console.log(`Pooled safe envelope: ${chalk.yellow(`${plan.pooledMaxModelGB}GB`)}`);
+            console.log(`Strategy: ${chalk.cyan(plan.strategy)} (${plan.strategyReason})`);
+
+            if (plan.gpus.length > 0) {
+                const rows = [
+                    ['#', 'Backend', 'GPU', 'VRAM/Unified', 'Speed Coef']
+                ];
+                plan.gpus.forEach((gpu, index) => {
+                    rows.push([
+                        String(index + 1),
+                        gpu.backend.toUpperCase(),
+                        gpu.name,
+                        `${gpu.vramGB}GB`,
+                        String(gpu.speedCoefficient || 0)
+                    ]);
+                });
+                console.log('\n' + table(rows));
+            }
+
+            if (plan.fit) {
+                const fit = plan.fit;
+                const status = fit.fitsSingleGPU || fit.fitsPooled ? chalk.green('[OK]') : chalk.red('[FAIL]');
+                console.log(`${status} Target model ${fit.modelSizeGB}GB`);
+                console.log(`   Fits single GPU: ${fit.fitsSingleGPU ? 'yes' : 'no'}`);
+                console.log(`   Fits pooled setup: ${fit.fitsPooled ? 'yes' : 'no'}`);
+            }
+
+            console.log(chalk.blue.bold('\nRecommended env:'));
+            for (const [key, value] of Object.entries(plan.env || {})) {
+                console.log(chalk.cyan(`  export ${key}="${value}"`));
+            }
+
+            if (Array.isArray(plan.recommendations) && plan.recommendations.length > 0) {
+                console.log(chalk.blue.bold('\nRecommendations:'));
+                for (const item of plan.recommendations) {
+                    console.log(chalk.gray(`  - ${item}`));
+                }
+            }
+
+            console.log('');
+        } catch (error) {
+            if (spinner) spinner.fail('GPU plan failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('verify-context')
+    .description('Verify practical context window limits for a local Ollama model')
+    .option('-m, --model <name>', 'Model to verify (default: first installed model)')
+    .option('-t, --target <tokens>', 'Target context window tokens to validate', '8192')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        if (!options.json) showAsciiArt('ollama');
+        const spinner = options.json ? null : ora('Verifying context window...').start();
+
+        try {
+            const OllamaClient = require('../src/ollama/client');
+            const UnifiedDetector = require('../src/hardware/unified-detector');
+            const {
+                buildContextVerification,
+                extractContextWindow
+            } = require('../src/commands/roadmap-tools');
+
+            const targetTokens = parseInt(options.target, 10);
+            if (!Number.isFinite(targetTokens) || targetTokens <= 0) {
+                throw new Error('Invalid --target value. Use a positive integer.');
+            }
+
+            const ollama = new OllamaClient();
+            const availability = await ollama.checkOllamaAvailability();
+            if (!availability.available) {
+                throw new Error(availability.error || 'Ollama is not available');
+            }
+
+            const installed = await ollama.getLocalModels();
+            if (!installed.length) {
+                throw new Error('No local Ollama models installed. Pull one model first.');
+            }
+
+            let selected = installed[0];
+            if (options.model) {
+                const needle = options.model.toLowerCase();
+                selected = installed.find((m) =>
+                    m.name.toLowerCase() === needle ||
+                    m.name.toLowerCase().startsWith(`${needle}:`) ||
+                    m.name.toLowerCase().includes(needle)
+                );
+                if (!selected) {
+                    throw new Error(`Model "${options.model}" not found in local Ollama models.`);
+                }
+            }
+
+            let showPayload = null;
+            try {
+                showPayload = await ollama.showModel(selected.name);
+            } catch (err) {
+                // Continue even if show metadata fails; memory verification still works.
+                if (!options.json && spinner) {
+                    spinner.info(`Metadata probe warning: ${err.message}`);
+                    spinner.start('Continuing with hardware-based estimate...');
+                }
+            }
+
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+            const declaredContext = extractContextWindow(showPayload);
+
+            const verification = buildContextVerification({
+                modelName: selected.name,
+                targetTokens,
+                declaredContext,
+                modelSizeGB: selected.fileSizeGB || 7,
+                hardware
+            });
+
+            const output = {
+                model: selected.name,
+                targetTokens,
+                declaredContext,
+                modelSizeGB: selected.fileSizeGB || null,
+                verification
+            };
+
+            if (options.json) {
+                console.log(JSON.stringify(output, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('Context verification complete');
+
+            const statusColor = verification.status === 'pass'
+                ? chalk.green
+                : verification.status === 'warn'
+                    ? chalk.yellow
+                    : chalk.red;
+
+            console.log(chalk.blue.bold('\n=== Context Verification ==='));
+            console.log(`Model: ${chalk.white.bold(selected.name)}`);
+            console.log(`Target: ${chalk.cyan(`${targetTokens} tokens`)}`);
+            console.log(`Declared context: ${chalk.cyan(declaredContext ? `${declaredContext} tokens` : 'not exposed')}`);
+            console.log(`Estimated memory-safe context: ${chalk.cyan(`${verification.memoryLimitedContext} tokens`)}`);
+            console.log(`Recommended runtime context: ${chalk.cyan(`${verification.recommendedContext} tokens`)}`);
+            console.log(statusColor(`Status: ${verification.status.toUpperCase()}`));
+
+            console.log(chalk.blue.bold('\nChecks:'));
+            for (const check of verification.checks) {
+                const icon = check.status === 'pass' ? chalk.green('[OK]') :
+                    check.status === 'warn' ? chalk.yellow('[!]') : chalk.red('[FAIL]');
+                console.log(`  ${icon} ${check.message}`);
+            }
+
+            if (verification.suggestions.length > 0) {
+                console.log(chalk.blue.bold('\nSuggestions:'));
+                for (const suggestion of verification.suggestions) {
+                    console.log(chalk.gray(`  - ${suggestion}`));
+                }
+            }
+
+            console.log(chalk.cyan(`\nSuggested run: ollama run ${selected.name}`));
+            console.log(chalk.cyan(`# with context budget: --ctx-size ${verification.recommendedContext}`));
+            console.log('');
+        } catch (error) {
+            if (spinner) spinner.fail('Context verification failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('amd-guard')
+    .description('AMD/Windows reliability guard with actionable mitigation hints')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        if (!options.json) showAsciiArt('hw-detect');
+        const spinner = options.json ? null : ora('Running AMD reliability guard...').start();
+
+        try {
+            const UnifiedDetector = require('../src/hardware/unified-detector');
+            const ROCmDetector = require('../src/hardware/backends/rocm-detector');
+            const { buildAmdGuard } = require('../src/commands/roadmap-tools');
+
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+
+            const rocmDetector = new ROCmDetector();
+            const rocmAvailable = rocmDetector.checkAvailability();
+            const report = buildAmdGuard({
+                platform: process.platform,
+                hardware,
+                rocmAvailable,
+                rocmDetectionMethod: rocmDetector.detectionMethod
+            });
+
+            if (options.json) {
+                console.log(JSON.stringify(report, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed('AMD guard report ready');
+
+            const statusColor = report.status === 'pass'
+                ? chalk.green
+                : report.status === 'warn'
+                    ? chalk.yellow
+                    : chalk.red;
+
+            console.log(chalk.blue.bold('\n=== AMD Reliability Guard ==='));
+            console.log(`Platform: ${chalk.white(process.platform)}`);
+            console.log(`Primary backend: ${chalk.cyan((report.primaryBackend || 'cpu').toUpperCase())}`);
+            console.log(`ROCm available: ${chalk.cyan(report.rocmAvailable ? 'yes' : 'no')}`);
+            console.log(`Detection method: ${chalk.cyan(report.rocmDetectionMethod || 'none')}`);
+            console.log(statusColor(`Status: ${report.status.toUpperCase()}`));
+
+            console.log(chalk.blue.bold('\nChecks:'));
+            for (const check of report.checks) {
+                const icon = check.status === 'pass' ? chalk.green('[OK]') :
+                    check.status === 'warn' ? chalk.yellow('[!]') : chalk.red('[FAIL]');
+                console.log(`  ${icon} ${check.message}`);
+            }
+
+            if (report.recommendations.length > 0) {
+                console.log(chalk.blue.bold('\nRecommendations:'));
+                for (const recommendation of report.recommendations) {
+                    console.log(chalk.gray(`  - ${recommendation}`));
+                }
+            }
+            console.log('');
+        } catch (error) {
+            if (spinner) spinner.fail('AMD guard failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
+    .command('toolcheck')
+    .description('Tool-calling compatibility tester for local Ollama models')
+    .option('-m, --model <name>', 'Test a specific model')
+    .option('--all', 'Test all installed models')
+    .option('--timeout <ms>', 'Per-model timeout in milliseconds', '45000')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        if (!options.json) showAsciiArt('ollama');
+        const spinner = options.json ? null : ora('Running tool-calling compatibility checks...').start();
+
+        try {
+            const OllamaClient = require('../src/ollama/client');
+            const { evaluateToolCallingResult } = require('../src/commands/roadmap-tools');
+
+            const timeoutMs = parseInt(options.timeout, 10);
+            if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+                throw new Error('Invalid --timeout value. Use a positive integer in ms.');
+            }
+
+            const ollama = new OllamaClient();
+            const availability = await ollama.checkOllamaAvailability();
+            if (!availability.available) {
+                throw new Error(availability.error || 'Ollama is not available');
+            }
+
+            const installed = await ollama.getLocalModels();
+            if (!installed.length) {
+                throw new Error('No local Ollama models installed.');
+            }
+
+            let targets = installed;
+            if (options.model) {
+                const needle = options.model.toLowerCase();
+                targets = installed.filter((m) =>
+                    m.name.toLowerCase() === needle ||
+                    m.name.toLowerCase().startsWith(`${needle}:`) ||
+                    m.name.toLowerCase().includes(needle)
+                );
+                if (!targets.length) {
+                    throw new Error(`Model "${options.model}" not found in local Ollama models.`);
+                }
+            } else if (!options.all) {
+                targets = installed.slice(0, 1);
+            }
+
+            const toolSpec = [
+                {
+                    type: 'function',
+                    function: {
+                        name: 'add_numbers',
+                        description: 'Add two integers and return the sum',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                a: { type: 'integer' },
+                                b: { type: 'integer' }
+                            },
+                            required: ['a', 'b']
+                        }
+                    }
+                }
+            ];
+
+            const results = [];
+            for (const model of targets) {
+                if (spinner) spinner.text = `Testing ${model.name}...`;
+
+                let payload = null;
+                let err = null;
+                try {
+                    payload = await ollama.chat(
+                        model.name,
+                        [{ role: 'user', content: 'Use the add_numbers tool with a=2 and b=3. Call the tool directly.' }],
+                        {
+                            tools: toolSpec,
+                            timeoutMs,
+                            generationOptions: {
+                                temperature: 0,
+                                num_predict: 64
+                            }
+                        }
+                    );
+                } catch (error) {
+                    err = error;
+                }
+
+                const evaluation = evaluateToolCallingResult(payload, err);
+                results.push({
+                    model: model.name,
+                    status: evaluation.status,
+                    score: evaluation.score,
+                    reason: evaluation.reason,
+                    toolCalls: evaluation.toolCalls
+                });
+            }
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    testedModels: results.length,
+                    results
+                }, null, 2));
+                return;
+            }
+
+            if (spinner) spinner.succeed(`Toolcheck completed (${results.length} model${results.length > 1 ? 's' : ''})`);
+
+            const rows = [['Model', 'Status', 'Score', 'Reason']];
+            for (const result of results) {
+                const statusLabel = result.status === 'supported'
+                    ? chalk.green('SUPPORTED')
+                    : result.status === 'partial'
+                        ? chalk.yellow('PARTIAL')
+                        : chalk.red('UNSUPPORTED');
+                rows.push([
+                    result.model,
+                    statusLabel,
+                    String(result.score),
+                    result.reason
+                ]);
+            }
+
+            console.log('\n' + table(rows));
+
+            const supported = results.filter((r) => r.status === 'supported').length;
+            const partial = results.filter((r) => r.status === 'partial').length;
+            const unsupported = results.filter((r) => r.status === 'unsupported').length;
+
+            console.log(chalk.blue.bold('Summary:'));
+            console.log(chalk.green(`  Supported: ${supported}`));
+            console.log(chalk.yellow(`  Partial: ${partial}`));
+            console.log(chalk.red(`  Unsupported: ${unsupported}`));
+            console.log('');
+        } catch (error) {
+            if (spinner) spinner.fail('Toolcheck failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(1);
+        }
+    });
+
+program
     .command('hw-detect')
     .description('Detect and display detailed hardware capabilities')
     .option('-j, --json', 'Output as JSON')

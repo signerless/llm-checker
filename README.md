@@ -349,6 +349,10 @@ llm-checker search "qwen coder" --json
 | `installed` | Rank your installed Ollama models by compatibility |
 | `ollama-plan` | Compute safe Ollama runtime env vars (`NUM_CTX`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) for selected local models |
 | `mcp-setup` | Print/apply Claude MCP setup command and config snippet (`--apply`, `--json`, `--npx`) |
+| `gpu-plan` | Multi-GPU placement advisor with single/pooled model-size envelopes |
+| `verify-context` | Verify practical context-window limits for a local model |
+| `amd-guard` | AMD/Windows reliability guard with mitigation hints |
+| `toolcheck` | Test tool-calling compatibility for local models |
 
 ### Advanced Commands (require `sql.js`)
 

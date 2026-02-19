@@ -163,6 +163,10 @@ const ALLOWED_CLI_COMMANDS = new Set([
   "audit",
   "calibrate",
   "check",
+  "gpu-plan",
+  "verify-context",
+  "amd-guard",
+  "toolcheck",
   "ollama",
   "installed",
   "ollama-plan",
@@ -269,6 +273,62 @@ server.tool(
   async ({ use_case }) => {
     const args = ["smart-recommend"];
     if (use_case) args.push("--use-case", use_case);
+    const result = await run(args, 180000);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "gpu_plan",
+  "Multi-GPU placement advisor that returns safe single/pooled model-size envelopes and recommended Ollama env settings",
+  {
+    model_size: z.number().optional().describe("Optional target model size in GB to validate"),
+  },
+  async ({ model_size }) => {
+    const args = ["gpu-plan"];
+    if (model_size) args.push("--model-size", String(model_size));
+    const result = await run(args, 60000);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "verify_context",
+  "Verify practical context-window limits for a local Ollama model using model metadata and hardware memory budget",
+  {
+    model: z.string().optional().describe("Model name to validate (default: first installed model)"),
+    target_tokens: z.number().optional().describe("Target context window tokens (default: 8192)"),
+  },
+  async ({ model, target_tokens }) => {
+    const args = ["verify-context"];
+    if (model) args.push("--model", model);
+    if (target_tokens) args.push("--target", String(target_tokens));
+    const result = await run(args, 90000);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "amd_guard",
+  "Run AMD/Windows reliability guard checks and return mitigation hints for unstable GPU paths",
+  {},
+  async () => {
+    const result = await run(["amd-guard"], 60000);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "toolcheck",
+  "Test tool-calling compatibility of local Ollama models and classify support as supported/partial/unsupported",
+  {
+    model: z.string().optional().describe("Optional model to test"),
+    all: z.boolean().optional().describe("Test all installed models instead of only one"),
+  },
+  async ({ model, all }) => {
+    const args = ["toolcheck"];
+    if (model) args.push("--model", model);
+    if (all) args.push("--all");
     const result = await run(args, 180000);
     return { content: [{ type: "text", text: result }] };
   }

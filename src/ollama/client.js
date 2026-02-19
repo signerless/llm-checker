@@ -458,6 +458,87 @@ class OllamaClient {
             };
         }
     }
+
+    async showModel(modelName) {
+        const availability = await this.checkOllamaAvailability();
+        if (!availability.available) {
+            throw new Error(`Ollama not available: ${availability.error}`);
+        }
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            const response = await fetch(`${this.baseURL}/api/show`, {
+                method: 'POST',
+                signal: controller.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName })
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+            }
+
+            return response.json();
+        } catch (error) {
+            throw new Error(`Failed to show model info: ${error.message}`);
+        }
+    }
+
+    async chat(modelName, messages, options = {}) {
+        const availability = await this.checkOllamaAvailability();
+        if (!availability.available) {
+            throw new Error(`Ollama not available: ${availability.error}`);
+        }
+
+        const {
+            tools,
+            format,
+            keepAlive,
+            timeoutMs = 45000,
+            generationOptions = {}
+        } = options;
+
+        const payload = {
+            model: modelName,
+            messages: Array.isArray(messages) ? messages : [],
+            stream: false
+        };
+
+        if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+        if (format) payload.format = format;
+        if (keepAlive) payload.keep_alive = keepAlive;
+        if (generationOptions && Object.keys(generationOptions).length > 0) {
+            payload.options = generationOptions;
+        }
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+            const response = await fetch(`${this.baseURL}/api/chat`, {
+                method: 'POST',
+                signal: controller.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+            }
+
+            return response.json();
+        } catch (error) {
+            throw new Error(`Failed to run chat request: ${error.message}`);
+        }
+    }
 }
 
 module.exports = OllamaClient;
