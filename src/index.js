@@ -32,6 +32,21 @@ class LLMChecker {
         this.logger = getLogger().createChild('LLMChecker');
         this.verbose = options.verbose !== false; // Default to verbose unless explicitly disabled
         this.progress = null; // Will be initialized when needed
+        this._isSimulated = false;
+    }
+
+    setSimulatedHardware(hardwareObject) {
+        this.hardwareDetector.setSimulatedHardware(hardwareObject);
+        this._isSimulated = true;
+    }
+
+    clearSimulatedHardware() {
+        this.hardwareDetector.clearSimulatedHardware();
+        this._isSimulated = false;
+    }
+
+    get isSimulated() {
+        return this._isSimulated;
     }
 
     async analyze(options = {}) {
@@ -47,7 +62,10 @@ class LLMChecker {
 
             // Step 1: Hardware Detection
             if (this.progress) {
-                this.progress.step('System Detection', 'Scanning hardware specifications...');
+                const detectionLabel = this._isSimulated
+                    ? 'Using simulated hardware profile...'
+                    : 'Scanning hardware specifications...';
+                this.progress.step('System Detection', detectionLabel);
             }
             
             const hardware = await this.hardwareDetector.getSystemInfo();

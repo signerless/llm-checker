@@ -7,9 +7,22 @@ class HardwareDetector {
         this.cacheExpiry = 5 * 60 * 1000;
         this.cacheTime = 0;
         this.unifiedDetector = new UnifiedDetector();
+        this._simulatedHardware = null;
+    }
+
+    setSimulatedHardware(hardwareObject) {
+        this._simulatedHardware = hardwareObject;
+    }
+
+    clearSimulatedHardware() {
+        this._simulatedHardware = null;
     }
 
     async getSystemInfo(forceFresh = false) {
+        // Return simulated hardware if set (bypasses real detection)
+        if (this._simulatedHardware) {
+            return this._simulatedHardware;
+        }
 
         if (!forceFresh && this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
             return this.cache;

@@ -11,6 +11,7 @@ const PRIMARY_COMMAND_PRIORITY = [
     'help',
     'mcp-setup',
     'recommend',
+    'simulate',
     'ai-run',
     'ollama-plan',
     'list-models',
