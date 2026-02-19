@@ -2940,6 +2940,10 @@ program
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
+    .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
+    .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
+    .option('--vram <gb>', 'Override GPU VRAM in GB for simulation (auto-detected if omitted)')
     .addHelpText(
         'after',
         `
@@ -2952,6 +2956,7 @@ Hardware simulation:
   $ llm-checker check --simulate list
   $ llm-checker check --simulate rtx4090
   $ llm-checker check --simulate m4pro24 --use-case coding
+  $ llm-checker check --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
 
 Policy scope:
   - Evaluates all compatible and marginal candidates discovered during analysis
@@ -2966,28 +2971,44 @@ Policy scope:
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
             const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
 
-            // Handle hardware simulation
-            if (options.simulate) {
-                const { buildFullHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
+            // Handle hardware simulation (preset profile or custom flags)
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu;
+            if (options.simulate || hasCustomHwFlags) {
+                const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
                 if (options.simulate === 'list') {
                     console.log(chalk.cyan.bold('\n  Available Hardware Profiles:\n'));
                     listProfiles().forEach(line => console.log(line));
                     console.log('');
                     return;
                 }
-                const profile = getProfile(options.simulate);
-                if (!profile) {
-                    console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
-                    console.log(chalk.gray('\n  Available profiles:'));
-                    listProfiles().forEach(line => console.log(line));
-                    console.log('');
-                    process.exit(1);
+                let simulatedHardware;
+                let displayLabel;
+                if (hasCustomHwFlags) {
+                    const ramValue = options.ram ? parseInt(options.ram) : undefined;
+                    const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    simulatedHardware = buildCustomHardwareObject({
+                        gpu: options.gpu || null,
+                        ram: ramValue,
+                        cpu: options.cpu || null,
+                        vram: vramValue
+                    });
+                    displayLabel = simulatedHardware._displayName;
+                } else {
+                    const profile = getProfile(options.simulate);
+                    if (!profile) {
+                        console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
+                        console.log(chalk.gray('\n  Available profiles:'));
+                        listProfiles().forEach(line => console.log(line));
+                        console.log('');
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildFullHardwareObject(options.simulate);
+                    displayLabel = profile.displayName;
                 }
-                const simulatedHardware = buildFullHardwareObject(options.simulate);
                 checker.setSimulatedHardware(simulatedHardware);
-                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${profile.displayName}\n`));
+                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
             }
-            
+
             // If verbose is disabled, show simple loading message
             if (!verboseEnabled) {
                 process.stdout.write(chalk.gray('Analyzing your system...'));
@@ -3459,6 +3480,10 @@ program
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
     .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
+    .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
+    .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
+    .option('--vram <gb>', 'Override GPU VRAM in GB for simulation (auto-detected if omitted)')
     .option(
         '--calibrated [file]',
         'Use calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
@@ -3474,6 +3499,7 @@ Enterprise policy examples:
 Hardware simulation:
   $ llm-checker recommend --simulate rtx4090
   $ llm-checker recommend --simulate m4pro24 --category coding
+  $ llm-checker recommend --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
 
 Calibrated routing examples:
   $ llm-checker recommend --calibrated --category coding
@@ -3487,26 +3513,42 @@ Calibrated routing examples:
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
 
-            // Handle hardware simulation
-            if (options.simulate) {
-                const { buildFullHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
+            // Handle hardware simulation (preset profile or custom flags)
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu;
+            if (options.simulate || hasCustomHwFlags) {
+                const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
                 if (options.simulate === 'list') {
                     console.log(chalk.cyan.bold('\n  Available Hardware Profiles:\n'));
                     listProfiles().forEach(line => console.log(line));
                     console.log('');
                     return;
                 }
-                const profile = getProfile(options.simulate);
-                if (!profile) {
-                    console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
-                    console.log(chalk.gray('\n  Available profiles:'));
-                    listProfiles().forEach(line => console.log(line));
-                    console.log('');
-                    process.exit(1);
+                let simulatedHardware;
+                let displayLabel;
+                if (hasCustomHwFlags) {
+                    const ramValue = options.ram ? parseInt(options.ram) : undefined;
+                    const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    simulatedHardware = buildCustomHardwareObject({
+                        gpu: options.gpu || null,
+                        ram: ramValue,
+                        cpu: options.cpu || null,
+                        vram: vramValue
+                    });
+                    displayLabel = simulatedHardware._displayName;
+                } else {
+                    const profile = getProfile(options.simulate);
+                    if (!profile) {
+                        console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
+                        console.log(chalk.gray('\n  Available profiles:'));
+                        listProfiles().forEach(line => console.log(line));
+                        console.log('');
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildFullHardwareObject(options.simulate);
+                    displayLabel = profile.displayName;
                 }
-                const simulatedHardware = buildFullHardwareObject(options.simulate);
                 checker.setSimulatedHardware(simulatedHardware);
-                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${profile.displayName}\n`));
+                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
             }
 
             const routingPreference = resolveRoutingPolicyPreference({
