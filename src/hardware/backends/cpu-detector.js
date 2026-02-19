@@ -99,9 +99,8 @@ class CPUDetector {
                 }
                 return coreIds.size || os.cpus().length;
             } else if (process.platform === 'win32') {
-                const wmic = execSync('wmic cpu get NumberOfCores', { encoding: 'utf8', timeout: 5000 });
-                const match = wmic.match(/\d+/);
-                return match ? parseInt(match[0]) : os.cpus().length;
+                const physicalCores = this.getWindowsPhysicalCoreCount();
+                return physicalCores || os.cpus().length;
             }
         } catch (e) {
             return os.cpus().length;
@@ -125,14 +124,75 @@ class CPUDetector {
                 );
                 return Math.round(parseInt(maxFreq) / 1000);  // kHz to MHz
             } else if (process.platform === 'win32') {
-                const wmic = execSync('wmic cpu get MaxClockSpeed', { encoding: 'utf8', timeout: 5000 });
-                const match = wmic.match(/\d+/);
-                return match ? parseInt(match[0]) : 0;
+                const maxClock = this.getWindowsMaxClockSpeed();
+                return maxClock || (os.cpus()[0]?.speed || 0);
             }
         } catch (e) {
             return os.cpus()[0]?.speed || 0;
         }
         return 0;
+    }
+
+    /**
+     * Execute shell command with consistent options.
+     */
+    runCommand(command) {
+        return execSync(command, { encoding: 'utf8', timeout: 5000 });
+    }
+
+    /**
+     * Extract first integer from command output.
+     */
+    extractFirstInteger(output) {
+        if (typeof output !== 'string') return null;
+        const match = output.match(/-?\d+/);
+        if (!match) return null;
+        const parsed = parseInt(match[0], 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    /**
+     * Try multiple Windows commands and return first numeric value.
+     */
+    queryWindowsNumeric(commands) {
+        for (const command of commands) {
+            try {
+                const output = this.runCommand(command);
+                const parsed = this.extractFirstInteger(output);
+                if (parsed !== null) {
+                    return parsed;
+                }
+            } catch (e) {
+                continue;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Get physical core count on Windows.
+     * WMIC can be absent on modern Windows 11, so we fallback to CIM.
+     */
+    getWindowsPhysicalCoreCount() {
+        const value = this.queryWindowsNumeric([
+            'wmic cpu get NumberOfCores /value',
+            'powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"',
+            'pwsh -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"'
+        ]);
+        return value && value > 0 ? value : null;
+    }
+
+    /**
+     * Get max clock speed on Windows (MHz).
+     * WMIC can be absent on modern Windows 11, so we fallback to CIM.
+     */
+    getWindowsMaxClockSpeed() {
+        const value = this.queryWindowsNumeric([
+            'wmic cpu get MaxClockSpeed /value',
+            'powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property MaxClockSpeed -Maximum).Maximum"',
+            'pwsh -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property MaxClockSpeed -Maximum).Maximum"'
+        ]);
+        return value && value > 0 ? value : null;
     }
 
     /**

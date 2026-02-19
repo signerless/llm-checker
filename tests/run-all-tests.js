@@ -11,6 +11,7 @@ const TESTS = [
     { name: 'CUDA Jetson detection', file: 'cuda-jetson-detection.test.js', category: 'Hardware' },
     { name: 'Hardware simulation scoring', file: 'hardware-simulation-tests.js', category: 'Hardware' },
     { name: 'Hardware detector regression', file: 'hardware-detector-regression.js', category: 'Hardware' },
+    { name: 'CPU detector Windows fallback', file: 'cpu-detector-windows-fallback.test.js', category: 'Hardware' },
     { name: 'Token speed estimation', file: 'token-speed-estimation.test.js', category: 'Performance' },
     { name: 'Deterministic model pool', file: 'deterministic-model-pool-check.js', category: 'Recommendations' },
     { name: 'Ollama capacity planner', file: 'ollama-capacity-planner.test.js', category: 'Ollama' },
