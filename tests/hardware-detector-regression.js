@@ -174,12 +174,69 @@ function testHeterogeneousGpuSummaryPreserved() {
     );
 }
 
+async function testUnifiedWindowsFallbackGpuDetection() {
+    const detector = new UnifiedDetector();
+    const si = require('systeminformation');
+    const originalGraphics = si.graphics;
+
+    si.graphics = async () => ({
+        controllers: [
+            {
+                model: 'AMD Radeon(TM) Graphics',
+                vendor: 'AMD',
+                vram: 512
+            },
+            {
+                model: 'AMD Radeon RX 7800 XT',
+                vendor: 'AMD',
+                vram: 16368
+            }
+        ],
+        displays: []
+    });
+
+    try {
+        const fallback = await detector.detectSystemGpuFallback();
+
+        assert.strictEqual(fallback.available, true, 'Fallback GPU detection should be available');
+        assert.strictEqual(fallback.hasDedicated, true, 'Fallback should detect dedicated GPU');
+        assert.strictEqual(fallback.totalVRAM, 16, 'RX 7800 XT fallback should normalize to 16GB');
+        assert.ok(
+            fallback.gpus.some((gpu) => gpu.name.toLowerCase().includes('rx 7800 xt')),
+            'Fallback GPU list should include RX 7800 XT'
+        );
+
+        const summary = detector.buildSummary({
+            cpu: { brand: 'AMD Ryzen 9 7900X', speedCoefficient: 120 },
+            primary: { type: 'cpu', name: 'CPU', info: { speedCoefficient: 120 } },
+            systemGpu: fallback
+        });
+
+        assert.strictEqual(summary.bestBackend, 'cpu', 'Fallback GPU should not override CPU backend selection');
+        assert.strictEqual(summary.totalVRAM, 16, 'Summary should include dedicated VRAM from fallback GPU');
+        assert.ok(
+            (summary.gpuInventory || '').toLowerCase().includes('rx 7800 xt'),
+            `Expected fallback inventory to include RX 7800 XT, got: ${summary.gpuInventory}`
+        );
+
+        detector.cache = { summary };
+        const description = detector.getHardwareDescription();
+        assert.ok(
+            description.toLowerCase().includes('rx 7800 xt'),
+            `CPU fallback description should include discrete GPU model, got: ${description}`
+        );
+    } finally {
+        si.graphics = originalGraphics;
+    }
+}
+
 async function run() {
     await testVendorlessTeslaDetection();
     await testUnifiedFallbackEnrichment();
     testGb10AndP100Mappings();
     testDeviceIdFallbackMappings();
     testHeterogeneousGpuSummaryPreserved();
+    await testUnifiedWindowsFallbackGpuDetection();
     console.log('✅ hardware-detector-regression.js passed');
 }
 

@@ -4337,6 +4337,17 @@ program
                         console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);
                     }
                 }
+
+                if (backend === 'generic' && info.info) {
+                    console.log(`  Source: ${info.info.source || 'systeminformation'}`);
+                    console.log(`  Total dedicated VRAM: ${info.info.totalVRAM || 0}GB`);
+                    for (const gpu of info.info.gpus || []) {
+                        const memory = gpu.memory?.total || 0;
+                        const typeLabel = gpu.type === 'integrated' ? 'Integrated' : 'Discrete';
+                        const memoryLabel = memory > 0 ? `${memory}GB` : 'shared/unknown';
+                        console.log(`  ${gpu.name}: ${memoryLabel} (${typeLabel})`);
+                    }
+                }
             }
 
             console.log(chalk.gray(`\nFingerprint: ${hardware.fingerprint}`));

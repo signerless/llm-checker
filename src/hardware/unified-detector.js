@@ -9,6 +9,7 @@ const CUDADetector = require('./backends/cuda-detector');
 const ROCmDetector = require('./backends/rocm-detector');
 const IntelDetector = require('./backends/intel-detector');
 const CPUDetector = require('./backends/cpu-detector');
+const si = require('systeminformation');
 
 class UnifiedDetector {
     constructor() {
@@ -37,6 +38,7 @@ class UnifiedDetector {
             backends: {},
             primary: null,
             cpu: null,
+            systemGpu: null,
             summary: {
                 bestBackend: 'cpu',
                 totalVRAM: 0,
@@ -119,6 +121,30 @@ class UnifiedDetector {
                 }
             } catch (e) {
                 result.backends.intel = { available: false, error: e.message };
+            }
+        }
+
+        // Fallback GPU inventory via systeminformation (Windows/Linux) when no
+        // accelerator backend is currently available (CUDA/ROCm/Metal/Intel).
+        const hasAcceleratedBackend = Boolean(
+            result.backends.cuda?.available ||
+            result.backends.rocm?.available ||
+            result.backends.metal?.available ||
+            result.backends.intel?.available
+        );
+
+        if (!hasAcceleratedBackend && (process.platform === 'win32' || process.platform === 'linux')) {
+            try {
+                const genericGpuInfo = await this.detectSystemGpuFallback();
+                if (genericGpuInfo?.available) {
+                    result.systemGpu = genericGpuInfo;
+                    result.backends.generic = {
+                        available: true,
+                        info: genericGpuInfo
+                    };
+                }
+            } catch (e) {
+                result.backends.generic = { available: false, error: e.message };
             }
         }
 
@@ -251,11 +277,22 @@ class UnifiedDetector {
         }
         else if (result.cpu) {
             summary.speedCoefficient = result.cpu.speedCoefficient;
+
+            if (result.systemGpu?.available && Array.isArray(result.systemGpu.gpus) && result.systemGpu.gpus.length > 0) {
+                const inventory = this.summarizeGPUInventory(result.systemGpu.gpus);
+                summary.totalVRAM = result.systemGpu.totalVRAM || 0;
+                summary.gpuCount = result.systemGpu.gpus.length;
+                summary.isMultiGPU = Boolean(result.systemGpu.isMultiGPU);
+                summary.gpuModel = inventory.primaryModel || null;
+                summary.gpuInventory = inventory.displayName || summary.gpuModel;
+                summary.gpuModels = inventory.models;
+                summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
+            }
         }
 
         // Effective memory for LLM loading
         // For GPU: use VRAM; for CPU/Metal: use system RAM
-        if (summary.totalVRAM > 0 && primary?.type !== 'metal') {
+        if (summary.totalVRAM > 0 && ['cuda', 'rocm', 'intel'].includes(primary?.type)) {
             summary.effectiveMemory = summary.totalVRAM;
         } else {
             // Use 70% of system RAM for models (leave room for OS)
@@ -284,6 +321,137 @@ class UnifiedDetector {
             models,
             isHeterogeneous: models.length > 1
         };
+    }
+
+    async detectSystemGpuFallback() {
+        const graphics = await si.graphics();
+        const controllers = Array.isArray(graphics?.controllers) ? graphics.controllers : [];
+
+        if (controllers.length === 0) {
+            return {
+                available: false,
+                source: 'systeminformation',
+                gpus: [],
+                totalVRAM: 0,
+                isMultiGPU: false,
+                hasDedicated: false
+            };
+        }
+
+        const normalized = controllers
+            .map((controller) => {
+                const name = String(controller?.model || controller?.name || '').replace(/\s+/g, ' ').trim();
+                if (!name || name.toLowerCase() === 'unknown') return null;
+
+                const nameLower = name.toLowerCase();
+                if (nameLower.includes('microsoft basic') || nameLower.includes('standard vga')) return null;
+
+                const isIntegrated = this.isIntegratedGPUModel(name);
+                let vram = this.normalizeFallbackVRAM(controller?.vram || controller?.memoryTotal || controller?.memory || 0);
+
+                // For dedicated cards, estimate VRAM from model if runtime did not report memory.
+                if (!isIntegrated && vram === 0) {
+                    vram = this.estimateFallbackVRAM(name);
+                }
+
+                return {
+                    name,
+                    vendor: controller?.vendor || '',
+                    type: isIntegrated ? 'integrated' : 'dedicated',
+                    memory: { total: vram }
+                };
+            })
+            .filter(Boolean);
+
+        if (normalized.length === 0) {
+            return {
+                available: false,
+                source: 'systeminformation',
+                gpus: [],
+                totalVRAM: 0,
+                isMultiGPU: false,
+                hasDedicated: false
+            };
+        }
+
+        const dedicated = normalized.filter((gpu) => gpu.type === 'dedicated');
+        const totalVRAM = dedicated.length > 0
+            ? dedicated.reduce((sum, gpu) => sum + (gpu.memory?.total || 0), 0)
+            : 0;
+
+        return {
+            available: true,
+            source: 'systeminformation',
+            gpus: normalized,
+            totalVRAM,
+            isMultiGPU: dedicated.length > 1,
+            hasDedicated: dedicated.length > 0
+        };
+    }
+
+    normalizeFallbackVRAM(value) {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num <= 0) return 0;
+
+        // Bytes -> GB
+        if (num > 1024 * 1024) {
+            return Math.round(num / (1024 * 1024 * 1024));
+        }
+
+        // MB -> GB
+        if (num >= 1024) {
+            return Math.round(num / 1024);
+        }
+
+        // Likely already GB
+        if (num >= 1 && num <= 80) {
+            return Math.round(num);
+        }
+
+        return 0;
+    }
+
+    isIntegratedGPUModel(model) {
+        const lower = String(model || '').toLowerCase();
+        if (!lower) return false;
+
+        if (lower.includes('radeon rx') || lower.includes('rtx') || lower.includes('gtx') ||
+            lower.includes('geforce') || lower.includes('tesla') || lower.includes('quadro') ||
+            lower.includes('instinct') || lower.includes('arc a') || lower.includes('radeon pro')) {
+            return false;
+        }
+
+        return (
+            lower.includes('intel') ||
+            lower.includes('iris') ||
+            lower.includes('uhd') ||
+            lower.includes('hd graphics') ||
+            lower.includes('radeon graphics') ||
+            lower.includes('radeon(tm) graphics') ||
+            lower.includes('vega') ||
+            lower.includes('apple')
+        );
+    }
+
+    estimateFallbackVRAM(model) {
+        const lower = String(model || '').toLowerCase();
+        if (!lower) return 0;
+
+        if (lower.includes('rx 7900')) return 24;
+        if (lower.includes('rx 7800')) return 16;
+        if (lower.includes('rx 7700')) return 12;
+        if (lower.includes('rx 7600 xt')) return 16;
+        if (lower.includes('rx 7600')) return 8;
+        if (lower.includes('rx 6900') || lower.includes('rx 6800')) return 16;
+        if (lower.includes('rx 6700')) return 12;
+
+        if (lower.includes('rtx 5090')) return 32;
+        if (lower.includes('rtx 4090') || lower.includes('rtx 3090')) return 24;
+        if (lower.includes('rtx 5080') || lower.includes('rtx 4080')) return 16;
+        if (lower.includes('rtx 5070') || lower.includes('rtx 4070') || lower.includes('rtx 3060')) return 12;
+        if (lower.includes('rtx 4060') || lower.includes('rtx 3070')) return 8;
+
+        return 0;
     }
 
     /**
@@ -448,6 +616,10 @@ class UnifiedDetector {
             return `${gpuDesc} (${summary.totalVRAM}GB) + ${summary.cpuModel}`;
         }
         else {
+            if (summary.gpuModel && summary.gpuCount > 0) {
+                const gpuDesc = summary.gpuInventory || summary.gpuModel;
+                return `${gpuDesc} (${summary.totalVRAM}GB VRAM detected, CPU backend) + ${summary.cpuModel}`;
+            }
             return `${summary.cpuModel} (${Math.round(summary.systemRAM)}GB RAM, CPU-only)`;
         }
     }
