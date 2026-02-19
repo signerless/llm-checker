@@ -65,6 +65,7 @@ const COMMAND_HEADER_LABELS = {
     demo: 'Demo',
     ollama: 'Ollama Integration',
     recommend: 'Recommendations',
+    simulate: 'Hardware Simulation',
     'list-models': 'Model Catalog'
 };
 
@@ -2938,6 +2939,11 @@ program
     .option('--performance-test', 'Run performance benchmarks')
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
+    .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
+    .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
+    .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
+    .option('--vram <gb>', 'Override GPU VRAM in GB for simulation (auto-detected if omitted)')
     .addHelpText(
         'after',
         `
@@ -2945,6 +2951,12 @@ Enterprise policy examples:
   $ llm-checker check --policy ./policy.yaml
   $ llm-checker check --policy ./policy.yaml --use-case coding --runtime vllm
   $ llm-checker check --policy ./policy.yaml --include-cloud --max-size 24B
+
+Hardware simulation:
+  $ llm-checker check --simulate list
+  $ llm-checker check --simulate rtx4090
+  $ llm-checker check --simulate m4pro24 --use-case coding
+  $ llm-checker check --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
 
 Policy scope:
   - Evaluates all compatible and marginal candidates discovered during analysis
@@ -2958,7 +2970,53 @@ Policy scope:
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
             const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
-            
+
+            // Handle hardware simulation (preset profile or custom flags)
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu || options.vram;
+            if (options.simulate || hasCustomHwFlags) {
+                const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
+                if (options.simulate === 'list') {
+                    console.log(chalk.cyan.bold('\n  Available Hardware Profiles:\n'));
+                    listProfiles().forEach(line => console.log(line));
+                    console.log('');
+                    return;
+                }
+                let simulatedHardware;
+                let displayLabel;
+                if (hasCustomHwFlags) {
+                    const ramValue = options.ram ? parseInt(options.ram) : undefined;
+                    const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                        process.exit(1);
+                    }
+                    if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildCustomHardwareObject({
+                        gpu: options.gpu || null,
+                        ram: ramValue,
+                        cpu: options.cpu || null,
+                        vram: vramValue
+                    });
+                    displayLabel = simulatedHardware._displayName;
+                } else {
+                    const profile = getProfile(options.simulate);
+                    if (!profile) {
+                        console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
+                        console.log(chalk.gray('\n  Available profiles:'));
+                        listProfiles().forEach(line => console.log(line));
+                        console.log('');
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildFullHardwareObject(options.simulate);
+                    displayLabel = profile.displayName;
+                }
+                checker.setSimulatedHardware(simulatedHardware);
+                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
+            }
+
             // If verbose is disabled, show simple loading message
             if (!verboseEnabled) {
                 process.stdout.write(chalk.gray('Analyzing your system...'));
@@ -3429,6 +3487,11 @@ program
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
+    .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
+    .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
+    .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
+    .option('--vram <gb>', 'Override GPU VRAM in GB for simulation (auto-detected if omitted)')
     .option(
         '--calibrated [file]',
         'Use calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
@@ -3441,6 +3504,11 @@ Enterprise policy examples:
   $ llm-checker recommend --policy ./policy.yaml --category coding
   $ llm-checker recommend --policy ./policy.yaml --no-verbose
 
+Hardware simulation:
+  $ llm-checker recommend --simulate rtx4090
+  $ llm-checker recommend --simulate m4pro24 --category coding
+  $ llm-checker recommend --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
+
 Calibrated routing examples:
   $ llm-checker recommend --calibrated --category coding
   $ llm-checker recommend --calibrated ./calibration-policy.yaml --category reasoning
@@ -3452,6 +3520,53 @@ Calibrated routing examples:
         try {
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+
+            // Handle hardware simulation (preset profile or custom flags)
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu || options.vram;
+            if (options.simulate || hasCustomHwFlags) {
+                const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
+                if (options.simulate === 'list') {
+                    console.log(chalk.cyan.bold('\n  Available Hardware Profiles:\n'));
+                    listProfiles().forEach(line => console.log(line));
+                    console.log('');
+                    return;
+                }
+                let simulatedHardware;
+                let displayLabel;
+                if (hasCustomHwFlags) {
+                    const ramValue = options.ram ? parseInt(options.ram) : undefined;
+                    const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                        process.exit(1);
+                    }
+                    if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildCustomHardwareObject({
+                        gpu: options.gpu || null,
+                        ram: ramValue,
+                        cpu: options.cpu || null,
+                        vram: vramValue
+                    });
+                    displayLabel = simulatedHardware._displayName;
+                } else {
+                    const profile = getProfile(options.simulate);
+                    if (!profile) {
+                        console.error(chalk.red(`\n  Unknown profile: ${options.simulate}`));
+                        console.log(chalk.gray('\n  Available profiles:'));
+                        listProfiles().forEach(line => console.log(line));
+                        console.log('');
+                        process.exit(1);
+                    }
+                    simulatedHardware = buildFullHardwareObject(options.simulate);
+                    displayLabel = profile.displayName;
+                }
+                checker.setSimulatedHardware(simulatedHardware);
+                console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
+            }
+
             const routingPreference = resolveRoutingPolicyPreference({
                 policyOption: options.policy,
                 calibratedOption: options.calibrated,
@@ -3514,6 +3629,187 @@ Calibrated routing examples:
                     process.exit(policyEnforcement.exitCode);
                 }
             }
+
+        } catch (error) {
+            console.error(chalk.red('\nError:'), error.message);
+            if (process.env.DEBUG) {
+                console.error(error.stack);
+            }
+            process.exit(1);
+        }
+    });
+
+program
+    .command('simulate')
+    .description('Simulate hardware profiles to see compatible LLM models for different systems')
+    .option('-p, --profile <name>', 'Hardware profile to simulate (e.g., rtx4090, m4pro24, h100)')
+    .option('-l, --list', 'List all available hardware profiles')
+    .option('--gpu <model>', 'Custom GPU model (e.g., "RTX 5060", "RX 7800 XT", "Apple M4 Pro")')
+    .option('--ram <gb>', 'Custom RAM in GB (e.g., 32)')
+    .option('--cpu <model>', 'Custom CPU model (e.g., "AMD Ryzen 7 5700X")')
+    .option('--vram <gb>', 'Override GPU VRAM in GB (auto-detected from GPU model if omitted)')
+    .option('-u, --use-case <case>', 'Specify use case', 'general')
+    .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
+    .option('--limit <number>', 'Number of compatible models to show (default: 1)', '1')
+    .option('--no-verbose', 'Disable step-by-step progress display')
+    .addHelpText(
+        'after',
+        `
+Preset profiles:
+  $ llm-checker simulate --list
+  $ llm-checker simulate
+  $ llm-checker simulate -p rtx4090
+  $ llm-checker simulate -p m4pro24 --use-case coding
+
+Custom hardware:
+  $ llm-checker simulate --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
+  $ llm-checker simulate --gpu "RTX 4090" --ram 64
+  $ llm-checker simulate --gpu "RX 7800 XT" --ram 32 --vram 16
+  $ llm-checker simulate --ram 16
+`
+    )
+    .action(async (options) => {
+        const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, getProfilesByCategory, listProfiles, CATEGORY_LABELS } = require('../src/hardware/profiles');
+
+        // List mode
+        if (options.list) {
+            console.log(chalk.cyan.bold('\n  Available Hardware Profiles:\n'));
+            listProfiles().forEach(line => console.log(line));
+            console.log('');
+            return;
+        }
+
+        let simulatedHardware;
+        let displayLabel;
+
+        // Custom hardware mode: --gpu, --ram, --cpu, --vram
+        const hasCustomFlags = options.gpu || options.ram || options.cpu || options.vram;
+        if (hasCustomFlags) {
+            const ramValue = options.ram ? parseInt(options.ram) : undefined;
+            const vramValue = options.vram ? parseInt(options.vram) : undefined;
+            if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                process.exit(1);
+            }
+            if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                process.exit(1);
+            }
+            simulatedHardware = buildCustomHardwareObject({
+                gpu: options.gpu || null,
+                ram: ramValue,
+                cpu: options.cpu || null,
+                vram: vramValue
+            });
+            displayLabel = simulatedHardware._displayName;
+        } else {
+            // Preset profile mode
+            if (!options.profile) {
+                // Guard against non-interactive environments
+                if (!process.stdin.isTTY || !process.stdout.isTTY) {
+                    console.error(chalk.red('\n  No hardware profile specified.'));
+                    console.log(chalk.gray('  Use --profile <name>, --gpu/--ram/--cpu flags, or --list to see profiles.\n'));
+                    process.exit(1);
+                }
+                // Interactive selection
+                try {
+                    const inquirer = require('inquirer');
+                    const categories = getProfilesByCategory();
+                    const choices = [];
+
+                    for (const [category, profiles] of Object.entries(categories)) {
+                        const label = CATEGORY_LABELS[category] || category;
+                        choices.push(new inquirer.Separator(chalk.gray(`── ${label} ──`)));
+                        for (const [key, profile] of Object.entries(profiles)) {
+                            const vramLabel = profile.gpu.unified
+                                ? `${profile.memory.total}GB unified`
+                                : (profile.gpu.vram > 0 ? `${profile.gpu.vram}GB VRAM` : 'No GPU');
+                            const ramLabel = profile.gpu.unified ? '' : ` / ${profile.memory.total}GB RAM`;
+                            choices.push({
+                                name: `${profile.displayName}  ${chalk.gray(`(${vramLabel}${ramLabel})`)}`,
+                                value: key
+                            });
+                        }
+                    }
+
+                    const { selectedProfile } = await inquirer.prompt([{
+                        type: 'list',
+                        name: 'selectedProfile',
+                        message: 'Select a hardware profile to simulate:',
+                        choices,
+                        pageSize: 20
+                    }]);
+                    options.profile = selectedProfile;
+                } catch (error) {
+                    if (error.isTtyError) {
+                        console.error(chalk.red('Interactive mode requires a TTY terminal.'));
+                        console.log(chalk.gray('Use --profile <name>, --gpu/--ram flags, or --list to see available profiles.'));
+                        process.exit(1);
+                    }
+                    throw error;
+                }
+            }
+
+            // Validate profile
+            const profile = getProfile(options.profile);
+            if (!profile) {
+                console.error(chalk.red(`\n  Unknown profile: ${options.profile}`));
+                console.log(chalk.gray('\n  Available profiles:'));
+                listProfiles().forEach(line => console.log(line));
+                console.log('');
+                process.exit(1);
+            }
+
+            simulatedHardware = buildFullHardwareObject(options.profile);
+            displayLabel = profile.displayName;
+        }
+
+        showAsciiArt('simulate');
+
+        try {
+            const verboseEnabled = options.verbose !== false;
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            checker.setSimulatedHardware(simulatedHardware);
+
+            console.log(chalk.magenta.bold(`  SIMULATION MODE: ${displayLabel}\n`));
+
+            if (!verboseEnabled) {
+                process.stdout.write(chalk.gray('Analyzing simulated hardware...'));
+            }
+
+            const hardware = await checker.getSystemInfo();
+
+            const normalizeUseCase = (useCase = '') => {
+                const alias = useCase.toLowerCase().trim();
+                const useCaseMap = {
+                    'embed': 'embeddings', 'embedding': 'embeddings', 'embeddings': 'embeddings',
+                    'embedings': 'embeddings', 'talk': 'chat', 'chat': 'chat', 'talking': 'chat'
+                };
+                return useCaseMap[alias] || alias || 'general';
+            };
+
+            const analysis = await checker.analyze({
+                useCase: normalizeUseCase(options.useCase),
+                limit: parseInt(options.limit) || 10,
+                runtime: 'ollama'
+            });
+
+            if (!verboseEnabled) {
+                console.log(chalk.green(' done'));
+            }
+
+            displaySimplifiedSystemInfo(hardware);
+
+            const normalizedUseCase = normalizeUseCase(options.useCase);
+            const limit = parseInt(options.limit) || 1;
+            const recommendedModels = await displayModelRecommendations(
+                analysis,
+                hardware,
+                normalizedUseCase,
+                limit,
+                'ollama'
+            );
+            await displayQuickStartCommands(analysis, recommendedModels[0], recommendedModels, 'ollama');
 
         } catch (error) {
             console.error(chalk.red('\nError:'), error.message);
