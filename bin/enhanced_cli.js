@@ -2986,6 +2986,10 @@ Policy scope:
                 if (hasCustomHwFlags) {
                     const ramValue = options.ram ? parseInt(options.ram) : undefined;
                     const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.vram && !options.gpu) {
+                        console.error(chalk.red('\n  --vram requires --gpu in custom hardware mode (e.g., --gpu "RTX 4090" --vram 24).'));
+                        process.exit(1);
+                    }
                     if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
                         console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
                         process.exit(1);
@@ -3536,6 +3540,10 @@ Calibrated routing examples:
                 if (hasCustomHwFlags) {
                     const ramValue = options.ram ? parseInt(options.ram) : undefined;
                     const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.vram && !options.gpu) {
+                        console.error(chalk.red('\n  --vram requires --gpu in custom hardware mode (e.g., --gpu "RTX 4090" --vram 24).'));
+                        process.exit(1);
+                    }
                     if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
                         console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
                         process.exit(1);
@@ -3687,6 +3695,10 @@ Custom hardware:
         if (hasCustomFlags) {
             const ramValue = options.ram ? parseInt(options.ram) : undefined;
             const vramValue = options.vram ? parseInt(options.vram) : undefined;
+            if (options.vram && !options.gpu) {
+                console.error(chalk.red('\n  --vram requires --gpu in custom hardware mode (e.g., --gpu "RTX 4090" --vram 24).'));
+                process.exit(1);
+            }
             if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
                 console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
                 process.exit(1);
