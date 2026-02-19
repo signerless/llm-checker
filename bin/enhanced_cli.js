@@ -2972,7 +2972,7 @@ Policy scope:
             const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
 
             // Handle hardware simulation (preset profile or custom flags)
-            const hasCustomHwFlags = options.gpu || options.ram || options.cpu;
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu || options.vram;
             if (options.simulate || hasCustomHwFlags) {
                 const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
                 if (options.simulate === 'list') {
@@ -2986,6 +2986,14 @@ Policy scope:
                 if (hasCustomHwFlags) {
                     const ramValue = options.ram ? parseInt(options.ram) : undefined;
                     const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                        process.exit(1);
+                    }
+                    if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                        process.exit(1);
+                    }
                     simulatedHardware = buildCustomHardwareObject({
                         gpu: options.gpu || null,
                         ram: ramValue,
@@ -3514,7 +3522,7 @@ Calibrated routing examples:
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
 
             // Handle hardware simulation (preset profile or custom flags)
-            const hasCustomHwFlags = options.gpu || options.ram || options.cpu;
+            const hasCustomHwFlags = options.gpu || options.ram || options.cpu || options.vram;
             if (options.simulate || hasCustomHwFlags) {
                 const { buildFullHardwareObject, buildCustomHardwareObject, getProfile, listProfiles } = require('../src/hardware/profiles');
                 if (options.simulate === 'list') {
@@ -3528,6 +3536,14 @@ Calibrated routing examples:
                 if (hasCustomHwFlags) {
                     const ramValue = options.ram ? parseInt(options.ram) : undefined;
                     const vramValue = options.vram ? parseInt(options.vram) : undefined;
+                    if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                        process.exit(1);
+                    }
+                    if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                        console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                        process.exit(1);
+                    }
                     simulatedHardware = buildCustomHardwareObject({
                         gpu: options.gpu || null,
                         ram: ramValue,
@@ -3667,10 +3683,18 @@ Custom hardware:
         let displayLabel;
 
         // Custom hardware mode: --gpu, --ram, --cpu, --vram
-        const hasCustomFlags = options.gpu || options.ram || options.cpu;
+        const hasCustomFlags = options.gpu || options.ram || options.cpu || options.vram;
         if (hasCustomFlags) {
             const ramValue = options.ram ? parseInt(options.ram) : undefined;
             const vramValue = options.vram ? parseInt(options.vram) : undefined;
+            if (options.ram && (!Number.isFinite(ramValue) || ramValue <= 0)) {
+                console.error(chalk.red(`\n  Invalid --ram value: "${options.ram}". Must be a positive number (e.g., 32).`));
+                process.exit(1);
+            }
+            if (options.vram && (!Number.isFinite(vramValue) || vramValue <= 0)) {
+                console.error(chalk.red(`\n  Invalid --vram value: "${options.vram}". Must be a positive number (e.g., 8).`));
+                process.exit(1);
+            }
             simulatedHardware = buildCustomHardwareObject({
                 gpu: options.gpu || null,
                 ram: ramValue,
@@ -3681,6 +3705,12 @@ Custom hardware:
         } else {
             // Preset profile mode
             if (!options.profile) {
+                // Guard against non-interactive environments
+                if (!process.stdin.isTTY || !process.stdout.isTTY) {
+                    console.error(chalk.red('\n  No hardware profile specified.'));
+                    console.log(chalk.gray('  Use --profile <name>, --gpu/--ram/--cpu flags, or --list to see profiles.\n'));
+                    process.exit(1);
+                }
                 // Interactive selection
                 try {
                     const inquirer = require('inquirer');

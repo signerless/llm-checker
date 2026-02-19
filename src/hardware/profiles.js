@@ -332,7 +332,8 @@ function buildCustomHardwareObject({ gpu, ram, cpu, vram: overrideVram }) {
     const cpuDetails = inferCpuDetails(cpu);
 
     const totalRAM = ram || 16;
-    const vram = overrideVram != null ? overrideVram : gpuDetails.vram;
+    const vram = (overrideVram != null && Number.isFinite(overrideVram) && overrideVram > 0)
+        ? overrideVram : gpuDetails.vram;
     const isApple = gpuDetails.platform === 'darwin' || cpuDetails.architecture === 'Apple Silicon';
     const isUnified = gpuDetails.unified || isApple;
     const platform = isApple ? 'darwin' : 'linux';
