@@ -3,6 +3,7 @@ scripts/
 ml-model/
 .git/
 .github/
+**/CLAUDE.md
 *.test.js
 *.spec.js
 coverage/
