@@ -1,6 +1,22 @@
 Changelog
 =========
 
+3.5.4 — GPU Detection + AMD VRAM Fix + Fine-Tuning Support (2026-03-05)
+-------------------------------------------------------------------------
+
+- Fixed Linux hybrid GPU detection fallback:
+  - added `lspci`-based discovery when primary hardware libraries miss discrete GPUs.
+  - improved fallback enrichment so dedicated GPUs are surfaced even when the primary backend resolves to CPU.
+- Fixed AMD ROCm VRAM normalization:
+  - corrected `rocm-smi` unit parsing (`B`, `KiB`, `MiB`, `GiB`) to prevent overreported memory values.
+- Added fine-tuning suitability output in model selection workflows:
+  - `check`, `recommend`, and `ai-check` now include a `Fine-tuning` indicator.
+  - labels include `Full+LoRA+QLoRA`, `LoRA+QLoRA`, `QLoRA`, and no-support states.
+- Added regression coverage:
+  - ROCm VRAM parsing tests.
+  - Fine-tuning support classification tests.
+  - Linux hybrid GPU parsing and detector enrichment regression tests.
+
 3.5.0 — Interactive CLI Panel + Unified Visual Style (2026-02-18)
 ------------------------------------------------------------------
 

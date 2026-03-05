@@ -27,6 +27,7 @@ llm-checker check
 │ 🏆 Selected Model: llama2:7b
 │ 📊 Confidence: 100%
 │ 🔢 Intelligence Score: 99/100
+│ 🛠️ Fine-tuning: LoRA+QLoRA
 │ 💡 AI Analysis: Excellent fit for your high hardware configuration...
 ```
 
@@ -56,6 +57,7 @@ llm-checker ai-run --calibrated --category coding --prompt "Help me write a Pyth
 - Model specialization in coding tasks
 - Context length for large code files
 - Performance on programming benchmarks
+- Fine-tuning suitability (Full FT / LoRA / QLoRA)
 
 ---
 

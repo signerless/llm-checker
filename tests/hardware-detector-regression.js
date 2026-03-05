@@ -230,6 +230,88 @@ async function testUnifiedWindowsFallbackGpuDetection() {
     }
 }
 
+function testUnifiedLinuxLspciHybridParsing() {
+    const detector = new UnifiedDetector();
+    const parsed = detector.parseLinuxLspciGpus(`
+01:00.0 VGA compatible controller [0300]: NVIDIA Corporation AD107M [GeForce RTX 4060 Max-Q / Mobile] [10de:28a0] (rev a1)
+05:00.0 Display controller [0380]: Advanced Micro Devices, Inc. [AMD/ATI] Phoenix3 [Radeon 780M] [1002:15bf]
+`);
+
+    assert.ok(Array.isArray(parsed), 'parseLinuxLspciGpus should return an array');
+    assert.ok(
+        parsed.some((gpu) => gpu.name.toLowerCase().includes('rtx 4060') && gpu.type === 'dedicated'),
+        'Hybrid parser should include discrete RTX 4060 as dedicated'
+    );
+    assert.ok(
+        parsed.some((gpu) => gpu.name.toLowerCase().includes('780m') && gpu.type === 'integrated'),
+        'Hybrid parser should preserve integrated Radeon 780M as integrated'
+    );
+}
+
+async function testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu() {
+    const detector = new HardwareDetector();
+    detector.unifiedDetector = {
+        detect: async () => ({
+            primary: { type: 'cpu' },
+            summary: {
+                bestBackend: 'cpu',
+                gpuModel: 'NVIDIA GeForce RTX 4060 Laptop GPU',
+                gpuInventory: 'NVIDIA GeForce RTX 4060 Laptop GPU',
+                totalVRAM: 8,
+                gpuCount: 1,
+                isMultiGPU: false
+            },
+            systemGpu: {
+                available: true,
+                hasDedicated: true,
+                gpus: [
+                    {
+                        name: 'NVIDIA GeForce RTX 4060 Laptop GPU',
+                        type: 'dedicated',
+                        memory: { total: 8 }
+                    },
+                    {
+                        name: 'AMD Radeon(TM) Graphics',
+                        type: 'integrated',
+                        memory: { total: 0 }
+                    }
+                ],
+                totalVRAM: 8,
+                isMultiGPU: false
+            },
+            backends: {
+                cpu: { info: { speedCoefficient: 100 } }
+            }
+        })
+    };
+
+    const systemInfo = {
+        cpu: {},
+        memory: {},
+        gpu: {
+            model: 'AMD Radeon(TM) Graphics',
+            vendor: 'AMD',
+            vram: 0,
+            vramPerGPU: 0,
+            dedicated: false,
+            gpuCount: 1,
+            isMultiGPU: false
+        },
+        system: {},
+        os: {}
+    };
+
+    await detector.enrichWithUnifiedHardware(systemInfo);
+
+    assert.ok(
+        (systemInfo.gpu.model || '').toLowerCase().includes('rtx 4060'),
+        `Expected fallback enrichment to expose RTX 4060, got: ${systemInfo.gpu.model}`
+    );
+    assert.strictEqual(systemInfo.gpu.vram, 8, 'Fallback enrichment should populate total VRAM');
+    assert.strictEqual(systemInfo.gpu.dedicated, true, 'Fallback enrichment should mark GPU as dedicated');
+    assert.strictEqual(systemInfo.gpu.backend, 'generic', 'Fallback enrichment should mark backend as generic');
+}
+
 async function run() {
     await testVendorlessTeslaDetection();
     await testUnifiedFallbackEnrichment();
@@ -237,6 +319,8 @@ async function run() {
     testDeviceIdFallbackMappings();
     testHeterogeneousGpuSummaryPreserved();
     await testUnifiedWindowsFallbackGpuDetection();
+    testUnifiedLinuxLspciHybridParsing();
+    await testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu();
     console.log('✅ hardware-detector-regression.js passed');
 }
 

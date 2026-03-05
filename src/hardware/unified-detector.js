@@ -10,6 +10,7 @@ const ROCmDetector = require('./backends/rocm-detector');
 const IntelDetector = require('./backends/intel-detector');
 const CPUDetector = require('./backends/cpu-detector');
 const si = require('systeminformation');
+const { execSync } = require('child_process');
 
 class UnifiedDetector {
     constructor() {
@@ -363,6 +364,20 @@ class UnifiedDetector {
             })
             .filter(Boolean);
 
+        if (process.platform === 'linux') {
+            const lspciControllers = this.detectLinuxLspciGpus();
+            const knownKeys = new Set(
+                normalized.map((gpu) => this.getGpuMatchKey(gpu.name)).filter(Boolean)
+            );
+
+            for (const gpu of lspciControllers) {
+                const nameKey = this.getGpuMatchKey(gpu.name);
+                if (!nameKey || knownKeys.has(nameKey)) continue;
+                normalized.push(gpu);
+                knownKeys.add(nameKey);
+            }
+        }
+
         if (normalized.length === 0) {
             return {
                 available: false,
@@ -381,12 +396,72 @@ class UnifiedDetector {
 
         return {
             available: true,
-            source: 'systeminformation',
+            source: process.platform === 'linux' ? 'systeminformation+lspci' : 'systeminformation',
             gpus: normalized,
             totalVRAM,
             isMultiGPU: dedicated.length > 1,
             hasDedicated: dedicated.length > 0
         };
+    }
+
+    detectLinuxLspciGpus() {
+        try {
+            const lspciOutput = execSync('lspci -nn | grep -Ei "VGA|3D|Display"', {
+                encoding: 'utf8',
+                timeout: 8000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            return this.parseLinuxLspciGpus(lspciOutput);
+        } catch (error) {
+            return [];
+        }
+    }
+
+    parseLinuxLspciGpus(lspciOutput = '') {
+        const lines = String(lspciOutput || '')
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
+
+        const results = [];
+        const seen = new Set();
+
+        for (const line of lines) {
+            const lineLower = line.toLowerCase();
+            const isNvidia = lineLower.includes('nvidia');
+            const isAMD = lineLower.includes('amd') || lineLower.includes('ati') || lineLower.includes('radeon');
+            const isIntel = lineLower.includes('intel');
+
+            if (!isNvidia && !isAMD && !isIntel) continue;
+
+            const genericName = line
+                .replace(/^[0-9a-f:.]+\s+/i, '')
+                .replace(/\(rev\s+[0-9a-f]+\)$/i, '')
+                .trim();
+
+            const bracketName = line.match(/\[(?![0-9a-f]{4}:[0-9a-f]{4}\])([^\]]+)\]\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]/i);
+            const name = (bracketName?.[1] || genericName || 'Unknown GPU').replace(/\s+/g, ' ').trim();
+            if (!name || name.toLowerCase() === 'unknown gpu') continue;
+
+            const isIntegrated = this.isIntegratedGPUModel(name) || isIntel;
+            let vram = this.estimateFallbackVRAM(name);
+            if (isIntegrated) {
+                vram = 0;
+            }
+
+            const dedupeKey = `${name.toLowerCase()}|${isIntegrated ? 'i' : 'd'}`;
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+
+            results.push({
+                name,
+                vendor: isNvidia ? 'NVIDIA' : (isAMD ? 'AMD' : 'Intel'),
+                type: isIntegrated ? 'integrated' : 'dedicated',
+                memory: { total: vram }
+            });
+        }
+
+        return results;
     }
 
     normalizeFallbackVRAM(value) {
@@ -426,6 +501,7 @@ class UnifiedDetector {
             lower.includes('iris') ||
             lower.includes('uhd') ||
             lower.includes('hd graphics') ||
+            (lower.includes('radeon') && !lower.includes('radeon rx') && /\b\d{3,4}m\b/.test(lower)) ||
             lower.includes('radeon graphics') ||
             lower.includes('radeon(tm) graphics') ||
             lower.includes('vega') ||
@@ -452,6 +528,23 @@ class UnifiedDetector {
         if (lower.includes('rtx 4060') || lower.includes('rtx 3070')) return 8;
 
         return 0;
+    }
+
+    getGpuMatchKey(name) {
+        const lower = String(name || '').toLowerCase();
+        if (!lower) return '';
+
+        const familyMatch = lower.match(/\b(rtx|gtx|rx|arc)\s*([0-9]{3,4})\b/);
+        if (familyMatch) {
+            return `${familyMatch[1]}${familyMatch[2]}`;
+        }
+
+        const concise = lower
+            .replace(/nvidia|amd|ati|intel|corporation|geforce|radeon|graphics/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        return concise || lower;
     }
 
     /**

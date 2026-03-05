@@ -23,6 +23,7 @@ const {
     getRuntimeDisplayName,
     getRuntimeCommandSet
 } = require('../src/runtime/runtime-support');
+const { evaluateFineTuningSupport } = require('../src/models/fine-tuning-support');
 const { CalibrationManager } = require('../src/calibration/calibration-manager');
 const { SUPPORTED_CALIBRATION_OBJECTIVES } = require('../src/calibration/schemas');
 const {
@@ -1203,7 +1204,7 @@ function displayLegacyRecommendations(recommendations) {
     console.log(chalk.cyan('╰'));
 }
 
-function displayIntelligentRecommendations(intelligentData) {
+function displayIntelligentRecommendations(intelligentData, hardware = null) {
     if (!intelligentData || !intelligentData.summary) return;
 
     const { summary, recommendations } = intelligentData;
@@ -1220,10 +1221,12 @@ function displayIntelligentRecommendations(intelligentData) {
     // Mostrar mejor modelo general
     if (summary.best_overall) {
         const best = summary.best_overall;
+        const bestFineTuning = evaluateFineTuningSupport(best, hardware || {});
         console.log(chalk.red('│') + ` ${chalk.bold.yellow('BEST OVERALL:')} ${chalk.green.bold(best.name)}`);
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(best.command)}`);
         console.log(chalk.red('│') + `    Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
         console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(best.quantization || 'Q4_K_M')}`);
+        console.log(chalk.red('│') + `    Fine-tuning: ${chalk.blue.bold(bestFineTuning.shortLabel)}`);
         console.log(chalk.red('│'));
     }
 
@@ -1242,11 +1245,13 @@ function displayIntelligentRecommendations(intelligentData) {
         const icon = categories[category] || 'Other';
         const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
         const scoreColor = getScoreColor(model.score);
+        const fineTuningSupport = evaluateFineTuningSupport(model, hardware || {});
         
         console.log(chalk.red('│') + ` ${chalk.bold.white(categoryName)} (${icon}):`);
         console.log(chalk.red('│') + `    ${chalk.green(model.name)} (${model.size})`);
         console.log(chalk.red('│') + `    Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
         console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(model.quantization || 'Q4_K_M')}`);
+        console.log(chalk.red('│') + `    Fine-tuning: ${chalk.blue.bold(fineTuningSupport.shortLabel)}`);
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(model.command)}`);
         console.log(chalk.red('│'));
     });
@@ -2079,6 +2084,8 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
             const realSize = getRealSizeFromOllamaCache(model) || estimateModelSize(model);
             console.log(`Size: ${chalk.white(realSize)}`);
             console.log(`Compatibility Score: ${chalk.green.bold(model.adjustedScore || model.score || 'N/A')}/100`);
+            const fineTuningSupport = evaluateFineTuningSupport(model, hardware);
+            console.log(`Fine-tuning: ${chalk.blue.bold(fineTuningSupport.shortLabel)}`);
             
             if (index === 0) {
                 console.log(`Reason: ${chalk.gray(reason)}`);
@@ -3628,7 +3635,7 @@ Calibrated routing examples:
             displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
             
             // Mostrar recomendaciones
-            displayIntelligentRecommendations(intelligentRecommendations);
+            displayIntelligentRecommendations(intelligentRecommendations, hardware);
             displayCalibratedRoutingDecision('recommend', calibratedPolicy, routeDecision, routingPreference.warnings);
 
             if (policyConfig && policyEvaluation && policyEnforcement) {

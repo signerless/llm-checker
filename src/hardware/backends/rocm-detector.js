@@ -248,13 +248,20 @@ class ROCmDetector {
                 timeout: 10000
             });
 
-            // Parse memory info
-            const memMatches = memInfo.matchAll(/GPU\[(\d+)\].*?Total.*?:\s*(\d+)/g);
+            // Parse memory info. Newer rocm-smi reports bytes "(B)" while some
+            // systems expose MiB; normalize to GB safely.
             const gpuMemory = {};
-            for (const match of memMatches) {
-                const idx = parseInt(match[1]);
-                const memMB = parseInt(match[2]);
-                gpuMemory[idx] = Math.round(memMB / 1024);  // Convert to GB
+            const memLines = String(memInfo || '').split('\n');
+            for (const line of memLines) {
+                const lineMatch = line.match(/GPU\[(\d+)\].*?Total.*?Memory\s*(?:\(([^)]+)\))?\s*:\s*(\d+)/i);
+                if (!lineMatch) continue;
+
+                const idx = parseInt(lineMatch[1], 10);
+                const unitHint = lineMatch[2] || '';
+                const rawValue = parseInt(lineMatch[3], 10);
+
+                if (!Number.isFinite(rawValue) || rawValue <= 0) continue;
+                gpuMemory[idx] = this.normalizeRocmMemoryToGB(rawValue, unitHint);
             }
 
             // Get temperature and utilization
@@ -310,6 +317,45 @@ class ROCmDetector {
         } catch (e) {
             return false;
         }
+    }
+
+    /**
+     * Normalize rocm-smi memory values to GB.
+     * rocm-smi may report bytes "(B)" or MiB depending on version/system.
+     */
+    normalizeRocmMemoryToGB(value, unitHint = '') {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || numericValue <= 0) {
+            return 0;
+        }
+
+        const unit = String(unitHint || '').toLowerCase();
+
+        if (unit.includes('gib') || unit.includes('gb')) {
+            return Math.round(numericValue);
+        }
+
+        if (unit.includes('mib') || unit.includes('mb')) {
+            return Math.round(numericValue / 1024);
+        }
+
+        if (unit.includes('kib') || unit.includes('kb')) {
+            return Math.round(numericValue / (1024 * 1024));
+        }
+
+        if (unit === 'b' || unit === 'bytes') {
+            return Math.round(numericValue / (1024 ** 3));
+        }
+
+        // Unit was not provided. Use value magnitude heuristics.
+        if (numericValue >= 1024 ** 3) {
+            return Math.round(numericValue / (1024 ** 3));
+        }
+        if (numericValue >= 1024) {
+            return Math.round(numericValue / 1024);
+        }
+
+        return Math.round(numericValue);
     }
 
     /**

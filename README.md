@@ -531,18 +531,23 @@ Hardware Tier: HIGH | Models Analyzed: 205
 Coding:
    qwen2.5-coder:14b (14B)
    Score: 78/100
+   Fine-tuning: LoRA+QLoRA
    Command: ollama pull qwen2.5-coder:14b
 
 Reasoning:
    deepseek-r1:14b (14B)
    Score: 86/100
+   Fine-tuning: QLoRA
    Command: ollama pull deepseek-r1:14b
 
 Multimodal:
    llama3.2-vision:11b (11B)
    Score: 83/100
+   Fine-tuning: LoRA+QLoRA
    Command: ollama pull llama3.2-vision:11b
 ```
+
+`check`, `recommend`, and `ai-check` include a fine-tuning suitability label in output to help choose between Full FT, LoRA, and QLoRA paths.
 
 ### `search` &mdash; Model Search
 

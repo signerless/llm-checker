@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('../utils/fetch');
+const { evaluateFineTuningSupport } = require('./fine-tuning-support');
 
 class AICheckSelector {
     constructor() {
@@ -606,6 +607,7 @@ Return JSON with this structure:
                 chalk.bgMagenta.white.bold(' Det Score '),
                 chalk.bgMagenta.white.bold(' AI Score '),
                 chalk.bgMagenta.white.bold(' Final '),
+                chalk.bgMagenta.white.bold(' Fine-tune '),
                 chalk.bgMagenta.white.bold(' RAM '),
                 chalk.bgMagenta.white.bold(' Speed '),
                 chalk.bgMagenta.white.bold(' Status ')
@@ -621,6 +623,7 @@ Return JSON with this structure:
             const finalScore = `${Math.round(candidate.finalScore)}/100`;
             const ram = `${candidate.requiredGB}/${Math.round(results.hardware.usableMemGB)}GB`;
             const speed = `${candidate.estTPS.toFixed(0)}t/s`;
+            const fineTuningSupport = evaluateFineTuningSupport(candidate, results.hardware || {});
             
             let statusDisplay, modelDisplay;
             if (isInstalled) {
@@ -637,6 +640,7 @@ Return JSON with this structure:
                 this.getScoreColor(candidate.score)(detScore),
                 candidate.aiScore ? this.getScoreColor(candidate.aiScore)(aiScore) : chalk.gray(aiScore),
                 this.getScoreColor(candidate.finalScore)(finalScore),
+                fineTuningSupport.shortLabel,
                 ram,
                 speed,
                 statusDisplay
@@ -648,11 +652,13 @@ Return JSON with this structure:
 
         // Best recommendation section
         const best = results.candidates[0];
+        const bestFineTuning = evaluateFineTuningSupport(best, results.hardware || {});
         console.log('\n' + chalk.bgGreen.black.bold(' AI-POWERED RECOMMENDATION '));
         console.log(chalk.green('╭' + '─'.repeat(50)));
         console.log(chalk.green('│') + ` Best Model: ${chalk.cyan.bold(best.meta.name || best.meta.model_identifier)}`);
         console.log(chalk.green('│') + ` Final Score: ${this.getScoreColor(best.finalScore)(Math.round(best.finalScore) + '/100')}`);
         console.log(chalk.green('│') + ` ⚖️  Det: ${Math.round(best.score)} + AI: ${best.aiScore ? Math.round(best.aiScore) : 'N/A'}`);
+        console.log(chalk.green('│') + ` Fine-tuning: ${chalk.blue.bold(bestFineTuning.shortLabel)}`);
         console.log(chalk.green('│'));
         
         if (best.meta.installed) {

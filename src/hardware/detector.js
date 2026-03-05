@@ -255,20 +255,43 @@ class HardwareDetector {
             }
 
             const primaryType = unified.primary.type || 'cpu';
-            if (primaryType === 'cpu') {
+            const hasFallbackDedicatedGpu = Boolean(
+                primaryType === 'cpu' &&
+                unified.systemGpu?.available &&
+                Array.isArray(unified.systemGpu.gpus) &&
+                unified.systemGpu.gpus.some((gpu) => gpu.type === 'dedicated')
+            );
+
+            if (primaryType === 'cpu' && !hasFallbackDedicatedGpu) {
                 return;
             }
 
             const summary = unified.summary;
-            const backendInfo = unified.backends?.[primaryType]?.info || {};
+            const backendInfo = hasFallbackDedicatedGpu
+                ? unified.systemGpu
+                : (unified.backends?.[primaryType]?.info || {});
+
             const backendGPUs = Array.isArray(backendInfo.gpus) ? backendInfo.gpus : [];
-            const gpuCount = summary.gpuCount || backendGPUs.length || systemInfo.gpu.gpuCount || 1;
+            const dedicatedBackendGPUs = backendGPUs.filter((gpu) => gpu?.type !== 'integrated');
 
-            const totalVRAM = typeof summary.totalVRAM === 'number' ? summary.totalVRAM : systemInfo.gpu.vram;
-            const perGPUVRAM = backendGPUs[0]?.memory?.total
-                || (gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / gpuCount) : 0);
+            const gpuCount = summary.gpuCount ||
+                dedicatedBackendGPUs.length ||
+                backendGPUs.length ||
+                systemInfo.gpu.gpuCount ||
+                1;
 
-            const modelFromUnified = summary.gpuInventory || summary.gpuModel || systemInfo.gpu.model;
+            const totalVRAMFromUnified = typeof summary.totalVRAM === 'number' ? summary.totalVRAM : 0;
+            const totalVRAMFromFallback = dedicatedBackendGPUs.reduce((sum, gpu) => {
+                const amount = Number(gpu?.memory?.total || gpu?.memoryTotal || 0);
+                return sum + (Number.isFinite(amount) ? amount : 0);
+            }, 0);
+            const totalVRAM = totalVRAMFromUnified || totalVRAMFromFallback || systemInfo.gpu.vram;
+            const perGPUVRAM = dedicatedBackendGPUs[0]?.memory?.total ||
+                backendGPUs[0]?.memory?.total ||
+                (gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / gpuCount) : 0);
+
+            const fallbackModel = dedicatedBackendGPUs[0]?.name || backendGPUs[0]?.name || null;
+            const modelFromUnified = summary.gpuInventory || summary.gpuModel || fallbackModel || systemInfo.gpu.model;
             const vendor = this.inferVendorFromGPUModel(modelFromUnified, systemInfo.gpu.vendor);
 
             systemInfo.gpu = {
@@ -277,11 +300,11 @@ class HardwareDetector {
                 vendor,
                 vram: totalVRAM || systemInfo.gpu.vram,
                 vramPerGPU: perGPUVRAM || systemInfo.gpu.vramPerGPU || 0,
-                dedicated: primaryType !== 'metal',
+                dedicated: hasFallbackDedicatedGpu ? true : primaryType !== 'metal',
                 gpuCount,
                 isMultiGPU: Boolean(summary.isMultiGPU || gpuCount > 1),
                 gpuInventory: summary.gpuInventory || null,
-                backend: primaryType,
+                backend: hasFallbackDedicatedGpu ? 'generic' : primaryType,
                 driverVersion: backendInfo.driver || systemInfo.gpu.driverVersion
             };
         } catch (error) {
