@@ -11,6 +11,7 @@ const IntelDetector = require('./backends/intel-detector');
 const CPUDetector = require('./backends/cpu-detector');
 const si = require('systeminformation');
 const { execSync } = require('child_process');
+const { normalizePlatform } = require('../utils/platform');
 
 class UnifiedDetector {
     constructor() {
@@ -34,6 +35,8 @@ class UnifiedDetector {
         if (this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
             return this.cache;
         }
+
+        const platform = normalizePlatform();
 
         const result = {
             backends: {},
@@ -64,7 +67,7 @@ class UnifiedDetector {
         }
 
         // Detect Apple Silicon (macOS ARM only)
-        if (process.platform === 'darwin' && process.arch === 'arm64') {
+        if (platform === 'darwin' && process.arch === 'arm64') {
             try {
                 const metalInfo = this.backends.metal.detect();
                 if (metalInfo) {
@@ -109,7 +112,7 @@ class UnifiedDetector {
         }
 
         // Detect Intel (Linux only for now)
-        if (process.platform === 'linux') {
+        if (platform === 'linux') {
             try {
                 if (this.backends.intel.checkAvailability()) {
                     const intelInfo = this.backends.intel.detect();
@@ -134,7 +137,7 @@ class UnifiedDetector {
             result.backends.intel?.available
         );
 
-        if (!hasAcceleratedBackend && (process.platform === 'win32' || process.platform === 'linux')) {
+        if (!hasAcceleratedBackend && (platform === 'win32' || platform === 'linux')) {
             try {
                 const genericGpuInfo = await this.detectSystemGpuFallback();
                 if (genericGpuInfo?.available) {
@@ -364,7 +367,9 @@ class UnifiedDetector {
             })
             .filter(Boolean);
 
-        if (process.platform === 'linux') {
+        const platform = normalizePlatform();
+
+        if (platform === 'linux') {
             const lspciControllers = this.detectLinuxLspciGpus();
             const knownKeys = new Set(
                 normalized.map((gpu) => this.getGpuMatchKey(gpu.name)).filter(Boolean)
@@ -396,7 +401,7 @@ class UnifiedDetector {
 
         return {
             available: true,
-            source: process.platform === 'linux' ? 'systeminformation+lspci' : 'systeminformation',
+            source: normalized.some((gpu) => gpu.source === 'lspci') ? 'systeminformation+lspci' : 'systeminformation',
             gpus: normalized,
             totalVRAM,
             isMultiGPU: dedicated.length > 1,
@@ -457,7 +462,8 @@ class UnifiedDetector {
                 name,
                 vendor: isNvidia ? 'NVIDIA' : (isAMD ? 'AMD' : 'Intel'),
                 type: isIntegrated ? 'integrated' : 'dedicated',
-                memory: { total: vram }
+                memory: { total: vram },
+                source: 'lspci'
             });
         }
 

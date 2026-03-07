@@ -1,5 +1,6 @@
 const si = require('systeminformation');
 const UnifiedDetector = require('./unified-detector');
+const { normalizePlatform } = require('../utils/platform');
 
 class HardwareDetector {
     constructor() {
@@ -324,8 +325,11 @@ class HardwareDetector {
     }
 
     processOSInfo(osInfo) {
+        const rawPlatform = osInfo.platform || process.platform;
+
         return {
-            platform: osInfo.platform || process.platform,
+            platform: normalizePlatform(rawPlatform),
+            platformRaw: rawPlatform,
             distro: osInfo.distro || 'Unknown',
             release: osInfo.release || 'Unknown',
             codename: osInfo.codename || 'Unknown',

@@ -7,6 +7,7 @@
 const { execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
+const { normalizePlatform } = require('../../utils/platform');
 
 class CPUDetector {
     constructor() {
@@ -87,10 +88,12 @@ class CPUDetector {
      * Get physical core count
      */
     getPhysicalCores() {
+        const platform = normalizePlatform();
+
         try {
-            if (process.platform === 'darwin') {
+            if (platform === 'darwin') {
                 return parseInt(execSync('sysctl -n hw.physicalcpu', { encoding: 'utf8', timeout: 5000 }).trim());
-            } else if (process.platform === 'linux') {
+            } else if (platform === 'linux') {
                 const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
                 const coreIds = new Set();
                 const matches = cpuInfo.matchAll(/core id\s*:\s*(\d+)/g);
@@ -98,7 +101,7 @@ class CPUDetector {
                     coreIds.add(match[1]);
                 }
                 return coreIds.size || os.cpus().length;
-            } else if (process.platform === 'win32') {
+            } else if (platform === 'win32') {
                 const physicalCores = this.getWindowsPhysicalCoreCount();
                 return physicalCores || os.cpus().length;
             }
@@ -112,18 +115,20 @@ class CPUDetector {
      * Get maximum CPU frequency
      */
     getMaxFrequency() {
+        const platform = normalizePlatform();
+
         try {
-            if (process.platform === 'darwin') {
+            if (platform === 'darwin') {
                 // macOS doesn't expose max frequency easily
                 const cpus = os.cpus();
                 return cpus.length > 0 ? cpus[0].speed : 0;
-            } else if (process.platform === 'linux') {
+            } else if (platform === 'linux') {
                 const maxFreq = fs.readFileSync(
                     '/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq',
                     'utf8'
                 );
                 return Math.round(parseInt(maxFreq) / 1000);  // kHz to MHz
-            } else if (process.platform === 'win32') {
+            } else if (platform === 'win32') {
                 const maxClock = this.getWindowsMaxClockSpeed();
                 return maxClock || (os.cpus()[0]?.speed || 0);
             }
@@ -206,13 +211,15 @@ class CPUDetector {
             l3: 0
         };
 
+        const platform = normalizePlatform();
+
         try {
-            if (process.platform === 'darwin') {
+            if (platform === 'darwin') {
                 cache.l1d = parseInt(execSync('sysctl -n hw.l1dcachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
                 cache.l1i = parseInt(execSync('sysctl -n hw.l1icachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
                 cache.l2 = parseInt(execSync('sysctl -n hw.l2cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
                 cache.l3 = parseInt(execSync('sysctl -n hw.l3cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
-            } else if (process.platform === 'linux') {
+            } else if (platform === 'linux') {
                 // Parse from /sys/devices/system/cpu/cpu0/cache/
                 const cachePath = '/sys/devices/system/cpu/cpu0/cache';
                 if (fs.existsSync(cachePath)) {
@@ -268,8 +275,10 @@ class CPUDetector {
             bestSimd: 'none'
         };
 
+        const platform = normalizePlatform();
+
         try {
-            if (process.platform === 'darwin') {
+            if (platform === 'darwin') {
                 // For Apple Silicon (ARM64), use ARM features
                 if (process.arch === 'arm64') {
                     caps.neon = true;  // All Apple Silicon has NEON
@@ -308,7 +317,7 @@ class CPUDetector {
                     }
                 }
 
-            } else if (process.platform === 'linux') {
+            } else if (platform === 'linux') {
                 // Linux - check /proc/cpuinfo
                 const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8').toLowerCase();
                 const flags = cpuInfo.match(/flags\s*:\s*(.+)/)?.[1] || '';
@@ -334,7 +343,7 @@ class CPUDetector {
                     caps.dotprod = flags.includes('asimddp');
                 }
 
-            } else if (process.platform === 'win32') {
+            } else if (platform === 'win32') {
                 // Windows - use WMIC or assume based on CPU model
                 const cpuName = os.cpus()[0]?.model?.toLowerCase() || '';
 

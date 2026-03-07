@@ -16,6 +16,7 @@ function getLLMChecker() {
 const { getLogger } = require('../src/utils/logger');
 const fs = require('fs');
 const path = require('path');
+const { normalizePlatform, isTermuxEnvironment } = require('../src/utils/platform');
 const {
     SUPPORTED_RUNTIMES,
     normalizeRuntime,
@@ -513,8 +514,23 @@ if (!program.commands.some((cmd) => cmd.name() === 'help')) {
 
 // Ollama installation helper
 function getOllamaInstallInstructions() {
-    const platform = os.platform();
+    const rawPlatform = os.platform();
+    const platform = normalizePlatform(rawPlatform);
     const arch = os.arch();
+
+    if (isTermuxEnvironment(rawPlatform, process.env)) {
+        return {
+            name: `Termux (Android${arch ? ` ${arch}` : ''})`,
+            downloadUrl: 'https://github.com/termux/termux-packages',
+            instructions: [
+                '1. Update Termux packages: pkg update',
+                '2. Install Ollama from the Termux repository: pkg install ollama',
+                '3. Start Ollama in the current shell: ollama serve',
+                '4. In a new Termux session, test with: ollama run llama3.2:1b'
+            ],
+            alternativeInstall: 'pkg install ollama'
+        };
+    }
     
     const instructions = {
         'darwin': {
@@ -546,8 +562,8 @@ function getOllamaInstallInstructions() {
                 '1. Review official installation options:',
                 '   https://github.com/ollama/ollama/blob/main/docs/linux.md',
                 '2. Prefer a package manager (apt/dnf/pacman) when available',
-                '3. Start service after install:',
-                '   sudo systemctl start ollama',
+                '3. Start Ollama after install:',
+                '   ollama serve',
                 '4. Test with: ollama run llama2:7b'
             ],
             alternativeInstall: 'Manual install: https://github.com/ollama/ollama/blob/main/docs/linux.md'

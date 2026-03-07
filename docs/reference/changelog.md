@@ -1,6 +1,17 @@
 Changelog
 =========
 
+3.5.5 — Termux Support (2026-03-07)
+-----------------------------------
+
+- Added Termux / Android package support:
+  - npm package metadata now accepts the `android` platform so global installs work in Termux.
+- Improved Linux-compatible runtime handling for Termux:
+  - normalized Android platform detection to Linux-style hardware analysis where appropriate.
+  - added Termux-specific Ollama install hints (`pkg install ollama`, `ollama serve`).
+- Added regression coverage:
+  - Android platform normalization and Termux runtime install command tests.
+
 3.5.4 — GPU Detection + AMD VRAM Fix + Fine-Tuning Support (2026-03-05)
 -------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@
  */
 
 const { MULTI_OBJECTIVE_WEIGHTS } = require('../models/scoring-config');
+const { normalizePlatform } = require('../utils/platform');
 
 class MultiObjectiveSelector {
     constructor() {
@@ -346,7 +347,8 @@ class MultiObjectiveSelector {
         const unified = isAppleSilicon;
         
         // Detect PC platform (Windows/Linux) to match main algorithm
-        const isPC = !isAppleSilicon && (process.platform === 'win32' || process.platform === 'linux');
+        const platform = normalizePlatform(hardware?.os?.platform || process.platform);
+        const isPC = !isAppleSilicon && (platform === 'win32' || platform === 'linux');
         
         // 1) Effective memory for model weights (45%) - Apple Silicon & PC optimized
         let effMem;

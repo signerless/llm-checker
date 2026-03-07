@@ -82,6 +82,13 @@ npm install -g llm-checker
 npx llm-checker hw-detect
 ```
 
+**Termux (Android):**
+```bash
+pkg update
+pkg install ollama
+npm install -g llm-checker
+```
+
 **Requirements:**
 - Node.js 16+ (any version: 16, 18, 20, 22, 24)
 - [Ollama](https://ollama.ai) installed for running models

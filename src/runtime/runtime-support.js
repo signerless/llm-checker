@@ -1,4 +1,5 @@
 const SUPPORTED_RUNTIMES = ['ollama', 'vllm', 'mlx'];
+const { normalizePlatform, isTermuxEnvironment } = require('../utils/platform');
 
 function normalizeRuntime(runtime = 'ollama') {
     const normalized = String(runtime || 'ollama').trim().toLowerCase();
@@ -114,7 +115,19 @@ function getRuntimeInstallCommand(runtime = 'ollama') {
         return 'pip install -U mlx-lm';
     }
 
-    return 'ollama --version || (brew install ollama)';
+    if (isTermuxEnvironment()) {
+        return 'pkg install ollama';
+    }
+
+    const platform = normalizePlatform();
+    if (platform === 'darwin') {
+        return 'brew install ollama';
+    }
+    if (platform === 'win32') {
+        return 'winget install Ollama.Ollama';
+    }
+
+    return 'curl -fsSL https://ollama.com/install.sh | sh';
 }
 
 function getRuntimePullCommand(model = {}, runtime = 'ollama') {

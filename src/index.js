@@ -18,6 +18,7 @@ const {
     attachModelProvenance,
     attachProvenanceToCollection
 } = require('./provenance/model-provenance');
+const { normalizePlatform } = require('./utils/platform');
 
 class LLMChecker {
     constructor(options = {}) {
@@ -72,7 +73,7 @@ class LLMChecker {
             this.logger.info('Hardware detected', { hardware });
 
             // Detect platform and route to appropriate logic (use hardware OS for simulation support)
-            const detectedPlatform = hardware.os?.platform || process.platform;
+            const detectedPlatform = normalizePlatform(hardware.os?.platform || process.platform);
 
             // Report hardware detection progress before platform-specific analysis
             if (this.progress) {
@@ -1370,7 +1371,8 @@ class LLMChecker {
         const unified = isAppleSilicon;
         
         // Detect PC platform (Windows/Linux)
-        const isPC = !isAppleSilicon && (process.platform === 'win32' || process.platform === 'linux');
+        const normalizedPlatform = normalizePlatform(hardware.os?.platform || process.platform);
+        const isPC = !isAppleSilicon && (normalizedPlatform === 'win32' || normalizedPlatform === 'linux');
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
         const hasAVX2 = cpuModel.toLowerCase().includes('intel') || 
