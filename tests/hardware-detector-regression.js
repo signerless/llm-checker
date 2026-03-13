@@ -312,6 +312,122 @@ async function testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu() {
     assert.strictEqual(systemInfo.gpu.backend, 'generic', 'Fallback enrichment should mark backend as generic');
 }
 
+function testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem() {
+    const detector = new UnifiedDetector();
+    const summary = detector.buildSummary({
+        cpu: { brand: 'Intel Core Ultra 7 155H', speedCoefficient: 110 },
+        primary: {
+            type: 'cuda',
+            name: 'NVIDIA CUDA',
+            info: {
+                totalVRAM: 8,
+                isMultiGPU: false,
+                speedCoefficient: 120,
+                gpus: [
+                    { name: 'NVIDIA GeForce RTX 4060 Laptop GPU', memory: { total: 8 } }
+                ]
+            }
+        },
+        systemGpu: {
+            available: true,
+            hasDedicated: true,
+            gpus: [
+                {
+                    name: 'NVIDIA GeForce RTX 4060 Laptop GPU',
+                    type: 'dedicated',
+                    memory: { total: 8 }
+                },
+                {
+                    name: 'Intel Iris Xe Graphics',
+                    type: 'integrated',
+                    memory: { total: 0 }
+                }
+            ],
+            totalVRAM: 8,
+            isMultiGPU: false
+        }
+    });
+
+    assert.strictEqual(summary.hasDedicatedGPU, true, 'Hybrid summary should preserve dedicated GPU signal');
+    assert.strictEqual(summary.hasIntegratedGPU, true, 'Hybrid summary should preserve integrated GPU signal');
+    assert.ok(
+        summary.integratedGpuModels.some((gpu) => gpu.name.toLowerCase().includes('iris xe')),
+        `Expected integrated GPU inventory to include Iris Xe, got: ${JSON.stringify(summary.integratedGpuModels)}`
+    );
+    assert.ok(
+        (summary.gpuInventory || '').toLowerCase().includes('iris xe'),
+        `Expected combined GPU inventory to include Iris Xe, got: ${summary.gpuInventory}`
+    );
+}
+
+async function testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIsCpu() {
+    const detector = new HardwareDetector();
+    detector.unifiedDetector = {
+        detect: async () => ({
+            primary: { type: 'cpu' },
+            summary: {
+                bestBackend: 'cpu',
+                backendName: 'CPU',
+                gpuModel: 'Intel Iris Xe Graphics',
+                gpuInventory: 'Intel Iris Xe Graphics',
+                totalVRAM: 0,
+                gpuCount: 1,
+                isMultiGPU: false,
+                hasIntegratedGPU: true,
+                hasDedicatedGPU: false,
+                integratedGpuCount: 1,
+                dedicatedGpuCount: 0,
+                integratedGpuModels: [{ name: 'Intel Iris Xe Graphics', count: 1 }],
+                dedicatedGpuModels: []
+            },
+            systemGpu: {
+                available: true,
+                hasDedicated: false,
+                gpus: [
+                    {
+                        name: 'Intel Iris Xe Graphics',
+                        type: 'integrated',
+                        memory: { total: 0 }
+                    }
+                ],
+                totalVRAM: 0,
+                isMultiGPU: false
+            },
+            backends: {
+                cpu: { info: { speedCoefficient: 90 } }
+            }
+        })
+    };
+
+    const systemInfo = {
+        cpu: {},
+        memory: {},
+        gpu: {
+            model: 'Intel Iris Xe Graphics',
+            vendor: 'Intel',
+            vram: 0,
+            vramPerGPU: 0,
+            dedicated: false,
+            gpuCount: 1,
+            isMultiGPU: false
+        },
+        system: {},
+        os: {}
+    };
+
+    await detector.enrichWithUnifiedHardware(systemInfo);
+
+    assert.ok(systemInfo.summary, 'Unified summary should be attached to system info');
+    assert.strictEqual(systemInfo.gpu.model, 'Intel Iris Xe Graphics', 'Integrated model should remain visible');
+    assert.strictEqual(systemInfo.gpu.dedicated, false, 'Integrated-only systems should remain non-dedicated');
+    assert.strictEqual(systemInfo.gpu.backend, 'cpu', 'Integrated-only CPU path should keep CPU backend');
+    assert.strictEqual(systemInfo.gpu.hasIntegratedGPU, true, 'Integrated-only enrichment should preserve integrated signal');
+    assert.ok(
+        systemInfo.gpu.integratedGpuModels.some((gpu) => gpu.name.toLowerCase().includes('iris xe')),
+        `Expected integrated GPU inventory to include Iris Xe, got: ${JSON.stringify(systemInfo.gpu.integratedGpuModels)}`
+    );
+}
+
 async function run() {
     await testVendorlessTeslaDetection();
     await testUnifiedFallbackEnrichment();
@@ -321,6 +437,8 @@ async function run() {
     await testUnifiedWindowsFallbackGpuDetection();
     testUnifiedLinuxLspciHybridParsing();
     await testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu();
+    testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem();
+    await testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIsCpu();
     console.log('✅ hardware-detector-regression.js passed');
 }
 

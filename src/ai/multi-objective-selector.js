@@ -347,6 +347,12 @@ class MultiObjectiveSelector {
         const unified = isAppleSilicon;
         
         // Detect PC platform (Windows/Linux) to match main algorithm
+        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+            : '';
+        const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
+            ? hardware.summary.hasIntegratedGPU
+            : /iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(`${gpuModel} ${integratedGpuInventory}`);
         const platform = normalizePlatform(hardware?.os?.platform || process.platform);
         const isPC = !isAppleSilicon && (platform === 'win32' || platform === 'linux');
         
@@ -448,7 +454,7 @@ class MultiObjectiveSelector {
             tier = bumpTier(tier, +1);  // High-end GPU boost
         } else if (!vramGB && !unified) {
             tier = bumpTier(tier, -1);  // CPU-only penalty (moderate)
-        } else if (/iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+        } else if (hasIntegratedGPU) {
             tier = bumpTier(tier, -1);  // iGPU penalty
         } else if (vramGB > 0 && vramGB < 6) {
             tier = bumpTier(tier, -1);  // Low VRAM penalty
@@ -660,7 +666,10 @@ class MultiObjectiveSelector {
         const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
         const gpuModel = hardware.gpu?.model || '';
         const cpu = cpuModel.toLowerCase();
-        const gpu = gpuModel.toLowerCase();
+        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+            : '';
+        const gpu = `${gpuModel} ${integratedGpuInventory}`.toLowerCase();
         const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
         
         let specs = {
@@ -740,13 +749,16 @@ class MultiObjectiveSelector {
         const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
         const baseSpeed = hardware.cpu?.speed || 2.0;
         const vramGB = hardware.gpu?.vram || 0;
+        const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
+            ? hardware.summary.hasIntegratedGPU
+            : false;
         
         // Use improved CPU estimation function for more realistic and varying speeds
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('13th') || cpuModel.includes('14th') || cpuModel.includes('12th'));
         
         // GPU-based calculation (dedicated GPU only)
-        if (vramGB > 0 && !gpuModel.toLowerCase().includes('iris') && !gpuModel.toLowerCase().includes('integrated')) {
+        if (vramGB > 0 && !hasIntegratedGPU) {
             let gpuTPS = 20; // Conservative GPU baseline
             if (gpuModel.toLowerCase().includes('gb10') ||
                 gpuModel.toLowerCase().includes('grace blackwell') ||
@@ -782,7 +794,7 @@ class MultiObjectiveSelector {
                 threads: cores,
                 paramsB: params,
                 avx512: hasAVX512,
-                isIrisXe: gpuModel.toLowerCase().includes('iris xe')
+                isIrisXe: hasIntegratedGPU && gpuModel.toLowerCase().includes('iris xe')
             });
         }
     }

@@ -1436,7 +1436,7 @@ class LLMChecker {
             compute = clamp(tflopsFP16 / 80);  // GPU: normalizado contra 80 TFLOPs (más realista)
             
             // Cap iGPU compute
-            if (/iris xe|uhd|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
+            if (Boolean(hardware.summary?.hasIntegratedGPU) || /iris xe|uhd|vega.*integrated|radeon.*graphics/i.test(gpuModel)) {
                 compute = Math.min(compute, 0.15);
             }
         } else {
@@ -1469,9 +1469,15 @@ class LLMChecker {
                   score >= 35 ? 'medium' :         // 35-54 for mid-range systems
                   score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
         
-        // Detect if system has dedicated GPU (not integrated) - improved detection
-        const hasIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(gpuModel);
-        const hasDedicatedGPU = vramGB > 0 && !hasIntegratedGPU && !unified;
+        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+            : '';
+        const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
+            ? hardware.summary.hasIntegratedGPU
+            : /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(`${gpuModel} ${integratedGpuInventory}`);
+        const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
+            ? (!unified && hardware.summary.hasDedicatedGPU)
+            : (vramGB > 0 && !hasIntegratedGPU && !unified);
         
         // Debug logging for tier calculation
         if (process.env.DEBUG_TIER) {
@@ -1749,7 +1755,10 @@ class LLMChecker {
         const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
         const gpuModel = hardware.gpu?.model || '';
         const cpu = cpuModel.toLowerCase();
-        const gpu = gpuModel.toLowerCase();
+        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+            : '';
+        const gpu = `${gpuModel} ${integratedGpuInventory}`.toLowerCase();
         const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
         
         let specs = {

@@ -872,6 +872,13 @@ function calculateModelCompatibilityScore(model, hardware) {
     return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+function formatGpuInventoryList(models = []) {
+    if (!Array.isArray(models) || models.length === 0) return 'None';
+    return models
+        .map(({ name, count }) => (count > 1 ? `${count}x ${name}` : name))
+        .join(' + ');
+}
+
 // Helper function to get hardware tier for display
 function getHardwareTierForDisplay(hardware) {
     const ram = hardware.memory.total;
@@ -879,9 +886,15 @@ function getHardwareTierForDisplay(hardware) {
     const gpuModel = hardware.gpu?.model || '';
     const vramGB = hardware.gpu?.vram || 0;
     
-    // Check if it's integrated GPU (should cap tier)
-    const isIntegratedGPU = /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(gpuModel);
-    const hasDedicatedGPU = vramGB > 0 && !isIntegratedGPU;
+    const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+        ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+        : '';
+    const isIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
+        ? hardware.summary.hasIntegratedGPU
+        : /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(`${gpuModel} ${integratedGpuInventory}`);
+    const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
+        ? hardware.summary.hasDedicatedGPU
+        : (vramGB > 0 && !isIntegratedGPU);
     const isAppleSilicon = process.platform === 'darwin' && (gpuModel.toLowerCase().includes('apple') || gpuModel.toLowerCase().includes('m1') || gpuModel.toLowerCase().includes('m2') || gpuModel.toLowerCase().includes('m3') || gpuModel.toLowerCase().includes('m4'));
     
     // Base tier calculation
@@ -948,6 +961,8 @@ function displaySystemInfo(hardware, analysis) {
     const cpuColor = hardware.cpu.cores >= 8 ? chalk.green : hardware.cpu.cores >= 4 ? chalk.yellow : chalk.red;
     const ramColor = hardware.memory.total >= 32 ? chalk.green : hardware.memory.total >= 16 ? chalk.yellow : chalk.red;
     const gpuColor = hardware.gpu.dedicated ? chalk.green : chalk.hex('#FFA500');
+    const integratedList = formatGpuInventoryList(hardware.gpu.integratedGpuModels || hardware.summary?.integratedGpuModels);
+    const dedicatedList = formatGpuInventoryList(hardware.gpu.dedicatedGpuModels || hardware.summary?.dedicatedGpuModels);
 
     const lines = [
         `${chalk.cyan('CPU:')} ${cpuColor(hardware.cpu.brand)} ${chalk.gray(`(${hardware.cpu.cores} cores, ${hardware.cpu.speed}GHz)`)}`,
@@ -955,6 +970,8 @@ function displaySystemInfo(hardware, analysis) {
         `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')}`,
         `${chalk.cyan('GPU:')} ${gpuColor(hardware.gpu.model || 'Not detected')}`,
         `${chalk.cyan('VRAM:')} ${hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple') ? 'Unified Memory' : `${hardware.gpu.vram || 'N/A'}GB`}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
+        `${chalk.cyan('Dedicated GPUs:')} ${chalk.green(dedicatedList)}`,
+        `${chalk.cyan('Integrated GPUs:')} ${chalk.hex('#FFA500')(integratedList)}`,
     ];
 
     const tier = analysis.summary.hardwareTier?.replace('_', ' ').toUpperCase() || 'UNKNOWN';
@@ -5042,6 +5059,11 @@ program
             console.log(`  Tier: ${chalk.cyan(detector.getHardwareTier().replace('_', ' ').toUpperCase())}`);
             console.log(`  Max model size: ${chalk.green(detector.getMaxModelSize() + 'GB')}`);
             console.log(`  Best backend: ${chalk.cyan(hardware.summary.bestBackend)}`);
+            console.log(`  Dedicated GPUs: ${chalk.green(formatGpuInventoryList(hardware.summary.dedicatedGpuModels))}`);
+            console.log(`  Integrated GPUs: ${chalk.hex('#FFA500')(formatGpuInventoryList(hardware.summary.integratedGpuModels))}`);
+            if (hardware.summary.hasIntegratedGPU && hardware.summary.bestBackend === 'cpu') {
+                console.log(`  Assist path: ${chalk.yellow('Integrated/shared-memory GPU detected, runtime remains CPU')}`);
+            }
 
             // CPU
             if (hardware.cpu) {

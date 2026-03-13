@@ -22,6 +22,18 @@ class OutputFormatter {
             ? 'Unified Memory' 
             : `${hardware.gpu.vram || 'N/A'}GB`;
         lines.push(this.info('VRAM', `${vramDisplay}${hardware.gpu.dedicated ? ' (Dedicated)' : ' (Integrated)'}`));
+        if (Array.isArray(hardware.gpu.dedicatedGpuModels) && hardware.gpu.dedicatedGpuModels.length > 0) {
+            const dedicated = hardware.gpu.dedicatedGpuModels
+                .map(({ name, count }) => (count > 1 ? `${count}x ${name}` : name))
+                .join(' + ');
+            lines.push(this.info('Dedicated GPUs', dedicated));
+        }
+        if (Array.isArray(hardware.gpu.integratedGpuModels) && hardware.gpu.integratedGpuModels.length > 0) {
+            const integrated = hardware.gpu.integratedGpuModels
+                .map(({ name, count }) => (count > 1 ? `${count}x ${name}` : name))
+                .join(' + ');
+            lines.push(this.info('Integrated GPUs', integrated));
+        }
         lines.push(this.info('OS', `${hardware.os.distro} ${hardware.os.release} (${hardware.os.arch})`));
 
         return lines.join('\n');

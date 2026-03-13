@@ -31,6 +31,35 @@ function isIntegratedGPU(gpuModel = '') {
     return /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(gpuModel);
 }
 
+function getIntegratedGpuNames(hardware = {}) {
+    if (!Array.isArray(hardware.summary?.integratedGpuModels)) return '';
+    return hardware.summary.integratedGpuModels
+        .map((model) => model?.name)
+        .filter(Boolean)
+        .join(' ');
+}
+
+function detectIntegratedGpu(hardware = {}, gpuModel = '') {
+    if (typeof hardware.summary?.hasIntegratedGPU === 'boolean') {
+        return hardware.summary.hasIntegratedGPU;
+    }
+    if (typeof hardware.gpu?.hasIntegratedGPU === 'boolean') {
+        return hardware.gpu.hasIntegratedGPU;
+    }
+    return isIntegratedGPU(`${gpuModel} ${getIntegratedGpuNames(hardware)}`.trim());
+}
+
+function detectDedicatedGpu(hardware = {}, integrated = false, appleSilicon = false, vramGB = 0) {
+    if (appleSilicon) return false;
+    if (typeof hardware.summary?.hasDedicatedGPU === 'boolean') {
+        return hardware.summary.hasDedicatedGPU && vramGB > 0;
+    }
+    if (typeof hardware.gpu?.hasDedicatedGPU === 'boolean') {
+        return hardware.gpu.hasDedicatedGPU && vramGB > 0;
+    }
+    return vramGB > 0 && !integrated;
+}
+
 function getAppleSiliconBaseline(cpuModel, gpuModel) {
     const signal = `${cpuModel} ${gpuModel}`.toLowerCase();
     const profiles = [
@@ -162,8 +191,8 @@ function estimateTokenSpeedFromHardware(hardware = {}, options = {}) {
     );
 
     const appleSilicon = detectAppleSilicon(architecture, cpuModel, gpuModel);
-    const integrated = isIntegratedGPU(gpuModel);
-    const dedicatedGPU = vramGB > 0 && !integrated && !appleSilicon;
+    const integrated = detectIntegratedGpu(hardware, gpuModel);
+    const dedicatedGPU = detectDedicatedGpu(hardware, integrated, appleSilicon, vramGB);
 
     let baselineTPS7B;
     let backend;

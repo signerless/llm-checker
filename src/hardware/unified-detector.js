@@ -128,16 +128,9 @@ class UnifiedDetector {
             }
         }
 
-        // Fallback GPU inventory via systeminformation (Windows/Linux) when no
-        // accelerator backend is currently available (CUDA/ROCm/Metal/Intel).
-        const hasAcceleratedBackend = Boolean(
-            result.backends.cuda?.available ||
-            result.backends.rocm?.available ||
-            result.backends.metal?.available ||
-            result.backends.intel?.available
-        );
-
-        if (!hasAcceleratedBackend && (platform === 'win32' || platform === 'linux')) {
+        // Always collect a generic GPU inventory on Windows/Linux so integrated
+        // GPUs remain visible even when a dedicated backend is selected.
+        if (platform === 'win32' || platform === 'linux') {
             try {
                 const genericGpuInfo = await this.detectSystemGpuFallback();
                 if (genericGpuInfo?.available) {
@@ -232,14 +225,21 @@ class UnifiedDetector {
             gpuInventory: null,
             gpuModels: [],
             hasHeterogeneousGPU: false,
+            hasIntegratedGPU: false,
+            hasDedicatedGPU: false,
+            integratedGpuCount: 0,
+            dedicatedGpuCount: 0,
+            integratedGpuModels: [],
+            dedicatedGpuModels: [],
             cpuModel: result.cpu?.brand || 'Unknown',
             systemRAM: require('os').totalmem() / (1024 ** 3)
         };
 
         const primary = result.primary;
+        const inventorySource = this.getSummaryInventorySource(result);
 
         if (primary?.type === 'cuda' && primary.info) {
-            const inventory = this.summarizeGPUInventory(primary.info.gpus);
+            const inventory = this.summarizeGPUInventory(inventorySource);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.length;
             summary.isMultiGPU = primary.info.isMultiGPU;
@@ -250,7 +250,7 @@ class UnifiedDetector {
             summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
         }
         else if (primary?.type === 'rocm' && primary.info) {
-            const inventory = this.summarizeGPUInventory(primary.info.gpus);
+            const inventory = this.summarizeGPUInventory(inventorySource);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.length;
             summary.isMultiGPU = primary.info.isMultiGPU;
@@ -262,15 +262,17 @@ class UnifiedDetector {
         }
         else if (primary?.type === 'metal' && primary.info) {
             // Apple Silicon uses unified memory
+            const inventory = this.summarizeGPUInventory(inventorySource);
             summary.totalVRAM = primary.info.memory.unified;
             summary.gpuCount = 1;
             summary.speedCoefficient = primary.info.speedCoefficient;
-            summary.gpuModel = primary.info.chip || 'Apple Silicon';
-            summary.gpuInventory = summary.gpuModel;
-            summary.gpuModels = [{ name: summary.gpuModel, count: 1 }];
+            summary.gpuModel = inventory.primaryModel || primary.info.chip || 'Apple Silicon';
+            summary.gpuInventory = inventory.displayName || summary.gpuModel;
+            summary.gpuModels = inventory.models;
+            summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
         }
         else if (primary?.type === 'intel' && primary.info) {
-            const inventory = this.summarizeGPUInventory(primary.info.gpus);
+            const inventory = this.summarizeGPUInventory(inventorySource);
             summary.totalVRAM = primary.info.totalVRAM;
             summary.gpuCount = primary.info.gpus.filter(g => g.type === 'dedicated').length;
             summary.speedCoefficient = primary.info.speedCoefficient;
@@ -282,10 +284,10 @@ class UnifiedDetector {
         else if (result.cpu) {
             summary.speedCoefficient = result.cpu.speedCoefficient;
 
-            if (result.systemGpu?.available && Array.isArray(result.systemGpu.gpus) && result.systemGpu.gpus.length > 0) {
-                const inventory = this.summarizeGPUInventory(result.systemGpu.gpus);
+            if (inventorySource.length > 0) {
+                const inventory = this.summarizeGPUInventory(inventorySource);
                 summary.totalVRAM = result.systemGpu.totalVRAM || 0;
-                summary.gpuCount = result.systemGpu.gpus.length;
+                summary.gpuCount = inventory.dedicatedCount > 0 ? inventory.dedicatedCount : inventory.gpuCount;
                 summary.isMultiGPU = Boolean(result.systemGpu.isMultiGPU);
                 summary.gpuModel = inventory.primaryModel || null;
                 summary.gpuInventory = inventory.displayName || summary.gpuModel;
@@ -293,6 +295,24 @@ class UnifiedDetector {
                 summary.hasHeterogeneousGPU = inventory.isHeterogeneous;
             }
         }
+
+        const topology = this.summarizeGPUInventory(inventorySource);
+        summary.hasIntegratedGPU = topology.hasIntegratedGPU;
+        summary.hasDedicatedGPU = topology.hasDedicatedGPU;
+        summary.integratedGpuCount = topology.integratedCount;
+        summary.dedicatedGpuCount = topology.dedicatedCount;
+        summary.integratedGpuModels = topology.integratedModels;
+        summary.dedicatedGpuModels = topology.dedicatedModels;
+        if (!summary.gpuModel) {
+            summary.gpuModel = topology.primaryModel || null;
+        }
+        if (!summary.gpuInventory) {
+            summary.gpuInventory = topology.displayName || summary.gpuModel;
+        }
+        if (!summary.gpuModels.length) {
+            summary.gpuModels = topology.models;
+        }
+        summary.hasHeterogeneousGPU = summary.hasHeterogeneousGPU || topology.isHeterogeneous;
 
         // Effective memory for LLM loading
         // For GPU: use VRAM; for CPU/Metal: use system RAM
@@ -307,24 +327,108 @@ class UnifiedDetector {
     }
 
     summarizeGPUInventory(gpus = []) {
+        const normalized = this.normalizeGpuInventory(gpus);
         const counts = new Map();
+        const integratedCounts = new Map();
+        const dedicatedCounts = new Map();
 
-        for (const gpu of gpus) {
+        for (const gpu of normalized) {
             const name = (gpu?.name || 'Unknown GPU').replace(/\s+/g, ' ').trim();
             counts.set(name, (counts.get(name) || 0) + 1);
+            if (gpu.type === 'integrated') {
+                integratedCounts.set(name, (integratedCounts.get(name) || 0) + 1);
+            } else {
+                dedicatedCounts.set(name, (dedicatedCounts.get(name) || 0) + 1);
+            }
         }
 
         const models = Array.from(counts.entries()).map(([name, count]) => ({ name, count }));
+        const integratedModels = Array.from(integratedCounts.entries()).map(([name, count]) => ({ name, count }));
+        const dedicatedModels = Array.from(dedicatedCounts.entries()).map(([name, count]) => ({ name, count }));
         const displayName = models
             .map(({ name, count }) => (count > 1 ? `${count}x ${name}` : name))
             .join(' + ');
 
         return {
-            primaryModel: models[0]?.name || null,
+            primaryModel: dedicatedModels[0]?.name || integratedModels[0]?.name || models[0]?.name || null,
             displayName: displayName || null,
             models,
+            integratedModels,
+            dedicatedModels,
+            integratedCount: normalized.filter((gpu) => gpu.type === 'integrated').length,
+            dedicatedCount: normalized.filter((gpu) => gpu.type === 'dedicated').length,
+            hasIntegratedGPU: normalized.some((gpu) => gpu.type === 'integrated'),
+            hasDedicatedGPU: normalized.some((gpu) => gpu.type === 'dedicated'),
+            gpuCount: normalized.length,
             isHeterogeneous: models.length > 1
         };
+    }
+
+    getSummaryInventorySource(result) {
+        const primaryInventory = this.getPrimaryInventoryGpus(result.primary);
+        const systemInventory = Array.isArray(result.systemGpu?.gpus) ? result.systemGpu.gpus : [];
+        return this.mergeGpuInventories(primaryInventory, systemInventory);
+    }
+
+    getPrimaryInventoryGpus(primary) {
+        if (!primary?.info) return [];
+
+        if (Array.isArray(primary.info.gpus) && primary.info.gpus.length > 0) {
+            return primary.info.gpus;
+        }
+
+        if (primary.type === 'metal') {
+            return [{
+                name: primary.info.chip || 'Apple Silicon',
+                type: 'integrated',
+                memory: { total: primary.info.memory?.unified || 0 }
+            }];
+        }
+
+        return [];
+    }
+
+    normalizeGpuInventory(gpus = []) {
+        return gpus
+            .map((gpu) => {
+                const name = String(gpu?.name || gpu?.model || '').replace(/\s+/g, ' ').trim();
+                if (!name) return null;
+
+                let type = gpu?.type;
+                if (type !== 'integrated' && type !== 'dedicated') {
+                    type = this.isIntegratedGPUModel(name) ? 'integrated' : 'dedicated';
+                }
+
+                const totalMemory = Number(gpu?.memory?.total || gpu?.memoryTotal || gpu?.memory || 0);
+
+                return {
+                    name,
+                    type,
+                    memory: {
+                        total: Number.isFinite(totalMemory) ? totalMemory : 0
+                    }
+                };
+            })
+            .filter(Boolean);
+    }
+
+    mergeGpuInventories(...gpuLists) {
+        const normalizedLists = gpuLists.map((list) => this.normalizeGpuInventory(list));
+        const primaryIndex = normalizedLists.findIndex((list) => list.length > 0);
+        const merged = [];
+        const seen = new Set();
+
+        normalizedLists.forEach((list, listIndex) => {
+            for (const gpu of list) {
+                const key = `${this.getGpuMatchKey(gpu.name)}|${gpu.type}`;
+                if (!key) continue;
+                if (listIndex !== primaryIndex && seen.has(key)) continue;
+                merged.push(gpu);
+                seen.add(key);
+            }
+        });
+
+        return merged;
     }
 
     async detectSystemGpuFallback() {
@@ -715,6 +819,10 @@ class UnifiedDetector {
             return `${gpuDesc} (${summary.totalVRAM}GB) + ${summary.cpuModel}`;
         }
         else {
+            if (summary.gpuModel && summary.hasIntegratedGPU && !summary.hasDedicatedGPU) {
+                const gpuDesc = summary.gpuInventory || summary.gpuModel;
+                return `${gpuDesc} (integrated/shared memory, CPU backend) + ${summary.cpuModel}`;
+            }
             if (summary.gpuModel && summary.gpuCount > 0) {
                 const gpuDesc = summary.gpuInventory || summary.gpuModel;
                 return `${gpuDesc} (${summary.totalVRAM}GB VRAM detected, CPU backend) + ${summary.cpuModel}`;

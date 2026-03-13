@@ -256,24 +256,33 @@ class HardwareDetector {
             }
 
             const primaryType = unified.primary.type || 'cpu';
+            const summary = unified.summary;
             const hasFallbackDedicatedGpu = Boolean(
                 primaryType === 'cpu' &&
                 unified.systemGpu?.available &&
                 Array.isArray(unified.systemGpu.gpus) &&
                 unified.systemGpu.gpus.some((gpu) => gpu.type === 'dedicated')
             );
-
-            if (primaryType === 'cpu' && !hasFallbackDedicatedGpu) {
-                return;
-            }
-
-            const summary = unified.summary;
             const backendInfo = hasFallbackDedicatedGpu
                 ? unified.systemGpu
                 : (unified.backends?.[primaryType]?.info || {});
 
             const backendGPUs = Array.isArray(backendInfo.gpus) ? backendInfo.gpus : [];
             const dedicatedBackendGPUs = backendGPUs.filter((gpu) => gpu?.type !== 'integrated');
+            const dedicatedInventoryModels = Array.isArray(summary.dedicatedGpuModels) ? summary.dedicatedGpuModels : [];
+            const integratedInventoryModels = Array.isArray(summary.integratedGpuModels) ? summary.integratedGpuModels : [];
+            const hasDedicatedGPU = Boolean(
+                summary.hasDedicatedGPU ||
+                dedicatedInventoryModels.length > 0 ||
+                dedicatedBackendGPUs.length > 0
+            );
+            const hasIntegratedGPU = Boolean(
+                summary.hasIntegratedGPU ||
+                integratedInventoryModels.length > 0 ||
+                backendGPUs.some((gpu) => gpu?.type === 'integrated')
+            );
+            const primaryDedicatedModel = dedicatedInventoryModels[0]?.name || dedicatedBackendGPUs[0]?.name || null;
+            const primaryIntegratedModel = integratedInventoryModels[0]?.name || null;
 
             const gpuCount = summary.gpuCount ||
                 dedicatedBackendGPUs.length ||
@@ -288,23 +297,33 @@ class HardwareDetector {
             }, 0);
             const totalVRAM = totalVRAMFromUnified || totalVRAMFromFallback || systemInfo.gpu.vram;
             const perGPUVRAM = dedicatedBackendGPUs[0]?.memory?.total ||
-                backendGPUs[0]?.memory?.total ||
-                (gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / gpuCount) : 0);
+                (hasDedicatedGPU && gpuCount > 0 && totalVRAM > 0 ? Math.round(totalVRAM / Math.max(1, summary.dedicatedGpuCount || gpuCount)) : 0);
 
-            const fallbackModel = dedicatedBackendGPUs[0]?.name || backendGPUs[0]?.name || null;
-            const modelFromUnified = summary.gpuInventory || summary.gpuModel || fallbackModel || systemInfo.gpu.model;
+            const fallbackModel = primaryDedicatedModel || primaryIntegratedModel || backendGPUs[0]?.name || null;
+            const modelFromUnified = summary.gpuModel || fallbackModel || systemInfo.gpu.model;
             const vendor = this.inferVendorFromGPUModel(modelFromUnified, systemInfo.gpu.vendor);
+            const isAppleUnified = primaryType === 'metal';
+
+            systemInfo.summary = {
+                ...summary
+            };
 
             systemInfo.gpu = {
                 ...systemInfo.gpu,
                 model: modelFromUnified,
                 vendor,
-                vram: totalVRAM || systemInfo.gpu.vram,
-                vramPerGPU: perGPUVRAM || systemInfo.gpu.vramPerGPU || 0,
-                dedicated: hasFallbackDedicatedGpu ? true : primaryType !== 'metal',
-                gpuCount,
+                vram: isAppleUnified ? systemInfo.gpu.vram : (hasDedicatedGPU ? (totalVRAM || systemInfo.gpu.vram) : 0),
+                vramPerGPU: isAppleUnified ? (systemInfo.gpu.vramPerGPU || 0) : (perGPUVRAM || systemInfo.gpu.vramPerGPU || 0),
+                dedicated: hasDedicatedGPU,
+                gpuCount: summary.gpuCount || gpuCount,
                 isMultiGPU: Boolean(summary.isMultiGPU || gpuCount > 1),
                 gpuInventory: summary.gpuInventory || null,
+                hasIntegratedGPU,
+                hasDedicatedGPU,
+                integratedGpuCount: summary.integratedGpuCount || 0,
+                dedicatedGpuCount: summary.dedicatedGpuCount || 0,
+                integratedGpuModels: integratedInventoryModels,
+                dedicatedGpuModels: dedicatedInventoryModels,
                 backend: hasFallbackDedicatedGpu ? 'generic' : primaryType,
                 driverVersion: backendInfo.driver || systemInfo.gpu.driverVersion
             };
