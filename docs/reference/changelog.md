@@ -1,6 +1,24 @@
 Changelog
 =========
 
+3.5.6 — Integrated GPU Inventory & Hybrid Visibility (2026-03-13)
+------------------------------------------------------------------
+
+- Added first-class integrated GPU inventory handling:
+  - unified hardware summaries now preserve integrated and dedicated GPU topology separately.
+  - summary metadata now exposes integrated/dedicated GPU counts and model lists.
+- Improved hybrid and integrated-only system reporting:
+  - hybrid systems now keep both dedicated and integrated GPU models visible.
+  - integrated-only systems continue to surface GPU inventory even when the runtime backend remains CPU.
+- Improved downstream model selection heuristics:
+  - recommendation, tiering, and token-speed estimation now prefer canonical integrated-GPU signals over scattered regex-only checks.
+- Improved CLI/system output:
+  - hardware displays now show dedicated vs integrated GPU inventory explicitly.
+  - CPU-backend systems with integrated GPU assist paths are labeled more clearly.
+- Added regression coverage:
+  - hybrid dedicated + integrated inventory preservation tests.
+  - integrated-only CPU-backend inventory preservation tests.
+
 3.5.5 — Termux Support (2026-03-07)
 -----------------------------------
 
