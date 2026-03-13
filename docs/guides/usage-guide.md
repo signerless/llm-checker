@@ -150,6 +150,29 @@ llm-checker ai-check --models llama2:7b llama2:13b
 
 ---
 
+### **6. Hybrid Laptop User - "Do you see both my iGPU and dGPU?"**
+
+**Scenario**: You are on a laptop or mini PC with integrated graphics plus a dedicated GPU, or on an integrated-only system where the backend still resolves to CPU.
+
+```bash
+# Inspect hardware topology directly
+llm-checker hw-detect
+```
+
+**Relevant output**:
+```text
+Dedicated GPUs: NVIDIA GeForce RTX 4060
+Integrated GPUs: Intel Iris Xe Graphics
+Assist path: Integrated/shared-memory GPU detected, runtime remains CPU
+```
+
+**Why it matters**:
+- Integrated GPUs are now surfaced explicitly instead of disappearing behind a CPU backend summary.
+- Hybrid systems keep both GPU inventories visible.
+- Recommendation and speed estimation paths can use that integrated-GPU signal more consistently.
+
+---
+
 ## 🛠️ **Advanced Usage Patterns**
 
 ### **Command Chaining for Workflows**

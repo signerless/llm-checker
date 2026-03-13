@@ -40,7 +40,7 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 |:---:|---|---|
 | **200+** | Dynamic Model Pool | Uses full scraped Ollama catalog/variants when available (with curated fallback) |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
-| **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU |
+| **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
 | **Zero** | Native Dependencies | Pure JavaScript &mdash; works on any Node.js 16+ system |
 | **Optional** | SQLite Search | Install `sql.js` to unlock `sync`, `search`, and `smart-recommend` |
@@ -514,6 +514,16 @@ Metal:
   Unified Memory: 24GB
   Memory Bandwidth: 273GB/s
 ```
+
+On hybrid or integrated-only systems, `hw-detect` now also surfaces GPU topology explicitly:
+
+```
+Dedicated GPUs: NVIDIA GeForce RTX 4060
+Integrated GPUs: Intel Iris Xe Graphics
+Assist path: Integrated/shared-memory GPU detected, runtime remains CPU
+```
+
+This makes integrated GPUs visible even when the selected runtime backend is still CPU.
 
 ### `recommend` &mdash; Category Recommendations
 
