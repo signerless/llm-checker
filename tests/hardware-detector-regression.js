@@ -9,6 +9,7 @@
 const assert = require('assert');
 const HardwareDetector = require('../src/hardware/detector');
 const UnifiedDetector = require('../src/hardware/unified-detector');
+const MultiObjectiveSelector = require('../src/ai/multi-objective-selector');
 
 async function testVendorlessTeslaDetection() {
     const detector = new HardwareDetector();
@@ -74,6 +75,32 @@ async function testUnifiedFallbackEnrichment() {
     assert.strictEqual(systemInfo.gpu.gpuCount, 4, 'GPU count should match unified detector');
     assert.strictEqual(systemInfo.gpu.isMultiGPU, true, 'Multi-GPU flag should be preserved');
     assert.strictEqual(systemInfo.gpu.dedicated, true, 'CUDA backend should be treated as dedicated');
+}
+
+function testIntegratedGpuSharedMemoryHeuristic() {
+    const detector = new HardwareDetector();
+    const gpu = detector.processGPUInfo(
+        {
+            controllers: [
+                {
+                    model: 'AMD Radeon(TM) Graphics',
+                    vendor: 'AMD',
+                    vram: 1024,
+                    vramDynamic: true
+                }
+            ],
+            displays: []
+        },
+        {
+            total: 24 * 1024 ** 3
+        }
+    );
+
+    assert.strictEqual(gpu.model, 'AMD Radeon(TM) Graphics', 'Integrated GPU model should be preserved');
+    assert.strictEqual(gpu.vram, 12, 'Integrated GPU should expose estimated shared memory instead of 1GB aperture');
+    assert.strictEqual(gpu.sharedMemory, 12, 'Integrated GPU shared memory should reflect system-RAM heuristic');
+    assert.strictEqual(gpu.dedicatedMemory, 1, 'Dedicated aperture should remain visible separately');
+    assert.strictEqual(gpu.dedicated, false, 'Integrated GPU must remain non-dedicated');
 }
 
 function testGb10AndP100Mappings() {
@@ -171,6 +198,38 @@ function testHeterogeneousGpuSummaryPreserved() {
     assert.ok(
         description.includes('2x NVIDIA Tesla V100 + 2x NVIDIA Tesla P40 + NVIDIA Tesla M40'),
         `Hardware description should include mixed inventory, got: ${description}`
+    );
+}
+
+function testIntegratedSummaryReportsSharedMemory() {
+    const detector = new UnifiedDetector();
+    const summary = detector.buildSummary({
+        cpu: { brand: 'AMD Ryzen 7 8840HS', speedCoefficient: 100 },
+        primary: { type: 'cpu', name: 'CPU', info: { speedCoefficient: 100 } },
+        systemGpu: {
+            available: true,
+            hasDedicated: false,
+            gpus: [
+                {
+                    name: 'AMD Radeon(TM) Graphics',
+                    type: 'integrated',
+                    memory: { total: 12 }
+                }
+            ],
+            totalVRAM: 0,
+            isMultiGPU: false
+        }
+    });
+
+    assert.strictEqual(summary.hasIntegratedGPU, true, 'Integrated-only summary should preserve integrated GPU signal');
+    assert.strictEqual(summary.hasDedicatedGPU, false, 'Integrated-only summary should not invent dedicated VRAM');
+    assert.strictEqual(summary.integratedSharedMemory, 12, 'Summary should surface integrated shared memory');
+
+    detector.cache = { summary };
+    const description = detector.getHardwareDescription();
+    assert.ok(
+        description.includes('12GB shared memory'),
+        `Integrated-only description should mention shared memory, got: ${description}`
     );
 }
 
@@ -428,17 +487,55 @@ async function testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIs
     );
 }
 
+function testHybridSelectorUsesDedicatedPath() {
+    const selector = new MultiObjectiveSelector();
+    const tps = selector.estimateTokensPerSecond(
+        {
+            cpu: {
+                brand: 'Intel Core Ultra 7 155H',
+                physicalCores: 16,
+                speed: 4.8
+            },
+            memory: { total: 32 },
+            gpu: {
+                model: 'NVIDIA GeForce RTX 4060 Laptop GPU',
+                vram: 8,
+                dedicated: true
+            },
+            os: { platform: 'win32' },
+            summary: {
+                hasIntegratedGPU: true,
+                hasDedicatedGPU: true,
+                integratedGpuModels: [{ name: 'Intel Arc Graphics' }],
+                dedicatedGpuModels: [{ name: 'NVIDIA GeForce RTX 4060 Laptop GPU' }]
+            }
+        },
+        {
+            name: 'llama3.2:3b',
+            size: '3B'
+        }
+    );
+
+    assert.ok(
+        tps >= 10,
+        `Hybrid systems should keep the dedicated-GPU performance path, got ${tps} tok/s`
+    );
+}
+
 async function run() {
     await testVendorlessTeslaDetection();
     await testUnifiedFallbackEnrichment();
+    testIntegratedGpuSharedMemoryHeuristic();
     testGb10AndP100Mappings();
     testDeviceIdFallbackMappings();
     testHeterogeneousGpuSummaryPreserved();
+    testIntegratedSummaryReportsSharedMemory();
     await testUnifiedWindowsFallbackGpuDetection();
     testUnifiedLinuxLspciHybridParsing();
     await testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu();
     testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem();
     await testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIsCpu();
+    testHybridSelectorUsesDedicatedPath();
     console.log('✅ hardware-detector-regression.js passed');
 }
 

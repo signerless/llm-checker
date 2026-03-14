@@ -15,6 +15,10 @@ class CUDADetector {
         this.detectionMode = null;
     }
 
+    execCommand(command, options = {}) {
+        return execSync(command, options);
+    }
+
     /**
      * Check if CUDA is available
      */
@@ -43,7 +47,7 @@ class CUDADetector {
 
     hasNvidiaSMI() {
         try {
-            execSync('nvidia-smi --version', {
+            this.execCommand('nvidia-smi --version', {
                 encoding: 'utf8',
                 timeout: 5000,
                 stdio: ['pipe', 'pipe', 'pipe']
@@ -142,7 +146,7 @@ class CUDADetector {
         }
 
         try {
-            execSync('nvcc --version', {
+            this.execCommand('nvcc --version', {
                 encoding: 'utf8',
                 timeout: 5000,
                 stdio: ['pipe', 'pipe', 'pipe']
@@ -197,17 +201,18 @@ class CUDADetector {
 
         try {
             // Get driver and CUDA version
-            const versionInfo = execSync('nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits', {
+            const versionInfo = this.execCommand('nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits', {
                 encoding: 'utf8',
                 timeout: 5000
             }).trim().split('\n')[0];
             result.driver = versionInfo;
 
-            // Get CUDA version from nvidia-smi header
-            const header = execSync('nvidia-smi | head -n 3', {
+            // Parse the nvidia-smi banner in JS so Windows does not require shell-only tools like `head`.
+            const banner = this.execCommand('nvidia-smi', {
                 encoding: 'utf8',
                 timeout: 5000
             });
+            const header = banner.split('\n').slice(0, 3).join('\n');
             const cudaMatch = header.match(/CUDA Version:\s*([\d.]+)/);
             if (cudaMatch) {
                 result.cuda = cudaMatch[1];
@@ -237,7 +242,7 @@ class CUDADetector {
                 'clocks.max.sm'
             ].join(',');
 
-            const gpuData = execSync(
+            const gpuData = this.execCommand(
                 `nvidia-smi --query-gpu=${query} --format=csv,noheader,nounits`,
                 { encoding: 'utf8', timeout: 10000 }
             ).trim();
@@ -286,7 +291,7 @@ class CUDADetector {
         } catch (e) {
             // Fallback to simpler query
             try {
-                const simpleQuery = execSync(
+                const simpleQuery = this.execCommand(
                     'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits',
                     { encoding: 'utf8', timeout: 5000 }
                 ).trim();
@@ -408,7 +413,7 @@ class CUDADetector {
         }
 
         try {
-            const nvccVersion = execSync('nvcc --version', {
+            const nvccVersion = this.execCommand('nvcc --version', {
                 encoding: 'utf8',
                 timeout: 5000,
                 stdio: ['pipe', 'pipe', 'pipe']

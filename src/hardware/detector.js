@@ -41,7 +41,7 @@ class HardwareDetector {
             const systemInfo = {
                 cpu: this.processCPUInfo(cpu),
                 memory: this.processMemoryInfo(memory),
-                gpu: this.processGPUInfo(graphics),
+                gpu: this.processGPUInfo(graphics, memory),
                 system: this.processSystemInfo(system),
                 os: this.processOSInfo(osInfo),
                 timestamp: Date.now()
@@ -97,7 +97,48 @@ class HardwareDetector {
         };
     }
 
-    processGPUInfo(graphics) {
+    getSystemMemoryGB(memoryInfo) {
+        const totalBytes = Number(memoryInfo?.total || 0);
+        if (!Number.isFinite(totalBytes) || totalBytes <= 0) return 0;
+        return Math.max(1, Math.round(totalBytes / (1024 ** 3)));
+    }
+
+    estimateIntegratedSharedMemory(gpu, memoryInfo) {
+        const dedicatedAperture = this.normalizeVRAM(gpu?.vram || 0);
+        const explicitSharedCandidates = [
+            gpu?.memoryTotal,
+            gpu?.memory,
+            gpu?.sharedMemory,
+            gpu?.memoryShared,
+            gpu?.memory?.shared,
+            gpu?.memory?.total
+        ]
+            .map((value) => this.normalizeVRAM(value))
+            .filter((value) => value > dedicatedAperture);
+
+        if (explicitSharedCandidates.length > 0) {
+            return Math.max(...explicitSharedCandidates);
+        }
+
+        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
+        if (gpu?.vramDynamic || dedicatedAperture <= 2) {
+            return this.estimateSystemSharedMemory(totalSystemGB, dedicatedAperture);
+        }
+
+        return dedicatedAperture;
+    }
+
+    estimateSystemSharedMemory(totalSystemGB, fallbackGB = 0) {
+        const fallback = Math.max(0, Number(fallbackGB) || 0);
+        if (!Number.isFinite(totalSystemGB) || totalSystemGB <= 0) {
+            return fallback;
+        }
+
+        // Integrated GPUs typically expose roughly half of system RAM as a shared pool.
+        return Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16));
+    }
+
+    processGPUInfo(graphics, memoryInfo = null) {
         const controllers = graphics.controllers || [];
         const displays = graphics.displays || [];
 
@@ -199,8 +240,14 @@ class HardwareDetector {
             enhancedModel = this.getGPUModelFromDeviceId(primaryGPU.deviceId) || enhancedModel;
         }
 
+        const primaryIsIntegrated = this.isIntegratedGPU(enhancedModel);
+        const normalizedPrimaryVRAM = this.normalizeVRAM(primaryGPU.vram || 0);
+        const estimatedSharedMemory = primaryIsIntegrated
+            ? this.estimateIntegratedSharedMemory(primaryGPU, memoryInfo)
+            : 0;
+
         // Enhanced VRAM detection using the new normalizeVRAM function
-        let vram = this.normalizeVRAM(primaryGPU.vram || 0);
+        let vram = primaryIsIntegrated ? estimatedSharedMemory : normalizedPrimaryVRAM;
         
         // If VRAM is still 0, try to estimate based on model or handle unified memory
         if (vram === 0 && primaryGPU.model) {
@@ -227,24 +274,41 @@ class HardwareDetector {
 
         // If we have multiple dedicated GPUs, use the combined VRAM
         const effectiveVRAM = gpuCount > 1 ? totalDedicatedVRAM : vram;
+        const sharedMemory = primaryIsIntegrated ? effectiveVRAM : 0;
+        const dedicatedMemory = primaryIsIntegrated ? normalizedPrimaryVRAM : effectiveVRAM;
+        const scoredGPU = {
+            ...primaryGPU,
+            model: enhancedModel,
+            vram: effectiveVRAM,
+            sharedMemory,
+            dedicatedMemory
+        };
 
         return {
             model: enhancedModel,
             vendor: primaryGPU.vendor || this.inferVendorFromGPUModel(enhancedModel, 'Unknown'),
             vram: effectiveVRAM,
             vramPerGPU: vram, // VRAM of primary GPU for reference
+            sharedMemory,
+            dedicatedMemory,
             vramDynamic: primaryGPU.vramDynamic || false,
-            dedicated: !this.isIntegratedGPU(enhancedModel),
+            dedicated: !primaryIsIntegrated,
             driverVersion: primaryGPU.driverVersion || 'Unknown',
             gpuCount: gpuCount > 0 ? gpuCount : (dedicatedGPUs.length > 0 ? dedicatedGPUs.length : 1),
             isMultiGPU: gpuCount > 1,
             all: normalizedControllers.map(gpu => ({
                 model: gpu.model,
-                vram: this.normalizeVRAM(gpu.vram || 0),
+                vram: this.isIntegratedGPU(gpu.model)
+                    ? this.estimateIntegratedSharedMemory(gpu, memoryInfo)
+                    : this.normalizeVRAM(gpu.vram || 0),
+                sharedMemory: this.isIntegratedGPU(gpu.model)
+                    ? this.estimateIntegratedSharedMemory(gpu, memoryInfo)
+                    : 0,
+                dedicatedMemory: this.normalizeVRAM(gpu.vram || 0),
                 vendor: gpu.vendor || this.inferVendorFromGPUModel(gpu.model, 'Unknown')
             })),
             displays: displays.length,
-            score: this.calculateGPUScore(primaryGPU)
+            score: this.calculateGPUScore(scoredGPU)
         };
     }
 
@@ -303,17 +367,40 @@ class HardwareDetector {
             const modelFromUnified = summary.gpuModel || fallbackModel || systemInfo.gpu.model;
             const vendor = this.inferVendorFromGPUModel(modelFromUnified, systemInfo.gpu.vendor);
             const isAppleUnified = primaryType === 'metal';
+            const integratedSharedMemory = Math.max(
+                Number(systemInfo.gpu.sharedMemory || 0),
+                ...(Array.isArray(unified.systemGpu?.gpus)
+                    ? unified.systemGpu.gpus
+                        .filter((gpu) => gpu?.type === 'integrated')
+                        .map((gpu) => Number(gpu?.memory?.total || gpu?.memoryTotal || 0))
+                    : [0])
+            );
 
             systemInfo.summary = {
-                ...summary
+                ...summary,
+                integratedSharedMemory: typeof summary.integratedSharedMemory === 'number'
+                    ? summary.integratedSharedMemory
+                    : integratedSharedMemory
             };
 
             systemInfo.gpu = {
                 ...systemInfo.gpu,
                 model: modelFromUnified,
                 vendor,
-                vram: isAppleUnified ? systemInfo.gpu.vram : (hasDedicatedGPU ? (totalVRAM || systemInfo.gpu.vram) : 0),
-                vramPerGPU: isAppleUnified ? (systemInfo.gpu.vramPerGPU || 0) : (perGPUVRAM || systemInfo.gpu.vramPerGPU || 0),
+                vram: isAppleUnified
+                    ? systemInfo.gpu.vram
+                    : (hasDedicatedGPU ? (totalVRAM || systemInfo.gpu.vram) : (integratedSharedMemory || systemInfo.gpu.vram || 0)),
+                vramPerGPU: isAppleUnified
+                    ? (systemInfo.gpu.vramPerGPU || 0)
+                    : (hasDedicatedGPU
+                        ? (perGPUVRAM || systemInfo.gpu.vramPerGPU || 0)
+                        : (integratedSharedMemory || systemInfo.gpu.vramPerGPU || systemInfo.gpu.vram || 0)),
+                sharedMemory: isAppleUnified
+                    ? (systemInfo.gpu.sharedMemory || 0)
+                    : (hasIntegratedGPU ? Math.max(integratedSharedMemory || 0, systemInfo.gpu.sharedMemory || 0) : 0),
+                dedicatedMemory: hasDedicatedGPU
+                    ? (totalVRAM || systemInfo.gpu.dedicatedMemory || systemInfo.gpu.vram || 0)
+                    : 0,
                 dedicated: hasDedicatedGPU,
                 gpuCount: summary.gpuCount || gpuCount,
                 isMultiGPU: Boolean(summary.isMultiGPU || gpuCount > 1),
@@ -557,13 +644,16 @@ class HardwareDetector {
 
         let score = 0;
         const model = gpu.model.toLowerCase();
-        const vram = gpu.vram || 0;
+        const integrated = this.isIntegratedGPU(gpu.model);
+        const vram = integrated
+            ? Math.min(gpu.sharedMemory || gpu.vram || 0, 2)
+            : (gpu.vram || 0);
 
 
         score += vram * 8;
 
 
-        if (!this.isIntegratedGPU(gpu.model)) {
+        if (!integrated) {
             score += 20;
         }
 
@@ -585,6 +675,10 @@ class HardwareDetector {
         else if (model.includes('tesla p100') || model.includes('p100')) score += 14;
         else if (model.includes('apple m')) score += 15;
         else if (model.includes('r9700') || model.includes('ai pro r9700')) score += 23;
+
+        if (integrated) {
+            return Math.min(Math.round(score), 45);
+        }
 
         return Math.min(Math.round(score), 100);
     }

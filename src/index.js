@@ -1373,6 +1373,15 @@ class LLMChecker {
         // Detect PC platform (Windows/Linux)
         const normalizedPlatform = normalizePlatform(hardware.os?.platform || process.platform);
         const isPC = !isAppleSilicon && (normalizedPlatform === 'win32' || normalizedPlatform === 'linux');
+        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
+            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
+            : '';
+        const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
+            ? hardware.summary.hasIntegratedGPU
+            : /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(`${gpuModel} ${integratedGpuInventory}`);
+        const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
+            ? (!unified && hardware.summary.hasDedicatedGPU)
+            : Boolean(!unified && (hardware.gpu?.dedicated || (vramGB > 0 && !hasIntegratedGPU)));
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('12th') || cpuModel.includes('13th') || cpuModel.includes('14th'));
         const hasAVX2 = cpuModel.toLowerCase().includes('intel') || 
@@ -1381,7 +1390,7 @@ class LLMChecker {
         // 1) Capacidad efectiva para pesos del modelo (45%)
         let effMem;
         
-        if (vramGB > 0 && !unified) {
+        if (hasDedicatedGPU && vramGB > 0 && !unified) {
             // Dedicated GPU path (Windows/Linux with discrete GPU)
             if (isPC) {
                 // PC-specific GPU memory calculation with offload support
@@ -1469,16 +1478,6 @@ class LLMChecker {
                   score >= 35 ? 'medium' :         // 35-54 for mid-range systems
                   score >= 20 ? 'low' : 'ultra_low'; // 20-34 for budget systems
         
-        const integratedGpuInventory = Array.isArray(hardware.summary?.integratedGpuModels)
-            ? hardware.summary.integratedGpuModels.map(({ name }) => name).join(' ')
-            : '';
-        const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
-            ? hardware.summary.hasIntegratedGPU
-            : /iris.*xe|iris.*graphics|uhd.*graphics|vega.*integrated|radeon.*graphics|intel.*integrated|integrated/i.test(`${gpuModel} ${integratedGpuInventory}`);
-        const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
-            ? (!unified && hardware.summary.hasDedicatedGPU)
-            : (vramGB > 0 && !hasIntegratedGPU && !unified);
-        
         // Debug logging for tier calculation
         if (process.env.DEBUG_TIER) {
             console.log(`GPU Model: "${gpuModel}"`);
@@ -1508,10 +1507,10 @@ class LLMChecker {
         } else if (!vramGB && !unified) {
             // Windows/Linux CPU-only - significativa limitación pero no extrema
             tier = this.bumpTier(tier, -1);
-        } else if (hasIntegratedGPU) {
+        } else if (hasIntegratedGPU && !hasDedicatedGPU) {
             // iGPU - limitada pero algo mejor que CPU puro
             tier = this.bumpTier(tier, -1);
-        } else if (vramGB > 0 && vramGB < 6) {
+        } else if (hasDedicatedGPU && vramGB > 0 && vramGB < 6) {
             // GPU dedicada con poca VRAM (GTX 1060, etc.)
             tier = this.bumpTier(tier, -1);
         }

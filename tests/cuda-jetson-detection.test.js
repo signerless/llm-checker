@@ -7,6 +7,49 @@ const assert = require('assert');
 const fs = require('fs');
 const CUDADetector = require('../src/hardware/backends/cuda-detector');
 
+function testNvidiaSmiBannerParsingDoesNotRequireHead() {
+    const detector = new CUDADetector();
+    const commands = [];
+
+    detector.execCommand = (command) => {
+        commands.push(command);
+
+        if (command === 'nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits') {
+            return '555.85.02\n';
+        }
+
+        if (command === 'nvidia-smi') {
+            return [
+                'Fri Mar 14 12:00:00 2026',
+                '| NVIDIA-SMI 555.85.02    Driver Version: 555.85.02    CUDA Version: 12.6 |',
+                '|-------------------------------+----------------------+----------------------|'
+            ].join('\n');
+        }
+
+        if (command.includes('--query-gpu=index,name,uuid')) {
+            throw new Error('force simple query fallback');
+        }
+
+        if (command === 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits') {
+            return 'NVIDIA GeForce RTX 4060 Laptop GPU, 8188\n';
+        }
+
+        throw new Error(`Unexpected command: ${command}`);
+    };
+
+    const info = detector.getGPUInfo();
+
+    assert.ok(info, 'nvidia-smi parsing should still produce GPU info');
+    assert.strictEqual(info.driver, '555.85.02', 'Driver version should come from nvidia-smi query');
+    assert.strictEqual(info.cuda, '12.6', 'CUDA version should be parsed from nvidia-smi banner');
+    assert.strictEqual(info.gpus.length, 1, 'Fallback query should expose one GPU');
+    assert.strictEqual(info.gpus[0].memory.total, 8, 'Fallback memory query should normalize MB to GB');
+    assert.ok(
+        commands.every((command) => !/\bhead\b/.test(command)),
+        `Windows-safe nvidia-smi flow must not use shell-only head command, got: ${commands.join(' | ')}`
+    );
+}
+
 function testJetsonFallbackWithoutNvidiaSMI() {
     const detector = new CUDADetector();
 
@@ -136,6 +179,7 @@ function testJetsonFingerprintIsSanitized() {
 }
 
 function run() {
+    testNvidiaSmiBannerParsingDoesNotRequireHead();
     testJetsonFallbackWithoutNvidiaSMI();
     testNoFalsePositiveWithoutJetsonHints();
     testJetsonPlatformMarkerFromNvTegraRelease();

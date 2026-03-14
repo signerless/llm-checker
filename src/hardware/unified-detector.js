@@ -231,6 +231,7 @@ class UnifiedDetector {
             dedicatedGpuCount: 0,
             integratedGpuModels: [],
             dedicatedGpuModels: [],
+            integratedSharedMemory: 0,
             cpuModel: result.cpu?.brand || 'Unknown',
             systemRAM: require('os').totalmem() / (1024 ** 3)
         };
@@ -303,6 +304,7 @@ class UnifiedDetector {
         summary.dedicatedGpuCount = topology.dedicatedCount;
         summary.integratedGpuModels = topology.integratedModels;
         summary.dedicatedGpuModels = topology.dedicatedModels;
+        summary.integratedSharedMemory = topology.integratedSharedMemory;
         if (!summary.gpuModel) {
             summary.gpuModel = topology.primaryModel || null;
         }
@@ -355,6 +357,9 @@ class UnifiedDetector {
             models,
             integratedModels,
             dedicatedModels,
+            integratedSharedMemory: normalized
+                .filter((gpu) => gpu.type === 'integrated')
+                .reduce((max, gpu) => Math.max(max, Number(gpu?.memory?.total || 0)), 0),
             integratedCount: normalized.filter((gpu) => gpu.type === 'integrated').length,
             dedicatedCount: normalized.filter((gpu) => gpu.type === 'dedicated').length,
             hasIntegratedGPU: normalized.some((gpu) => gpu.type === 'integrated'),
@@ -412,6 +417,46 @@ class UnifiedDetector {
             .filter(Boolean);
     }
 
+    getSystemMemoryGB(memoryInfo) {
+        const totalBytes = Number(memoryInfo?.total || 0);
+        if (!Number.isFinite(totalBytes) || totalBytes <= 0) return 0;
+        return Math.max(1, Math.round(totalBytes / (1024 ** 3)));
+    }
+
+    estimateSystemSharedMemory(totalSystemGB, fallbackGB = 0) {
+        const fallback = Math.max(0, Number(fallbackGB) || 0);
+        if (!Number.isFinite(totalSystemGB) || totalSystemGB <= 0) {
+            return fallback;
+        }
+
+        return Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16));
+    }
+
+    estimateIntegratedFallbackMemory(controller, memoryInfo) {
+        const dedicatedAperture = this.normalizeFallbackVRAM(controller?.vram || 0);
+        const explicitSharedCandidates = [
+            controller?.memoryTotal,
+            controller?.memory,
+            controller?.sharedMemory,
+            controller?.memoryShared,
+            controller?.memory?.shared,
+            controller?.memory?.total
+        ]
+            .map((value) => this.normalizeFallbackVRAM(value))
+            .filter((value) => value > dedicatedAperture);
+
+        if (explicitSharedCandidates.length > 0) {
+            return Math.max(...explicitSharedCandidates);
+        }
+
+        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
+        if (controller?.vramDynamic || dedicatedAperture <= 2) {
+            return this.estimateSystemSharedMemory(totalSystemGB, dedicatedAperture);
+        }
+
+        return dedicatedAperture;
+    }
+
     mergeGpuInventories(...gpuLists) {
         const normalizedLists = gpuLists.map((list) => this.normalizeGpuInventory(list));
         const primaryIndex = normalizedLists.findIndex((list) => list.length > 0);
@@ -433,6 +478,7 @@ class UnifiedDetector {
 
     async detectSystemGpuFallback() {
         const graphics = await si.graphics();
+        const memoryInfo = await si.mem().catch(() => null);
         const controllers = Array.isArray(graphics?.controllers) ? graphics.controllers : [];
 
         if (controllers.length === 0) {
@@ -455,7 +501,9 @@ class UnifiedDetector {
                 if (nameLower.includes('microsoft basic') || nameLower.includes('standard vga')) return null;
 
                 const isIntegrated = this.isIntegratedGPUModel(name);
-                let vram = this.normalizeFallbackVRAM(controller?.vram || controller?.memoryTotal || controller?.memory || 0);
+                let vram = isIntegrated
+                    ? this.estimateIntegratedFallbackMemory(controller, memoryInfo)
+                    : this.normalizeFallbackVRAM(controller?.vram || controller?.memoryTotal || controller?.memory || 0);
 
                 // For dedicated cards, estimate VRAM from model if runtime did not report memory.
                 if (!isIntegrated && vram === 0) {
@@ -821,6 +869,9 @@ class UnifiedDetector {
         else {
             if (summary.gpuModel && summary.hasIntegratedGPU && !summary.hasDedicatedGPU) {
                 const gpuDesc = summary.gpuInventory || summary.gpuModel;
+                if (summary.integratedSharedMemory > 0) {
+                    return `${gpuDesc} (${summary.integratedSharedMemory}GB shared memory, CPU backend) + ${summary.cpuModel}`;
+                }
                 return `${gpuDesc} (integrated/shared memory, CPU backend) + ${summary.cpuModel}`;
             }
             if (summary.gpuModel && summary.gpuCount > 0) {

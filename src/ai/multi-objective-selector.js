@@ -353,13 +353,16 @@ class MultiObjectiveSelector {
         const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
             ? hardware.summary.hasIntegratedGPU
             : /iris xe|uhd.*graphics|vega.*integrated|radeon.*graphics/i.test(`${gpuModel} ${integratedGpuInventory}`);
+        const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
+            ? hardware.summary.hasDedicatedGPU
+            : Boolean(hardware.gpu?.dedicated || (vramGB > 0 && !hasIntegratedGPU));
         const platform = normalizePlatform(hardware?.os?.platform || process.platform);
         const isPC = !isAppleSilicon && (platform === 'win32' || platform === 'linux');
         
         // 1) Effective memory for model weights (45%) - Apple Silicon & PC optimized
         let effMem;
         
-        if (vramGB > 0 && !unified) {
+        if (hasDedicatedGPU && vramGB > 0 && !unified) {
             // Dedicated GPU path (Windows/Linux with discrete GPU)
             if (isPC) {
                 // PC-specific GPU memory calculation with offload support
@@ -454,9 +457,9 @@ class MultiObjectiveSelector {
             tier = bumpTier(tier, +1);  // High-end GPU boost
         } else if (!vramGB && !unified) {
             tier = bumpTier(tier, -1);  // CPU-only penalty (moderate)
-        } else if (hasIntegratedGPU) {
+        } else if (hasIntegratedGPU && !hasDedicatedGPU) {
             tier = bumpTier(tier, -1);  // iGPU penalty
-        } else if (vramGB > 0 && vramGB < 6) {
+        } else if (hasDedicatedGPU && vramGB > 0 && vramGB < 6) {
             tier = bumpTier(tier, -1);  // Low VRAM penalty
         }
         
@@ -752,13 +755,16 @@ class MultiObjectiveSelector {
         const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
             ? hardware.summary.hasIntegratedGPU
             : false;
+        const hasDedicatedGPU = typeof hardware.summary?.hasDedicatedGPU === 'boolean'
+            ? hardware.summary.hasDedicatedGPU
+            : Boolean(hardware.gpu?.dedicated || (vramGB > 0 && !hasIntegratedGPU));
         
         // Use improved CPU estimation function for more realistic and varying speeds
         const hasAVX512 = cpuModel.toLowerCase().includes('intel') && 
                          (cpuModel.includes('13th') || cpuModel.includes('14th') || cpuModel.includes('12th'));
         
         // GPU-based calculation (dedicated GPU only)
-        if (vramGB > 0 && !hasIntegratedGPU) {
+        if (hasDedicatedGPU && vramGB > 0) {
             let gpuTPS = 20; // Conservative GPU baseline
             if (gpuModel.toLowerCase().includes('gb10') ||
                 gpuModel.toLowerCase().includes('grace blackwell') ||
