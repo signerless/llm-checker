@@ -93,9 +93,15 @@ fetch('http://localhost:11434/api/version', { headers: { 'Content-Type': 'applic
     );
 
     const localModels = await client.getLocalModels();
-    assert(localModels.length > 0, 'Expected at least one local Ollama model');
+    if (localModels.length === 0) {
+        console.log('ollama-client-speed-metrics.test.js: SKIPPED (no local Ollama models installed)');
+        return;
+    }
     const runnableModels = localModels.filter((model) => !isCloudPlaceholder(model) && Number(model.fileSizeGB) > 0);
-    assert(runnableModels.length > 0, 'Expected at least one runnable local model (non-cloud)');
+    if (runnableModels.length === 0) {
+        console.log('ollama-client-speed-metrics.test.js: SKIPPED (no runnable local Ollama models installed)');
+        return;
+    }
 
     const probeModel = [...runnableModels].sort((a, b) => a.fileSizeGB - b.fileSizeGB)[0];
     const probeModelSizeB = parseModelSizeB(probeModel.size);
