@@ -751,40 +751,26 @@ class DeterministicModelSelector {
 
         return variants.map((variant) => {
             const variantTag = variant.tag || fallbackTag;
-            const paramsB = this.extractParamsFromString(
-                variant.size,
-                variantTag,
-                ollamaModel.main_size,
-                ollamaModel.model_identifier
-            );
+            const quant = this.resolveVariantQuantization(variant, variantTag);
+            const paramsB = this.resolveVariantParamsB(ollamaModel, variant, quant);
             const moeMetadata = this.extractMoEMetadata(ollamaModel, variant, paramsB, baseText);
-            const quant = this.normalizeQuantization(
-                variant.quantization ||
-                this.extractQuantizationFromTag(variantTag) ||
-                'Q4_K_M'
-            );
 
             const variantSizeGB = this.extractVariantSizeGB(variant, paramsB);
             const modalities = this.inferModalities(ollamaModel, variantTag);
             const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
             const sizeByQuant = {};
+            const variantIsCloud = this.isCloudVariantTag(variantTag);
 
             for (const sibling of variants) {
-                const siblingParams = this.extractParamsFromString(
-                    sibling.size,
-                    sibling.tag,
-                    ollamaModel.main_size,
-                    ollamaModel.model_identifier
-                );
+                const siblingTag = sibling.tag || fallbackTag;
+                if (this.isCloudVariantTag(siblingTag) !== variantIsCloud) continue;
+
+                const siblingQuant = this.resolveVariantQuantization(sibling, siblingTag);
+                const siblingParams = this.resolveVariantParamsB(ollamaModel, sibling, siblingQuant);
 
                 // Keep quantization map parameter-aware: don't blend 8B/70B/405B sizes.
                 if (Math.abs(siblingParams - paramsB) > 0.25) continue;
 
-                const siblingQuant = this.normalizeQuantization(
-                    sibling.quantization ||
-                    this.extractQuantizationFromTag(sibling.tag || '') ||
-                    quant
-                );
                 const siblingSize = this.extractVariantSizeGB(sibling, siblingParams);
                 if (!Number.isFinite(sizeByQuant[siblingQuant]) || siblingSize < sizeByQuant[siblingQuant]) {
                     sizeByQuant[siblingQuant] = siblingSize;
@@ -1003,17 +989,130 @@ class DeterministicModelSelector {
     }
 
     extractParamsFromString(...values) {
-        for (const value of values) {
-            if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-                return value;
-            }
-            if (typeof value !== 'string') continue;
+        const candidates = this.extractParameterCandidates(...values);
+        return candidates.length > 0 ? candidates[0] : null;
+    }
 
-            const match = value.match(/(\d+\.?\d*)\s*([BbMm])/);
-            if (!match) continue;
-            const n = parseFloat(match[1]);
-            const unit = match[2].toUpperCase();
-            return unit === 'M' ? n / 1000 : n;
+    extractParameterCandidates(...values) {
+        const candidates = [];
+        const seen = new Set();
+
+        const pushCandidate = (value) => {
+            if (!Number.isFinite(value) || value <= 0) return;
+            const rounded = Math.round(value * 1000) / 1000;
+            const key = String(rounded);
+            if (seen.has(key)) return;
+            seen.add(key);
+            candidates.push(rounded);
+        };
+
+        const visit = (value) => {
+            if (typeof value === 'number') {
+                pushCandidate(value);
+                return;
+            }
+
+            if (Array.isArray(value)) {
+                value.forEach(visit);
+                return;
+            }
+
+            if (value && typeof value === 'object') {
+                Object.values(value).forEach(visit);
+                return;
+            }
+
+            if (typeof value !== 'string') return;
+
+            const regex = /(\d+\.?\d*)\s*([BbMm])/g;
+            for (const match of value.matchAll(regex)) {
+                const amount = parseFloat(match[1]);
+                const unit = match[2].toUpperCase();
+                pushCandidate(unit === 'M' ? amount / 1000 : amount);
+            }
+        };
+
+        values.forEach(visit);
+        return candidates;
+    }
+
+    extractArtifactSizeGBFromValue(value) {
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+            return value;
+        }
+        if (typeof value !== 'string') return null;
+
+        const match = value.match(/(\d+\.?\d*)\s*g(?:i)?b\b/i);
+        if (!match) return null;
+        return parseFloat(match[1]);
+    }
+
+    inferParamsFromArtifactSizeGB(sizeGB, quant = 'Q4_K_M') {
+        const normalizedQuant = this.normalizeQuantization(quant);
+        const bytesPerParam = {
+            'Q8_0': 1.05,
+            'Q6_K': 0.80,
+            'Q5_K_M': 0.68,
+            'Q4_K_M': 0.58,
+            'Q3_K': 0.48,
+            'Q2_K': 0.37
+        };
+        const bpp = bytesPerParam[normalizedQuant] || 0.58;
+        const inferred = sizeGB / bpp;
+        return Math.max(0.5, Math.round(inferred * 2) / 2);
+    }
+
+    isCloudVariantTag(tag = '') {
+        return /:cloud$/i.test(String(tag).trim());
+    }
+
+    resolveVariantQuantization(variant = {}, variantTag = '') {
+        const tagQuant = this.extractQuantizationFromTag(variantTag);
+        if (tagQuant) {
+            return this.normalizeQuantization(tagQuant);
+        }
+
+        return this.normalizeQuantization(
+            variant.quantization ||
+            variant.quant ||
+            'Q4_K_M'
+        );
+    }
+
+    resolveVariantParamsB(ollamaModel = {}, variant = {}, quant = 'Q4_K_M') {
+        const explicitParams = this.extractParamsFromString(
+            variant.size,
+            variant.tag,
+            variant.label,
+            variant.name,
+            ollamaModel.model_identifier,
+            ollamaModel.model_name,
+            ollamaModel.parameter_size,
+            ollamaModel.parameter_count,
+            ollamaModel.parameters
+        );
+        if (Number.isFinite(explicitParams) && explicitParams > 0) {
+            return explicitParams;
+        }
+
+        const metadataCandidates = this.extractParameterCandidates(
+            ollamaModel.model_sizes,
+            ollamaModel.parameters,
+            ollamaModel.parameter_size,
+            ollamaModel.parameter_count
+        );
+        if (metadataCandidates.length > 0) {
+            return Math.max(...metadataCandidates);
+        }
+
+        const artifactSizeGB = this.extractVariantSizeGB(variant, null);
+        if (!this.isCloudVariantTag(variant.tag) && Number.isFinite(artifactSizeGB) && artifactSizeGB > 0) {
+            return this.inferParamsFromArtifactSizeGB(artifactSizeGB, quant);
+        }
+
+        const modelArtifactSizeGB = this.extractArtifactSizeGBFromValue(ollamaModel.main_size);
+        if (Number.isFinite(modelArtifactSizeGB) && modelArtifactSizeGB > 0) {
+            return this.inferParamsFromArtifactSizeGB(modelArtifactSizeGB, quant);
         }
 
         return 7;
@@ -1038,6 +1137,7 @@ class DeterministicModelSelector {
     extractVariantSizeGB(variant, paramsB) {
         const candidate = Number(variant.real_size_gb ?? variant.estimated_size_gb ?? NaN);
         if (Number.isFinite(candidate) && candidate > 0) return candidate;
+        if (!Number.isFinite(paramsB) || paramsB <= 0) return 0.5;
         return Math.max(0.5, Math.round((paramsB * 0.58 + 0.5) * 10) / 10);
     }
 
@@ -2049,6 +2149,20 @@ class DeterministicModelSelector {
     }
 
     mapHardwareTier(hardware = {}) {
+        const summary = hardware?.summary || {};
+        const effectiveMemory = Number(summary.effectiveMemory);
+        const speedCoefficient = Number(summary.speedCoefficient);
+        if (Number.isFinite(effectiveMemory) && effectiveMemory > 0 && Number.isFinite(speedCoefficient)) {
+            if (effectiveMemory >= 80 && speedCoefficient >= 300) return 'ultra_high';
+            if (effectiveMemory >= 48 && speedCoefficient >= 200) return 'very_high';
+            if (effectiveMemory >= 24 && speedCoefficient >= 150) return 'high';
+            if (effectiveMemory >= 16 && speedCoefficient >= 100) return 'medium_high';
+            if (effectiveMemory >= 12 && speedCoefficient >= 80) return 'medium';
+            if (effectiveMemory >= 8 && speedCoefficient >= 50) return 'medium_low';
+            if (effectiveMemory >= 6 && speedCoefficient >= 30) return 'low';
+            return 'ultra_low';
+        }
+
         let ram, cores;
 
         if (hardware?.memory?.totalGB) {
