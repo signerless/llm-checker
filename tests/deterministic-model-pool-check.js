@@ -232,6 +232,53 @@ function buildMultiGpuHighCapacityCoveragePool() {
     ];
 }
 
+function buildIssueReporterHardware() {
+    return {
+        cpu: { cores: 12, architecture: 'x86_64' },
+        gpu: { model: 'NVIDIA GeForce RTX 2060 SUPER', vendor: 'NVIDIA', vram: 8, dedicated: true },
+        memory: { total: 31 },
+        summary: {
+            bestBackend: 'cpu',
+            effectiveMemory: 20,
+            speedCoefficient: 55
+        }
+    };
+}
+
+function buildCloudVariantRegressionPool() {
+    return [
+        {
+            model_identifier: 'qwen3-coder-next',
+            model_name: 'qwen3-coder-next',
+            description: 'Coding-focused model with mixed local and cloud variants',
+            primary_category: 'coding',
+            context_length: '256K',
+            model_sizes: ['52gb', '85gb', '80b', '3b'],
+            main_size: '52gb',
+            variants: [
+                { tag: 'qwen3-coder-next:latest', size: 'unknown', quantization: 'Q4_0', real_size_gb: 52, categories: ['coding'] },
+                { tag: 'qwen3-coder-next:cloud', size: 'unknown', quantization: 'Q4_0', real_size_gb: 1, categories: ['coding'] },
+                { tag: 'qwen3-coder-next:q4_K_M', size: 'unknown', quantization: 'Q4_K_M', real_size_gb: 52, categories: ['coding'] },
+                { tag: 'qwen3-coder-next:q8_0', size: 'unknown', quantization: 'Q4_0', real_size_gb: 85, categories: ['coding'] }
+            ],
+            tags: ['qwen3-coder-next:latest', 'qwen3-coder-next:cloud', 'qwen3-coder-next:q4_K_M', 'qwen3-coder-next:q8_0'],
+            use_cases: ['coding', 'programming', 'development']
+        },
+        {
+            model_identifier: 'compactcoder',
+            model_name: 'compactcoder',
+            description: 'Compact coding model that actually fits mid-range hardware',
+            primary_category: 'coding',
+            context_length: '32K',
+            variants: [
+                { tag: 'compactcoder:7b', size: '7b', quantization: 'Q4_K_M', real_size_gb: 4.6, categories: ['coding'] }
+            ],
+            tags: ['compactcoder:7b'],
+            use_cases: ['coding']
+        }
+    ];
+}
+
 function buildM4ProVisionPool() {
     return [
         {
@@ -738,6 +785,47 @@ async function runRuntimePropagationInCategoryRecommendations() {
     assert.strictEqual(top.speedAssumptions.runtime, 'vllm', 'Speed assumptions should preserve runtime backend');
 }
 
+async function runCloudVariantsDoNotContaminateLocalArtifactSizes() {
+    const selector = new DeterministicModelSelector();
+    const model = buildCloudVariantRegressionPool()[0];
+    const converted = selector.convertOllamaModelToDeterministicModels(model);
+
+    const latest = converted.find((entry) => entry.model_identifier === 'qwen3-coder-next:latest');
+    const cloud = converted.find((entry) => entry.model_identifier === 'qwen3-coder-next:cloud');
+    const q8 = converted.find((entry) => entry.model_identifier === 'qwen3-coder-next:q8_0');
+
+    assert.ok(latest, 'Latest local variant should be converted');
+    assert.ok(cloud, 'Cloud variant should be converted');
+    assert.ok(q8, 'q8 variant should be converted');
+
+    assert.strictEqual(latest.paramsB, 80, 'Model-size metadata should override the old 7B fallback');
+    assert.strictEqual(latest.sizeByQuant.Q4_K_M, 52, 'Local Q4 artifact size should stay at 52GB');
+    assert.strictEqual(latest.sizeByQuant.Q8_0, 85, 'Local Q8 artifact size should be preserved separately');
+    assert.strictEqual(cloud.sizeByQuant.Q4_K_M, 1, 'Cloud artifact size must not leak into local variants');
+    assert.strictEqual(q8.quant, 'Q8_0', 'Variant tag should win over incorrect generic quantization metadata');
+}
+
+async function runIssueRegressionAvoidsOversizedCloudContaminatedRecommendation() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildIssueReporterHardware();
+    const pool = buildCloudVariantRegressionPool();
+
+    selector.getInstalledModels = async () => [];
+    const recommendations = await selector.getBestModelsForHardware(hardware, pool, { runtime: 'ollama' });
+
+    assert.strictEqual(
+        recommendations.coding.tier,
+        'medium_low',
+        'Recommendation tier should follow backend-aware detector summary instead of optimistic heuristics'
+    );
+    assert.ok(recommendations.coding.bestModels.length > 0, 'Coding recommendations should still return a fitting fallback');
+    assert.strictEqual(
+        recommendations.coding.bestModels[0].model_identifier,
+        'compactcoder:7b',
+        'Oversized qwen3-coder-next should no longer be recommended for the issue hardware profile'
+    );
+}
+
 async function runAll() {
     await runSelectModelsUsesProvidedPool();
     await runGetBestModelsForHardwareUsesAllModels();
@@ -758,6 +846,8 @@ async function runAll() {
     await runMoEPartialMetadataFallsBackDeterministically();
     await runMoERuntimeProfilesChangeSpeedEstimate();
     await runRuntimePropagationInCategoryRecommendations();
+    await runCloudVariantsDoNotContaminateLocalArtifactSizes();
+    await runIssueRegressionAvoidsOversizedCloudContaminatedRecommendation();
     console.log('deterministic-model-pool-check: OK');
 }
 
