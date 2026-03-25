@@ -1,6 +1,20 @@
 Changelog
 =========
 
+3.5.8 — Windows Ollama Localhost Fallback + Vulkan Assist Visibility (2026-03-25)
+----------------------------------------------------------------------------------
+
+- Fixed Ollama availability checks on Windows systems where `localhost` resolves unreliably:
+  - Ollama probing now retries loopback candidates such as `127.0.0.1` and `::1`.
+  - the first working Ollama base URL is persisted for follow-up model listing and local checks.
+- Improved Windows integrated GPU reporting for `hw-detect`:
+  - fake adapters such as `Microsoft Remote Display Adapter` are filtered out of fallback GPU inventory.
+  - integrated AMD/Intel/NVIDIA systems can now surface `Vulkan` runtime assist metadata even when the primary backend remains CPU.
+  - CLI output now shows runtime-assist visibility more clearly instead of implying a CPU-only path.
+- Added regression coverage for:
+  - Ollama localhost-to-loopback fallback behavior.
+  - Windows integrated GPU runtime-assist reporting and remote-display-adapter filtering.
+
 3.5.7 — Windows WMIC Silence + Safer Local Recommendations (2026-03-25)
 -----------------------------------------------------------------------
 

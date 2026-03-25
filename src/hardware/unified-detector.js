@@ -216,6 +216,9 @@ class UnifiedDetector {
         const summary = {
             bestBackend: result.primary?.type || 'cpu',
             backendName: result.primary?.name || 'CPU',
+            runtimeBackend: result.primary?.type || 'cpu',
+            runtimeBackendName: result.primary?.name || 'CPU',
+            hasRuntimeAssist: false,
             totalVRAM: 0,
             effectiveMemory: 0,
             speedCoefficient: 0,
@@ -316,6 +319,11 @@ class UnifiedDetector {
         }
         summary.hasHeterogeneousGPU = summary.hasHeterogeneousGPU || topology.isHeterogeneous;
 
+        const runtimeSelection = this.detectRuntimeAssistBackend(result, topology);
+        summary.runtimeBackend = runtimeSelection.backend;
+        summary.runtimeBackendName = runtimeSelection.name;
+        summary.hasRuntimeAssist = runtimeSelection.assisted;
+
         // Effective memory for LLM loading
         // For GPU: use VRAM; for CPU/Metal: use system RAM
         if (summary.totalVRAM > 0 && ['cuda', 'rocm', 'intel'].includes(primary?.type)) {
@@ -398,6 +406,7 @@ class UnifiedDetector {
             .map((gpu) => {
                 const name = String(gpu?.name || gpu?.model || '').replace(/\s+/g, ' ').trim();
                 if (!name) return null;
+                if (this.isRemoteDisplayModel(name)) return null;
 
                 let type = gpu?.type;
                 if (type !== 'integrated' && type !== 'dedicated') {
@@ -415,6 +424,61 @@ class UnifiedDetector {
                 };
             })
             .filter(Boolean);
+    }
+
+    isRemoteDisplayModel(model) {
+        const lower = String(model || '').toLowerCase();
+        if (!lower) return false;
+
+        return (
+            lower.includes('microsoft remote display adapter') ||
+            lower.includes('remote display adapter') ||
+            lower.includes('basic render driver')
+        );
+    }
+
+    inferGpuVendor(name) {
+        const lower = String(name || '').toLowerCase();
+        if (!lower) return 'unknown';
+        if (lower.includes('nvidia') || lower.includes('geforce') || lower.includes('rtx') || lower.includes('gtx')) return 'nvidia';
+        if (lower.includes('amd') || lower.includes('ati') || lower.includes('radeon')) return 'amd';
+        if (lower.includes('intel') || lower.includes('iris') || lower.includes('uhd') || lower.includes('arc')) return 'intel';
+        if (lower.includes('apple')) return 'apple';
+        return 'unknown';
+    }
+
+    detectRuntimeAssistBackend(result, topology = {}) {
+        const primaryType = result?.primary?.type || 'cpu';
+        const primaryName = result?.primary?.name || 'CPU';
+
+        if (primaryType !== 'cpu') {
+            return {
+                backend: primaryType,
+                name: primaryName,
+                assisted: false
+            };
+        }
+
+        const platform = result?.platform || result?.os?.platform || normalizePlatform();
+        const integratedModels = Array.isArray(topology.integratedModels) ? topology.integratedModels : [];
+        const integratedVendors = integratedModels.map((gpu) => this.inferGpuVendor(gpu.name));
+
+        const hasWindowsIntegratedGpu = platform === 'win32' && integratedModels.length > 0;
+        const hasKnownIntegratedVendor = integratedVendors.some((vendor) => ['amd', 'intel', 'nvidia'].includes(vendor));
+
+        if (hasWindowsIntegratedGpu && hasKnownIntegratedVendor) {
+            return {
+                backend: 'vulkan',
+                name: 'Vulkan',
+                assisted: true
+            };
+        }
+
+        return {
+            backend: primaryType,
+            name: primaryName,
+            assisted: false
+        };
     }
 
     getSystemMemoryGB(memoryInfo) {
@@ -496,6 +560,7 @@ class UnifiedDetector {
             .map((controller) => {
                 const name = String(controller?.model || controller?.name || '').replace(/\s+/g, ' ').trim();
                 if (!name || name.toLowerCase() === 'unknown') return null;
+                if (this.isRemoteDisplayModel(name)) return null;
 
                 const nameLower = name.toLowerCase();
                 if (nameLower.includes('microsoft basic') || nameLower.includes('standard vga')) return null;
@@ -867,16 +932,19 @@ class UnifiedDetector {
             return `${gpuDesc} (${summary.totalVRAM}GB) + ${summary.cpuModel}`;
         }
         else {
+            const runtimeAssistSuffix = summary.hasRuntimeAssist && summary.runtimeBackend !== summary.bestBackend
+                ? `${summary.runtimeBackendName || summary.runtimeBackend} assist`
+                : 'CPU backend';
             if (summary.gpuModel && summary.hasIntegratedGPU && !summary.hasDedicatedGPU) {
                 const gpuDesc = summary.gpuInventory || summary.gpuModel;
                 if (summary.integratedSharedMemory > 0) {
-                    return `${gpuDesc} (${summary.integratedSharedMemory}GB shared memory, CPU backend) + ${summary.cpuModel}`;
+                    return `${gpuDesc} (${summary.integratedSharedMemory}GB shared memory, ${runtimeAssistSuffix}) + ${summary.cpuModel}`;
                 }
-                return `${gpuDesc} (integrated/shared memory, CPU backend) + ${summary.cpuModel}`;
+                return `${gpuDesc} (integrated/shared memory, ${runtimeAssistSuffix}) + ${summary.cpuModel}`;
             }
             if (summary.gpuModel && summary.gpuCount > 0) {
                 const gpuDesc = summary.gpuInventory || summary.gpuModel;
-                return `${gpuDesc} (${summary.totalVRAM}GB VRAM detected, CPU backend) + ${summary.cpuModel}`;
+                return `${gpuDesc} (${summary.totalVRAM}GB VRAM detected, ${runtimeAssistSuffix}) + ${summary.cpuModel}`;
             }
             return `${summary.cpuModel} (${Math.round(summary.systemRAM)}GB RAM, CPU-only)`;
         }

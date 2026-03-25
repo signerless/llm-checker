@@ -98,7 +98,8 @@ class IntelligentSelector {
                 description: this.detector.getHardwareDescription(),
                 tier: this.detector.getHardwareTier(),
                 maxSize: this.detector.getMaxModelSize(),
-                backend: hardware.summary.bestBackend
+                backend: hardware.summary.bestBackend,
+                runtimeBackend: hardware.summary.runtimeBackend || hardware.summary.bestBackend
             },
             policy: {
                 mode: policyEngine.getMode(),
@@ -163,7 +164,7 @@ class IntelligentSelector {
 
         const context = {
             backend: summary.bestBackend || null,
-            runtimeBackend: summary.bestBackend || null,
+            runtimeBackend: summary.runtimeBackend || summary.bestBackend || null,
             ramGB: systemRAM,
             totalRamGB: systemRAM,
             hardware

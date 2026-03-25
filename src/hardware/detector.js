@@ -190,7 +190,12 @@ class HardwareDetector {
             }
             
             // Skip very generic/placeholder entries
-            if (model.includes('standard vga') || model.includes('microsoft basic')) {
+            if (
+                model.includes('standard vga') ||
+                model.includes('microsoft basic') ||
+                model.includes('remote display adapter') ||
+                model.includes('basic render driver')
+            ) {
                 return false;
             }
             

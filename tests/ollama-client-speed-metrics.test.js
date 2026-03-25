@@ -58,8 +58,9 @@ async function run() {
         true,
         `Ollama must be available for real integration test. Details: ${JSON.stringify(availability)}`
     );
+    const resolvedBaseURL = client.baseURL;
 
-    const versionResponse = await fetch('http://localhost:11434/api/version', {
+    const versionResponse = await fetch(`${resolvedBaseURL}/api/version`, {
         headers: { 'Content-Type': 'application/json' }
     });
     assert(versionResponse.ok, `Expected /api/version to return HTTP 200, got ${versionResponse.status}`);
@@ -69,7 +70,7 @@ async function run() {
     const fallbackFetchScript = `
 globalThis.fetch = undefined;
 const fetch = require('./src/utils/fetch');
-fetch('http://localhost:11434/api/version', { headers: { 'Content-Type': 'application/json' } })
+fetch('${resolvedBaseURL}/api/version', { headers: { 'Content-Type': 'application/json' } })
   .then(async (res) => {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const body = await res.json();
@@ -115,7 +116,7 @@ fetch('http://localhost:11434/api/version', { headers: { 'Content-Type': 'applic
     };
 
     const generationStartMs = Date.now();
-    const generationResponse = await fetch('http://localhost:11434/api/generate', {
+    const generationResponse = await fetch(`${resolvedBaseURL}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(generationRequest)

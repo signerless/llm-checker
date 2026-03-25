@@ -237,6 +237,7 @@ async function testUnifiedWindowsFallbackGpuDetection() {
     const detector = new UnifiedDetector();
     const si = require('systeminformation');
     const originalGraphics = si.graphics;
+    const originalMem = si.mem;
 
     si.graphics = async () => ({
         controllers: [
@@ -252,6 +253,9 @@ async function testUnifiedWindowsFallbackGpuDetection() {
             }
         ],
         displays: []
+    });
+    si.mem = async () => ({
+        total: 32 * 1024 ** 3
     });
 
     try {
@@ -286,6 +290,48 @@ async function testUnifiedWindowsFallbackGpuDetection() {
         );
     } finally {
         si.graphics = originalGraphics;
+        si.mem = originalMem;
+    }
+}
+
+async function testUnifiedWindowsFallbackIgnoresRemoteDisplayAdapter() {
+    const detector = new UnifiedDetector();
+    const si = require('systeminformation');
+    const originalGraphics = si.graphics;
+    const originalMem = si.mem;
+
+    si.graphics = async () => ({
+        controllers: [
+            {
+                model: 'AMD Radeon(TM) 890M Graphics',
+                vendor: 'AMD',
+                vram: 1024,
+                vramDynamic: true
+            },
+            {
+                model: 'Microsoft Remote Display Adapter',
+                vendor: 'Microsoft',
+                vram: 0
+            }
+        ],
+        displays: []
+    });
+    si.mem = async () => ({
+        total: 96 * 1024 ** 3
+    });
+
+    try {
+        const fallback = await detector.detectSystemGpuFallback();
+
+        assert.strictEqual(fallback.available, true, 'Fallback GPU detection should stay available');
+        assert.strictEqual(fallback.gpus.length, 1, 'Remote display adapter should be ignored as a fake GPU');
+        assert.ok(
+            fallback.gpus[0].name.toLowerCase().includes('890m'),
+            `Expected surviving GPU to be the Radeon 890M, got: ${fallback.gpus[0].name}`
+        );
+    } finally {
+        si.graphics = originalGraphics;
+        si.mem = originalMem;
     }
 }
 
@@ -419,6 +465,40 @@ function testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem() {
     );
 }
 
+function testWindowsIntegratedGpuReportsVulkanAssistPath() {
+    const detector = new UnifiedDetector();
+    const summary = detector.buildSummary({
+        platform: 'win32',
+        cpu: { brand: 'AMD Ryzen AI 9 HX 370 w/ Radeon 890M', speedCoefficient: 105 },
+        primary: { type: 'cpu', name: 'CPU', info: { speedCoefficient: 105 } },
+        systemGpu: {
+            available: true,
+            hasDedicated: false,
+            gpus: [
+                {
+                    name: 'AMD Radeon(TM) 890M Graphics',
+                    type: 'integrated',
+                    memory: { total: 48 }
+                }
+            ],
+            totalVRAM: 0,
+            isMultiGPU: false
+        }
+    });
+
+    assert.strictEqual(summary.bestBackend, 'cpu', 'primary backend should remain CPU without a dedicated runtime detector');
+    assert.strictEqual(summary.runtimeBackend, 'vulkan', 'Windows integrated Radeon path should advertise Vulkan runtime assist');
+    assert.strictEqual(summary.runtimeBackendName, 'Vulkan');
+    assert.strictEqual(summary.hasRuntimeAssist, true, 'summary should flag runtime assist for integrated Vulkan path');
+
+    detector.cache = { summary };
+    const description = detector.getHardwareDescription();
+    assert.ok(
+        description.includes('Vulkan assist'),
+        `Integrated Windows description should mention Vulkan assist, got: ${description}`
+    );
+}
+
 async function testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIsCpu() {
     const detector = new HardwareDetector();
     detector.unifiedDetector = {
@@ -531,9 +611,11 @@ async function run() {
     testHeterogeneousGpuSummaryPreserved();
     testIntegratedSummaryReportsSharedMemory();
     await testUnifiedWindowsFallbackGpuDetection();
+    await testUnifiedWindowsFallbackIgnoresRemoteDisplayAdapter();
     testUnifiedLinuxLspciHybridParsing();
     await testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu();
     testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem();
+    testWindowsIntegratedGpuReportsVulkanAssistPath();
     await testHardwareDetectorPreservesIntegratedOnlyInventoryWhenPrimaryIsCpu();
     testHybridSelectorUsesDedicatedPath();
     console.log('✅ hardware-detector-regression.js passed');

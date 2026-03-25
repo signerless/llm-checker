@@ -4,18 +4,62 @@ class OllamaClient {
     constructor(baseURL = null) {
         // Support OLLAMA_HOST environment variable (standard Ollama configuration)
         // Also support OLLAMA_URL for backwards compatibility
-        this.baseURL = baseURL || process.env.OLLAMA_HOST || process.env.OLLAMA_URL || 'http://localhost:11434';
-
-        // Normalize URL: ensure it has protocol and remove trailing slash
-        if (!this.baseURL.startsWith('http://') && !this.baseURL.startsWith('https://')) {
-            this.baseURL = 'http://' + this.baseURL;
-        }
-        this.baseURL = this.baseURL.replace(/\/$/, '');
+        this.preferredBaseURL = this.normalizeBaseURL(
+            baseURL || process.env.OLLAMA_HOST || process.env.OLLAMA_URL || 'http://localhost:11434'
+        );
+        this.baseURL = this.preferredBaseURL;
 
         this.isAvailable = null;
         this.lastCheck = 0;
         this.cacheTimeout = 30000;
         this._pendingCheck = null;
+    }
+
+    normalizeBaseURL(baseURL) {
+        let normalized = String(baseURL || '').trim();
+        if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+            normalized = 'http://' + normalized;
+        }
+        return normalized.replace(/\/$/, '');
+    }
+
+    buildCandidateBaseURLs(baseURL = this.preferredBaseURL) {
+        const normalized = this.normalizeBaseURL(baseURL);
+        const candidates = [normalized];
+
+        try {
+            const parsed = new URL(normalized);
+            if (parsed.hostname === 'localhost') {
+                const ipv4 = new URL(parsed.toString());
+                ipv4.hostname = '127.0.0.1';
+                candidates.push(ipv4.toString().replace(/\/$/, ''));
+
+                const ipv6 = new URL(parsed.toString());
+                ipv6.hostname = '::1';
+                candidates.push(ipv6.toString().replace(/\/$/, ''));
+            }
+        } catch (error) {
+            // Keep the preferred URL only if parsing fails.
+        }
+
+        return [...new Set(candidates)];
+    }
+
+    applyResolvedBaseURL(baseURL) {
+        this.baseURL = this.normalizeBaseURL(baseURL);
+        return this.baseURL;
+    }
+
+    isRetryableAvailabilityError(error) {
+        const message = String(error?.message || '').toLowerCase();
+        return (
+            message.includes('econnrefused') ||
+            message.includes('fetch failed') ||
+            message.includes('network') ||
+            message.includes('socket') ||
+            message.includes('connect') ||
+            error?.name === 'AbortError'
+        );
     }
 
     async checkOllamaAvailability() {
@@ -38,50 +82,79 @@ class OllamaClient {
     }
 
     async _doAvailabilityCheck() {
+        const candidateURLs = this.buildCandidateBaseURLs();
+        const attemptedURLs = [];
+        let lastError = null;
 
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-            
-            const response = await fetch(`${this.baseURL}/api/version`, {
-                signal: controller.signal,
-                headers: { 'Content-Type': 'application/json' }
-            });
-            
-            clearTimeout(timeoutId);
+        for (let index = 0; index < candidateURLs.length; index += 1) {
+            const candidateBaseURL = candidateURLs[index];
+            attemptedURLs.push(candidateBaseURL);
 
-            if (response.ok) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                const response = await fetch(`${candidateBaseURL}/api/version`, {
+                    signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    this.isAvailable = {
+                        available: false,
+                        error: 'Ollama not responding properly',
+                        attemptedURL: candidateBaseURL,
+                        attemptedURLs
+                    };
+                    this.lastCheck = Date.now();
+                    return this.isAvailable;
+                }
+
                 const data = await response.json();
-                this.isAvailable = { available: true, version: data.version || 'unknown' };
+                this.applyResolvedBaseURL(candidateBaseURL);
+                this.isAvailable = {
+                    available: true,
+                    version: data.version || 'unknown',
+                    attemptedURL: candidateBaseURL,
+                    attemptedURLs
+                };
                 this.lastCheck = Date.now();
                 return this.isAvailable;
+            } catch (error) {
+                lastError = error;
+                if (!this.isRetryableAvailabilityError(error) || index === candidateURLs.length - 1) {
+                    break;
+                }
             }
+        }
 
-            this.isAvailable = { available: false, error: 'Ollama not responding properly' };
-            this.lastCheck = Date.now();
-            return this.isAvailable;
-        } catch (error) {
+        if (lastError) {
             let errorMessage;
             let hint = '';
+            const errorText = String(lastError.message || '');
+            const activeURL = attemptedURLs[attemptedURLs.length - 1] || this.preferredBaseURL;
 
-            if (error.message.includes('ECONNREFUSED')) {
-                errorMessage = `Ollama not running at ${this.baseURL}`;
+            if (errorText.includes('ECONNREFUSED')) {
+                errorMessage = `Ollama not running at ${activeURL}`;
                 hint = 'Make sure Ollama is running. Try: ollama serve';
-            } else if (error.message.includes('timeout') || error.name === 'AbortError') {
-                errorMessage = `Ollama connection timeout at ${this.baseURL}`;
+            } else if (errorText.includes('timeout') || lastError.name === 'AbortError') {
+                errorMessage = `Ollama connection timeout at ${activeURL}`;
                 hint = 'The server is not responding. Check if Ollama is running and accessible.';
-            } else if (error.message.includes('ENOTFOUND')) {
-                errorMessage = `Cannot resolve host: ${this.baseURL}`;
+            } else if (errorText.includes('ENOTFOUND')) {
+                errorMessage = `Cannot resolve host: ${activeURL}`;
                 hint = 'Check your OLLAMA_HOST environment variable or network configuration.';
             } else {
-                errorMessage = error.message;
+                errorMessage = errorText || 'Unknown Ollama availability error';
             }
 
             this.isAvailable = {
                 available: false,
                 error: errorMessage,
-                hint: hint,
-                attemptedURL: this.baseURL
+                hint,
+                attemptedURL: activeURL,
+                attemptedURLs
             };
             this.lastCheck = Date.now();
             return this.isAvailable;

@@ -5059,10 +5059,16 @@ program
             console.log(`  Tier: ${chalk.cyan(detector.getHardwareTier().replace('_', ' ').toUpperCase())}`);
             console.log(`  Max model size: ${chalk.green(detector.getMaxModelSize() + 'GB')}`);
             console.log(`  Best backend: ${chalk.cyan(hardware.summary.bestBackend)}`);
+            if (hardware.summary.runtimeBackend && hardware.summary.runtimeBackend !== hardware.summary.bestBackend) {
+                console.log(`  Runtime assist: ${chalk.green(hardware.summary.runtimeBackendName || hardware.summary.runtimeBackend)}`);
+            }
             console.log(`  Dedicated GPUs: ${chalk.green(formatGpuInventoryList(hardware.summary.dedicatedGpuModels))}`);
             console.log(`  Integrated GPUs: ${chalk.hex('#FFA500')(formatGpuInventoryList(hardware.summary.integratedGpuModels))}`);
             if (hardware.summary.hasIntegratedGPU && hardware.summary.bestBackend === 'cpu') {
-                console.log(`  Assist path: ${chalk.yellow('Integrated/shared-memory GPU detected, runtime remains CPU')}`);
+                const assistMessage = hardware.summary.runtimeBackend && hardware.summary.runtimeBackend !== hardware.summary.bestBackend
+                    ? `Integrated/shared-memory GPU detected, runtime may use ${hardware.summary.runtimeBackendName || hardware.summary.runtimeBackend} acceleration`
+                    : 'Integrated/shared-memory GPU detected, runtime remains CPU';
+                console.log(`  Assist path: ${chalk.yellow(assistMessage)}`);
             }
 
             // CPU
