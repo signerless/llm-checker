@@ -4,7 +4,7 @@
  * Focuses on AVX2, AVX512, AMX, and other SIMD extensions
  */
 
-const { execSync } = require('child_process');
+const childProcess = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const { normalizePlatform } = require('../../utils/platform');
@@ -92,7 +92,7 @@ class CPUDetector {
 
         try {
             if (platform === 'darwin') {
-                return parseInt(execSync('sysctl -n hw.physicalcpu', { encoding: 'utf8', timeout: 5000 }).trim());
+                return parseInt(childProcess.execSync('sysctl -n hw.physicalcpu', { encoding: 'utf8', timeout: 5000 }).trim());
             } else if (platform === 'linux') {
                 const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
                 const coreIds = new Set();
@@ -142,7 +142,37 @@ class CPUDetector {
      * Execute shell command with consistent options.
      */
     runCommand(command) {
-        return execSync(command, { encoding: 'utf8', timeout: 5000 });
+        const baseOptions = {
+            encoding: 'utf8',
+            timeout: 5000
+        };
+
+        if (normalizePlatform() === 'win32') {
+            const result = childProcess.spawnSync(command, {
+                ...baseOptions,
+                shell: true,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true
+            });
+
+            if (result.error) {
+                throw result.error;
+            }
+
+            if (result.status !== 0) {
+                const stderr = String(result.stderr || '').trim();
+                const stdout = String(result.stdout || '').trim();
+                const error = new Error(stderr || stdout || `Command failed: ${command}`);
+                error.status = result.status;
+                error.stdout = result.stdout;
+                error.stderr = result.stderr;
+                throw error;
+            }
+
+            return result.stdout;
+        }
+
+        return childProcess.execSync(command, baseOptions);
     }
 
     /**
@@ -215,10 +245,10 @@ class CPUDetector {
 
         try {
             if (platform === 'darwin') {
-                cache.l1d = parseInt(execSync('sysctl -n hw.l1dcachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
-                cache.l1i = parseInt(execSync('sysctl -n hw.l1icachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
-                cache.l2 = parseInt(execSync('sysctl -n hw.l2cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
-                cache.l3 = parseInt(execSync('sysctl -n hw.l3cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
+                cache.l1d = parseInt(childProcess.execSync('sysctl -n hw.l1dcachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
+                cache.l1i = parseInt(childProcess.execSync('sysctl -n hw.l1icachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 || 0;
+                cache.l2 = parseInt(childProcess.execSync('sysctl -n hw.l2cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
+                cache.l3 = parseInt(childProcess.execSync('sysctl -n hw.l3cachesize', { encoding: 'utf8', timeout: 5000 })) / 1024 / 1024 || 0;
             } else if (platform === 'linux') {
                 // Parse from /sys/devices/system/cpu/cpu0/cache/
                 const cachePath = '/sys/devices/system/cpu/cpu0/cache';
@@ -288,12 +318,12 @@ class CPUDetector {
                 } else {
                     // Intel Mac - check via sysctl
                     try {
-                        const features = execSync('sysctl -n machdep.cpu.features', {
+                        const features = childProcess.execSync('sysctl -n machdep.cpu.features', {
                             encoding: 'utf8',
                             timeout: 5000
                         }).toLowerCase();
 
-                        const leafFeatures = execSync('sysctl -n machdep.cpu.leaf7_features', {
+                        const leafFeatures = childProcess.execSync('sysctl -n machdep.cpu.leaf7_features', {
                             encoding: 'utf8',
                             timeout: 5000
                         }).toLowerCase();

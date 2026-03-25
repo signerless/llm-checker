@@ -1,4 +1,5 @@
 const assert = require('assert');
+const childProcess = require('child_process');
 const os = require('os');
 const CPUDetector = require('../src/hardware/backends/cpu-detector');
 
@@ -96,10 +97,36 @@ function testFallbackToNodeWhenWindowsCommandsUnavailable() {
     );
 }
 
+function testWindowsCommandRunnerSuppressesWmicShellNoise() {
+    const originalSpawnSync = childProcess.spawnSync;
+
+    childProcess.spawnSync = (command, options) => {
+        assert.strictEqual(command, 'wmic cpu get NumberOfCores /value');
+        assert.strictEqual(options.shell, true, 'Expected Windows commands to run through a shell');
+        assert.strictEqual(options.windowsHide, true, 'Expected Windows shell windows to stay hidden');
+        assert.deepStrictEqual(options.stdio, ['ignore', 'pipe', 'pipe'], 'Expected stderr/stdout to be captured');
+
+        return {
+            status: 1,
+            stdout: '',
+            stderr: "'wmic' is not recognized as an internal or external command\r\n"
+        };
+    };
+
+    try {
+        const detector = new CPUDetector();
+        const result = withPlatform('win32', () => detector.queryWindowsNumeric(['wmic cpu get NumberOfCores /value']));
+        assert.strictEqual(result, null, 'Expected WMIC shell failures to be swallowed so fallback commands can continue');
+    } finally {
+        childProcess.spawnSync = originalSpawnSync;
+    }
+}
+
 function run() {
     testPhysicalCoresFallbackToCim();
     testMaxClockFallbackToCim();
     testFallbackToNodeWhenWindowsCommandsUnavailable();
+    testWindowsCommandRunnerSuppressesWmicShellNoise();
     console.log('cpu-detector-windows-fallback.test.js: OK');
 }
 
