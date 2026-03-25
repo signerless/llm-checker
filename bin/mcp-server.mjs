@@ -187,7 +187,7 @@ const ALLOWED_CLI_COMMANDS = new Set([
 
 const server = new McpServer({
   name: "llm-checker",
-  version: "3.4.0",
+  version: "3.5.7",
 });
 
 // ============================================================================

@@ -1,6 +1,17 @@
 Changelog
 =========
 
+3.5.7 — Windows WMIC Silence + Safer Local Recommendations (2026-03-25)
+-----------------------------------------------------------------------
+
+- Fixed Windows CPU detection noise on newer Windows builds where `wmic` has been removed:
+  - Windows probes now capture shell stderr instead of printing `wmic` command-not-found errors into CLI flows.
+  - PowerShell/CIM fallback continues quietly when WMIC is unavailable.
+- Fixed oversized local Ollama recommendation edge cases:
+  - local/cloud variant metadata is isolated more safely during recommendation scoring.
+  - local recommendation sizing and hardware-tier routing are more consistent for CPU-backed systems.
+- Added regression coverage for both the Windows WMIC-retired path and the oversized local recommendation path.
+
 3.5.6 — Integrated GPU Inventory & Hybrid Visibility (2026-03-13)
 ------------------------------------------------------------------
 
