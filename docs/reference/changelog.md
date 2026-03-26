@@ -1,6 +1,18 @@
 Changelog
 =========
 
+3.5.10 — Ollama IPv6 Loopback Fallback (2026-03-26)
+---------------------------------------------------
+
+- Fixed a remaining Ollama loopback fallback bug on systems where:
+  - `localhost` does not resolve correctly for Node fetch calls.
+  - `127.0.0.1` also fails.
+  - Ollama is reachable on IPv6 loopback (`::1`).
+- Corrected the shared Ollama client to construct a real bracketed IPv6 fallback URL (`http://[::1]:11434`) instead of accidentally retrying `localhost` again.
+- Added regression coverage for:
+  - shared client availability fallback from `localhost` to IPv4 to IPv6.
+  - selector probe and evaluator requests continuing to use the resolved IPv6 base URL after fallback succeeds.
+
 3.5.9 — Selector Loopback Fallback + Windows Backend Follow-up (2026-03-26)
 ----------------------------------------------------------------------------
 
