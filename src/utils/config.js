@@ -16,7 +16,7 @@ class ConfigManager {
         return {
             version: "2.0",
             ollama: {
-                baseURL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+                baseURL: process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL || "http://localhost:11434",
                 timeout: 30000,
                 enabled: true,
                 autoDetect: true,
@@ -176,7 +176,9 @@ class ConfigManager {
         }
 
         // Ollama overrides
-        if (process.env.OLLAMA_BASE_URL) {
+        if (process.env.OLLAMA_HOST) {
+            this.config.ollama.baseURL = process.env.OLLAMA_HOST;
+        } else if (process.env.OLLAMA_BASE_URL) {
             this.config.ollama.baseURL = process.env.OLLAMA_BASE_URL;
         }
 

@@ -7,15 +7,16 @@
 
 const DeterministicModelSelector = require('./deterministic-selector');
 const { OllamaNativeScraper } = require('../ollama/native-scraper');
+const OllamaClient = require('../ollama/client');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const fetch = require('../utils/fetch');
 const { evaluateFineTuningSupport } = require('./fine-tuning-support');
 
 class AICheckSelector {
     constructor() {
         this.deterministicSelector = new DeterministicModelSelector();
+        this.ollamaClient = new OllamaClient();
         this.ollamaScraper = new OllamaNativeScraper();
         this.cachePath = path.join(require('os').homedir(), '.llm-checker', 'ai-check-cache.json');
         
@@ -389,17 +390,10 @@ Return JSON with this structure:
             ]
         };
 
-        const response = await fetch('http://localhost:11434/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody)
+        const data = await this.ollamaClient.chat(modelId, requestBody.messages, {
+            timeoutMs: 45000,
+            generationOptions: requestBody.options
         });
-
-        if (!response.ok) {
-            throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
         
         if (!data.message || !data.message.content) {
             throw new Error(`Invalid response from Ollama API: ${JSON.stringify(data)}`);

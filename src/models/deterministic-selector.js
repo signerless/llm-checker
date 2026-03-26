@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
-const fetch = require('../utils/fetch');
+const OllamaClient = require('../ollama/client');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
 const {
     parseBillionsValue: parseMoEBillionsValue,
@@ -24,6 +24,7 @@ class DeterministicModelSelector {
     constructor() {
         this.catalogPath = path.join(__dirname, 'catalog.json');
         this.benchCachePath = path.join(os.homedir(), '.llm-checker', 'bench.json');
+        this.ollamaClient = new OllamaClient();
         this.ollamaCachePaths = [
             path.join(os.homedir(), '.llm-checker', 'cache', 'ollama', 'ollama-detailed-models.json'),
             path.join(__dirname, '../ollama/.cache/ollama-detailed-models.json')
@@ -2018,33 +2019,23 @@ class DeterministicModelSelector {
         
         const prompt = prompts[category] || prompts['general'];
         const targetTokens = 128;
-        
-        const startTime = Date.now();
-        
-        // Make HTTP request to Ollama API
-        const response = await fetch('http://localhost:11434/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: modelId,
-                prompt: prompt,
-                stream: false,
-                options: {
-                    num_predict: targetTokens
-                }
-            })
+
+        const result = await this.ollamaClient.generate(modelId, prompt, {
+            generationOptions: {
+                num_predict: targetTokens
+            }
         });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+        if (Number.isFinite(result.tokensPerSecond) && result.tokensPerSecond > 0) {
+            return result.tokensPerSecond;
         }
-        
-        const result = await response.json();
-        const elapsedSeconds = (Date.now() - startTime) / 1000;
-        
-        // Estimate tokens generated (simplified)
-        const tokensGenerated = result.response ? result.response.split(' ').length * 1.3 : targetTokens;
-        
+
+        const elapsedSeconds = Math.max(0.001, Number(result.responseTime || 0) / 1000);
+        const estimatedResponseTokens = result.response
+            ? result.response.split(/\s+/).filter(Boolean).length * 1.3
+            : targetTokens;
+        const tokensGenerated = Number(result.eval_count) || estimatedResponseTokens;
+
         return tokensGenerated / elapsedSeconds;
     }
 

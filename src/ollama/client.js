@@ -3,9 +3,9 @@ const fetch = require('../utils/fetch');
 class OllamaClient {
     constructor(baseURL = null) {
         // Support OLLAMA_HOST environment variable (standard Ollama configuration)
-        // Also support OLLAMA_URL for backwards compatibility
+        // Also support OLLAMA_BASE_URL and OLLAMA_URL for backwards compatibility
         this.preferredBaseURL = this.normalizeBaseURL(
-            baseURL || process.env.OLLAMA_HOST || process.env.OLLAMA_URL || 'http://localhost:11434'
+            baseURL || process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL || process.env.OLLAMA_URL || 'http://localhost:11434'
         );
         this.baseURL = this.preferredBaseURL;
 
@@ -473,51 +473,86 @@ class OllamaClient {
         };
     }
 
-    async testModelPerformance(modelName, testPrompt = "Hello, how are you?") {
+    async generate(modelName, prompt, options = {}) {
         const availability = await this.checkOllamaAvailability();
         if (!availability.available) {
             throw new Error(`Ollama not available: ${availability.error}`);
+        }
+
+        const {
+            timeoutMs = 30000,
+            stream = false,
+            keepAlive,
+            format,
+            generationOptions = {}
+        } = options;
+
+        const payload = {
+            model: modelName,
+            prompt,
+            stream: Boolean(stream)
+        };
+
+        if (keepAlive) payload.keep_alive = keepAlive;
+        if (format) payload.format = format;
+        if (generationOptions && Object.keys(generationOptions).length > 0) {
+            payload.options = generationOptions;
         }
 
         const startTime = Date.now();
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
             const response = await fetch(`${this.baseURL}/api/generate`, {
                 method: 'POST',
                 signal: controller.signal,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: modelName,
-                    prompt: testPrompt,
-                    stream: false,
-                    options: {
-                        num_predict: 50 // Limitar respuesta para test rápido
-                    }
-                })
+                body: JSON.stringify(payload)
             });
 
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                throw new Error(`Test failed: HTTP ${response.status}`);
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
             }
 
             const data = await response.json();
-            const endTime = Date.now();
+            const responseTime = Date.now() - startTime;
+            const speed = this.calculateTokensPerSecond(data, responseTime);
 
-            const totalTime = endTime - startTime;
+            return {
+                ...data,
+                responseTime,
+                tokensPerSecond: speed.tokensPerSecond,
+                evalTokensPerSecond: speed.evalTokensPerSecond,
+                endToEndTokensPerSecond: speed.endToEndTokensPerSecond
+            };
+        } catch (error) {
+            throw new Error(`Failed to run generate request: ${error.message}`);
+        }
+    }
+
+    async testModelPerformance(modelName, testPrompt = "Hello, how are you?") {
+        const startTime = Date.now();
+
+        try {
+            const data = await this.generate(modelName, testPrompt, {
+                timeoutMs: 30000,
+                generationOptions: {
+                    num_predict: 50
+                }
+            });
             const tokensGenerated = Number(data.eval_count) || 0;
-            const speed = this.calculateTokensPerSecond(data, totalTime);
 
             return {
                 success: true,
-                responseTime: totalTime,
-                tokensPerSecond: speed.tokensPerSecond,
-                evalTokensPerSecond: speed.evalTokensPerSecond,
-                endToEndTokensPerSecond: speed.endToEndTokensPerSecond,
+                responseTime: data.responseTime,
+                tokensPerSecond: data.tokensPerSecond,
+                evalTokensPerSecond: data.evalTokensPerSecond,
+                endToEndTokensPerSecond: data.endToEndTokensPerSecond,
                 tokensGenerated,
                 loadTime: data.load_duration ? Math.round(data.load_duration / 1000000) : null,
                 evalTime: data.eval_duration ? Math.round(data.eval_duration / 1000000) : null,
