@@ -1,6 +1,19 @@
 Changelog
 =========
 
+3.5.9 — Selector Loopback Fallback + Windows Backend Follow-up (2026-03-26)
+----------------------------------------------------------------------------
+
+- Fixed the remaining Ollama localhost bypasses in selector flows:
+  - deterministic speed probes now use the shared Ollama client instead of a hardcoded `http://localhost:11434` endpoint.
+  - AI evaluator chat requests now use the same resolved Ollama base URL path as the rest of the CLI.
+- Improved Ollama client consistency:
+  - added a reusable shared generate helper for local inference requests.
+  - aligned `OLLAMA_HOST` and `OLLAMA_BASE_URL` handling so loopback fallback and env overrides resolve through one code path.
+- Added regression coverage:
+  - new selector fallback test emulates Windows-style `localhost` failure with successful `127.0.0.1` recovery for both probe and evaluator requests.
+- Opened focused follow-up issue `#71` for the remaining Windows backend wording/semantics question when `Runtime assist: Vulkan` is present but the summary still reports `Best backend: cpu`.
+
 3.5.8 — Windows Ollama Localhost Fallback + Vulkan Assist Visibility (2026-03-25)
 ----------------------------------------------------------------------------------
 
