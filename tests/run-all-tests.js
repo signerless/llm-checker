@@ -19,6 +19,7 @@ const TESTS = [
     { name: 'Fine-tuning support helper', file: 'fine-tuning-support.test.js', category: 'Recommendations' },
     { name: 'Ollama capacity planner', file: 'ollama-capacity-planner.test.js', category: 'Ollama' },
     { name: 'Ollama localhost fallback', file: 'ollama-client-localhost-fallback.test.js', category: 'Ollama' },
+    { name: 'Ollama selector localhost fallback', file: 'ollama-selector-localhost-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama speed metrics', file: 'ollama-client-speed-metrics.test.js', category: 'Ollama' },
     { name: 'Runtime + speculative decoding', file: 'runtime-specdec-tests.js', category: 'Runtime' },
     { name: 'CLI interface smoke', file: 'ui-cli-smoke.test.js', category: 'UI' },
