@@ -35,7 +35,8 @@ class OllamaClient {
                 candidates.push(ipv4.toString().replace(/\/$/, ''));
 
                 const ipv6 = new URL(parsed.toString());
-                ipv6.hostname = '::1';
+                // URL.hostname expects bracketed IPv6 literals when mutating an existing URL.
+                ipv6.hostname = '[::1]';
                 candidates.push(ipv6.toString().replace(/\/$/, ''));
             }
         } catch (error) {
