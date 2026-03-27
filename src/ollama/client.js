@@ -15,12 +15,32 @@ class OllamaClient {
         this._pendingCheck = null;
     }
 
+    isWildcardBindHost(hostname) {
+        const normalized = String(hostname || '').trim().toLowerCase();
+        return normalized === '0.0.0.0' || normalized === '::' || normalized === '[::]';
+    }
+
     normalizeBaseURL(baseURL) {
         let normalized = String(baseURL || '').trim();
         if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
             normalized = 'http://' + normalized;
         }
-        return normalized.replace(/\/$/, '');
+
+        try {
+            const parsed = new URL(normalized);
+
+            if (!parsed.port) {
+                parsed.port = '11434';
+            }
+
+            if (this.isWildcardBindHost(parsed.hostname)) {
+                parsed.hostname = 'localhost';
+            }
+
+            return parsed.toString().replace(/\/$/, '');
+        } catch (error) {
+            return normalized.replace(/\/$/, '');
+        }
     }
 
     buildCandidateBaseURLs(baseURL = this.preferredBaseURL) {
