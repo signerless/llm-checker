@@ -20,6 +20,7 @@ const TESTS = [
     { name: 'Ollama capacity planner', file: 'ollama-capacity-planner.test.js', category: 'Ollama' },
     { name: 'Ollama localhost fallback', file: 'ollama-client-localhost-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama IPv6 fallback', file: 'ollama-client-ipv6-fallback.test.js', category: 'Ollama' },
+    { name: 'Ollama native fetch fallback', file: 'ollama-client-native-fetch-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama selector localhost fallback', file: 'ollama-selector-localhost-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama selector IPv6 fallback', file: 'ollama-selector-ipv6-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama speed metrics', file: 'ollama-client-speed-metrics.test.js', category: 'Ollama' },
