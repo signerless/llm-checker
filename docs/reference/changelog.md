@@ -1,6 +1,19 @@
 Changelog
 =========
 
+3.5.11 — Windows Ollama Host Normalization Follow-up (2026-03-27)
+-----------------------------------------------------------------
+
+- Fixed the remaining Windows Ollama client path where `OLLAMA_HOST` could be inherited as a wildcard bind address such as `0.0.0.0` or `[::]`:
+  - wildcard bind hosts now normalize back to `localhost` for client requests.
+  - missing Ollama ports now default to `11434`.
+- Kept the earlier Windows native-`fetch` fallback fix in the release path:
+  - if Node's native `fetch` throws a retryable network error such as `fetch failed`, requests retry through `node-fetch`.
+- Improved guidance for custom Ollama endpoints:
+  - CLI messaging now points users to `OLLAMA_BASE_URL` for client-side URL overrides.
+  - advanced usage docs now clarify the difference between server bind addresses and client target URLs.
+- Added regression coverage for wildcard-host normalization so `check` and `ai-run` keep working when the environment exports wildcard Ollama bind values.
+
 3.5.10 — Ollama IPv6 Loopback Fallback (2026-03-26)
 ---------------------------------------------------
 

@@ -39,6 +39,9 @@ export LLM_CHECKER_VRAM_GB=8
 # Point to a remote Ollama daemon
 export OLLAMA_BASE_URL=http://remote-server:11434
 
+# Note: OLLAMA_HOST may be set by Ollama itself as a bind address
+# (for example 0.0.0.0). For client-side overrides, prefer OLLAMA_BASE_URL.
+
 # Verbose logs
 export LLM_CHECKER_LOG_LEVEL=debug
 
@@ -238,6 +241,10 @@ curl http://localhost:11434/api/version
 
 # Custom URL
 export OLLAMA_BASE_URL=http://192.168.1.100:11434
+
+# If your shell/session already exports OLLAMA_HOST=0.0.0.0 from the Ollama
+# server config, leave that as the bind address and set OLLAMA_BASE_URL for the
+# client instead.
 ```
 
 #### 3 — Models not marked compatible

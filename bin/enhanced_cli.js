@@ -3194,7 +3194,7 @@ program
                 }
                 if (analysis.ollamaInfo.attemptedURL) {
                     console.log(chalk.gray('Attempted URL: ' + analysis.ollamaInfo.attemptedURL));
-                    console.log(chalk.gray('Set OLLAMA_HOST environment variable to use a different URL'));
+                    console.log(chalk.gray('Set OLLAMA_BASE_URL environment variable to use a different client URL'));
                 }
                 return;
             }
