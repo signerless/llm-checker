@@ -333,7 +333,36 @@ class UnifiedDetector {
             summary.effectiveMemory = Math.round(summary.systemRAM * 0.7);
         }
 
+        summary.hardwareTier = this.classifyHardwareTierFromSummary(summary);
+        summary.bestBackendLabel = this.getBestBackendLabel(summary);
+
         return summary;
+    }
+
+    classifyHardwareTierFromSummary(summary = {}) {
+        const effectiveMem = Number(summary.effectiveMemory) || 0;
+        const speed = Number(summary.speedCoefficient) || 0;
+
+        if (effectiveMem >= 80 && speed >= 300) return 'ultra_high';      // H100, MI300
+        if (effectiveMem >= 48 && speed >= 200) return 'very_high';       // 2x3090, 4090
+        if (effectiveMem >= 24 && speed >= 150) return 'high';            // 3090, 4090, M2 Max
+        if (effectiveMem >= 16 && speed >= 100) return 'medium_high';     // 4080, 3080, M3 Pro
+        if (effectiveMem >= 12 && speed >= 80) return 'medium';           // 3060, 4060 Ti
+        if (effectiveMem >= 8 && speed >= 50) return 'medium_low';        // 3060, M2
+        if (effectiveMem >= 6 && speed >= 30) return 'low';               // GTX 1660, iGPU
+        return 'ultra_low';                                                // CPU only
+    }
+
+    getBestBackendLabel(summary = {}) {
+        const backendName = summary.backendName || String(summary.bestBackend || 'cpu').toUpperCase();
+        if (
+            summary.hasRuntimeAssist &&
+            summary.runtimeBackend &&
+            summary.runtimeBackend !== summary.bestBackend
+        ) {
+            return `${backendName} + ${summary.runtimeBackendName || summary.runtimeBackend} assist`;
+        }
+        return backendName;
     }
 
     summarizeGPUInventory(gpus = []) {
@@ -844,19 +873,7 @@ class UnifiedDetector {
         const result = this.cache;
         if (!result) return 'unknown';
 
-        const summary = result.summary;
-        const effectiveMem = summary.effectiveMemory;
-        const speed = summary.speedCoefficient;
-
-        // Tier based on effective memory and speed
-        if (effectiveMem >= 80 && speed >= 300) return 'ultra_high';      // H100, MI300
-        if (effectiveMem >= 48 && speed >= 200) return 'very_high';       // 2x3090, 4090
-        if (effectiveMem >= 24 && speed >= 150) return 'high';            // 3090, 4090, M2 Max
-        if (effectiveMem >= 16 && speed >= 100) return 'medium_high';     // 4080, 3080, M3 Pro
-        if (effectiveMem >= 12 && speed >= 80) return 'medium';           // 3060, 4060 Ti
-        if (effectiveMem >= 8 && speed >= 50) return 'medium_low';        // 3060, M2
-        if (effectiveMem >= 6 && speed >= 30) return 'low';               // GTX 1660, iGPU
-        return 'ultra_low';                                                // CPU only
+        return result.summary?.hardwareTier || this.classifyHardwareTierFromSummary(result.summary);
     }
 
     /**

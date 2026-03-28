@@ -881,6 +881,11 @@ function formatGpuInventoryList(models = []) {
 
 // Helper function to get hardware tier for display
 function getHardwareTierForDisplay(hardware) {
+    const canonicalTier = hardware?.summary?.hardwareTier;
+    if (typeof canonicalTier === 'string' && canonicalTier.trim()) {
+        return canonicalTier.replace(/_/g, ' ').toUpperCase();
+    }
+
     const ram = hardware.memory.total;
     const cores = hardware.cpu.cores;
     const gpuModel = hardware.gpu?.model || '';
@@ -921,6 +926,21 @@ function getHardwareTierForDisplay(hardware) {
     }
     
     return tier;
+}
+
+function getBackendLabelForDisplay(hardware) {
+    const summary = hardware?.summary || {};
+
+    if (typeof summary.bestBackendLabel === 'string' && summary.bestBackendLabel.trim()) {
+        return summary.bestBackendLabel;
+    }
+
+    const backendName = summary.backendName || String(summary.bestBackend || 'cpu').toUpperCase();
+    if (summary.runtimeBackend && summary.runtimeBackend !== summary.bestBackend) {
+        return `${backendName} + ${summary.runtimeBackendName || summary.runtimeBackend} assist`;
+    }
+
+    return backendName;
 }
 
 function formatSpeed(speed) {
@@ -969,12 +989,13 @@ function displaySystemInfo(hardware, analysis) {
         `${chalk.cyan('Architecture:')} ${hardware.cpu.architecture}`,
         `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')}`,
         `${chalk.cyan('GPU:')} ${gpuColor(hardware.gpu.model || 'Not detected')}`,
+        `${chalk.cyan('Backend:')} ${chalk.white(getBackendLabelForDisplay(hardware))}`,
         `${chalk.cyan('VRAM:')} ${hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple') ? 'Unified Memory' : `${hardware.gpu.vram || 'N/A'}GB`}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
         `${chalk.cyan('Dedicated GPUs:')} ${chalk.green(dedicatedList)}`,
         `${chalk.cyan('Integrated GPUs:')} ${chalk.hex('#FFA500')(integratedList)}`,
     ];
 
-    const tier = analysis.summary.hardwareTier?.replace('_', ' ').toUpperCase() || 'UNKNOWN';
+    const tier = analysis.summary.hardwareTier?.replace(/_/g, ' ').toUpperCase() || getHardwareTierForDisplay(hardware);
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
 
     lines.push(`${chalk.bold('Hardware Tier:')} ${tierColor.bold(tier)}`);
@@ -1758,6 +1779,7 @@ function displaySimplifiedSystemInfo(hardware) {
     console.log(`Memory: ${chalk.white(memInfo)}`);
     console.log(`GPU: ${chalk.white(gpuInfo)}`);
     console.log(`Architecture: ${chalk.white(hardware.cpu.architecture)}`);
+    console.log(`Backend: ${chalk.white(getBackendLabelForDisplay(hardware))}`);
     
     const tier = getHardwareTierForDisplay(hardware);
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
@@ -5058,7 +5080,7 @@ program
             console.log(`  ${detector.getHardwareDescription()}`);
             console.log(`  Tier: ${chalk.cyan(detector.getHardwareTier().replace('_', ' ').toUpperCase())}`);
             console.log(`  Max model size: ${chalk.green(detector.getMaxModelSize() + 'GB')}`);
-            console.log(`  Best backend: ${chalk.cyan(hardware.summary.bestBackend)}`);
+            console.log(`  Best backend: ${chalk.cyan(getBackendLabelForDisplay(hardware))}`);
             if (hardware.summary.runtimeBackend && hardware.summary.runtimeBackend !== hardware.summary.bestBackend) {
                 console.log(`  Runtime assist: ${chalk.green(hardware.summary.runtimeBackendName || hardware.summary.runtimeBackend)}`);
             }

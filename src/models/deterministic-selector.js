@@ -2141,6 +2141,10 @@ class DeterministicModelSelector {
 
     mapHardwareTier(hardware = {}) {
         const summary = hardware?.summary || {};
+        const canonicalTier = summary.hardwareTier || summary.hardware_tier;
+        if (typeof canonicalTier === 'string' && canonicalTier.trim()) {
+            return canonicalTier.trim().toLowerCase().replace(/\s+/g, '_');
+        }
         const effectiveMemory = Number(summary.effectiveMemory);
         const speedCoefficient = Number(summary.speedCoefficient);
         if (Number.isFinite(effectiveMemory) && effectiveMemory > 0 && Number.isFinite(speedCoefficient)) {

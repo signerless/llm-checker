@@ -1345,7 +1345,25 @@ class LLMChecker {
     }
 
     getHardwareTier(hardware) {
+        const canonicalTier = hardware?.summary?.hardwareTier;
+        if (typeof canonicalTier === 'string' && canonicalTier.trim()) {
+            return canonicalTier.trim().toLowerCase().replace(/\s+/g, '_');
+        }
         return this.calculateHardwareScore(hardware).tier;
+    }
+
+    getHardwareTierBucket(hardware) {
+        const tier = this.getHardwareTier(hardware);
+        switch (tier) {
+            case 'very_high':
+                return 'ultra_high';
+            case 'medium_high':
+                return 'high';
+            case 'medium_low':
+                return 'low';
+            default:
+                return tier;
+        }
     }
 
     calculateHardwareScore(hardware) {
@@ -2003,7 +2021,7 @@ class LLMChecker {
             score -= 15;
         }
 
-        const hardwareTier = this.getHardwareTier(hardware);
+        const hardwareTier = this.getHardwareTierBucket(hardware);
         switch (hardwareTier) {
             case 'ultra_high':
                 score += 15;
