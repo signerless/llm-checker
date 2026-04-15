@@ -3,6 +3,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const BIN_PATH = path.resolve(__dirname, '..', 'bin', 'enhanced_cli.js');
+const BIN_WRAPPER_PATH = path.resolve(__dirname, '..', 'bin', 'cli.js');
 
 function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
@@ -10,6 +11,16 @@ function stripAnsi(text = '') {
 
 function runCli(args) {
     return spawnSync(process.execPath, [BIN_PATH, ...args], {
+        encoding: 'utf8',
+        env: {
+            ...process.env,
+            NO_COLOR: '1'
+        }
+    });
+}
+
+function runWrapperCli(args) {
+    return spawnSync(process.execPath, [BIN_WRAPPER_PATH, ...args], {
         encoding: 'utf8',
         env: {
             ...process.env,
@@ -72,6 +83,43 @@ function run() {
     assert.ok(
         stripAnsi(aiRunHelp.stdout).includes('--calibrated [file]'),
         'ai-run help should expose calibrated routing option'
+    );
+
+    const aiCheckModelsSpacedHelp = runWrapperCli([
+        'ai-check',
+        '--models',
+        'qwen2.5:7b-instruct',
+        '--help'
+    ]);
+    const aiCheckModelsSpacedOutput = stripAnsi(
+        (aiCheckModelsSpacedHelp.stdout || '') + (aiCheckModelsSpacedHelp.stderr || '')
+    );
+    assert.strictEqual(aiCheckModelsSpacedHelp.status, 0, aiCheckModelsSpacedOutput);
+    assert.ok(
+        aiCheckModelsSpacedOutput.includes('Usage: llm-checker ai-check'),
+        'wrapper ai-check --models <value> should still show ai-check help'
+    );
+    assert.ok(
+        !aiCheckModelsSpacedOutput.includes("unknown option '--models'"),
+        'wrapper should consume --models before Commander parses args'
+    );
+
+    const aiCheckModelsEqualsHelp = runWrapperCli([
+        'ai-check',
+        '--models=qwen2.5:7b-instruct',
+        '--help'
+    ]);
+    const aiCheckModelsEqualsOutput = stripAnsi(
+        (aiCheckModelsEqualsHelp.stdout || '') + (aiCheckModelsEqualsHelp.stderr || '')
+    );
+    assert.strictEqual(aiCheckModelsEqualsHelp.status, 0, aiCheckModelsEqualsOutput);
+    assert.ok(
+        aiCheckModelsEqualsOutput.includes('Usage: llm-checker ai-check'),
+        'wrapper ai-check --models=<value> should still show ai-check help'
+    );
+    assert.ok(
+        !aiCheckModelsEqualsOutput.includes("unknown option '--models'"),
+        'wrapper should handle --models=<value> syntax'
     );
 
     const ollamaPlanHelp = runCli(['ollama-plan', '--help']);
