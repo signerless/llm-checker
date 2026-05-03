@@ -4,6 +4,7 @@ const chalk = require('chalk');
 const ora = require('ora');
 const { table } = require('table');
 const os = require('os');
+const readline = require('readline');
 const { spawn } = require('child_process');
 // LLMChecker is loaded lazily to avoid slow systeminformation init
 let _LLMChecker = null;
@@ -49,6 +50,7 @@ const {
     buildComplianceReport,
     serializeComplianceReport
 } = require('../src/policy/audit-reporter');
+const { estimateTokenSpeedFromHardware } = require('../src/utils/token-speed-estimator');
 const { renderCommandHeader, renderPersistentBanner } = require('../src/ui/cli-theme');
 const { launchInteractivePanel } = require('../src/ui/interactive-panel');
 const policyManager = new PolicyManager();
@@ -1430,6 +1432,266 @@ function displayCalibratedRoutingDecision(commandName, calibratedPolicy, routeDe
     }
 
     console.log(chalk.blue('╰'));
+}
+
+function parseAiRunModelSizeB(value) {
+    const match = String(value || '').match(/(\d+(?:\.\d+)?)\s*([kmb])\+?/i);
+    if (!match) return null;
+
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const unit = match[2].toLowerCase();
+    if (unit === 'b') return amount;
+    if (unit === 'm') return amount / 1000;
+    if (unit === 'k') return amount / 1_000_000;
+    return null;
+}
+
+function normalizeAiRunModelName(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/:latest$/, '');
+}
+
+function findAiRunLocalModel(localModels = [], modelName = '') {
+    const target = normalizeAiRunModelName(modelName);
+    if (!target) return null;
+
+    return localModels.find((model) => {
+        const name = normalizeAiRunModelName(model.name || model.model);
+        if (!name) return false;
+        return name === target || name.includes(target) || target.includes(name);
+    }) || null;
+}
+
+function resolveAiRunModelSizeB(modelName, aiSelector, localModel = null) {
+    const localParameterSize = localModel?.details?.parameter_size || localModel?.size;
+    const parsedLocalSize = parseAiRunModelSizeB(localParameterSize);
+    if (parsedLocalSize) return parsedLocalSize;
+
+    const parsedNameSize = parseAiRunModelSizeB(modelName);
+    if (parsedNameSize) return parsedNameSize;
+
+    if (aiSelector && typeof aiSelector.estimateModelSize === 'function') {
+        const selectorSize = Number(aiSelector.estimateModelSize(modelName));
+        if (Number.isFinite(selectorSize) && selectorSize > 0) return selectorSize;
+    }
+
+    return 7;
+}
+
+function formatAiRunNumber(value, decimals = 1) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 'N/A';
+    return number.toFixed(decimals).replace(/\.0$/, '');
+}
+
+function estimateAiRunWorkingSetGB(modelSizeB, localModel = null) {
+    const fileSizeGB = Number(localModel?.fileSizeGB) || 0;
+    const parameterEstimateGB = (Number(modelSizeB) * 0.75) + 2;
+    if (fileSizeGB > 0) {
+        return Math.max(fileSizeGB * 1.15, parameterEstimateGB * 0.85);
+    }
+    return parameterEstimateGB;
+}
+
+function formatAiRunHardwareSummary(systemInfo = {}) {
+    const cpuBrand = systemInfo.cpu?.brand || systemInfo.cpu?.model || 'CPU';
+    const cores = systemInfo.cpu?.cores ? ` (${systemInfo.cpu.cores} cores)` : '';
+    const memory = systemInfo.memory?.total ? `${systemInfo.memory.total}GB RAM` : 'RAM unknown';
+    const gpu = systemInfo.gpu?.model || 'GPU not detected';
+    return `${cpuBrand}${cores}, ${memory}, ${gpu}`;
+}
+
+function formatAiRunMethod(method = '') {
+    return String(method || 'selector')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatAiRunReason(reason = '') {
+    const text = String(reason || '').replace(/\s+/g, ' ').trim();
+    if (!text) return 'Selected from local model compatibility scoring.';
+    return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+function formatAiRunMeasuredSpeed(benchmark = null) {
+    if (!benchmark) return null;
+    if (!benchmark.success) {
+        return `not available (${benchmark.error || 'benchmark failed'})`;
+    }
+
+    const parts = [];
+    if (Number(benchmark.evalTokensPerSecond) > 0) {
+        parts.push(`${formatAiRunNumber(benchmark.evalTokensPerSecond)} eval t/s`);
+    }
+    if (Number(benchmark.endToEndTokensPerSecond) > 0) {
+        parts.push(`${formatAiRunNumber(benchmark.endToEndTokensPerSecond)} end-to-end t/s`);
+    }
+    if (parts.length === 0 && Number(benchmark.tokensPerSecond) > 0) {
+        parts.push(`${formatAiRunNumber(benchmark.tokensPerSecond)} t/s`);
+    }
+
+    const generated = Number(benchmark.tokensGenerated) > 0
+        ? `, ${benchmark.tokensGenerated} tokens`
+        : '';
+    return `${parts.join(', ')}${generated}`;
+}
+
+function displayAiRunReference({ result, systemInfo, taskHint, candidateModels, localModels, aiSelector, benchmark }) {
+    const localModel = findAiRunLocalModel(localModels, result.bestModel);
+    const modelSizeB = resolveAiRunModelSizeB(result.bestModel, aiSelector, localModel);
+    const speedEstimate = estimateTokenSpeedFromHardware(systemInfo, {
+        modelSizeB,
+        modelName: result.bestModel
+    });
+    const workingSetGB = estimateAiRunWorkingSetGB(modelSizeB, localModel);
+    const localCount = result.localModelsCount || candidateModels.length;
+    const dbCount = result.totalModelsEvaluated;
+    const confidence = Number(result.confidence);
+    const confidenceText = Number.isFinite(confidence)
+        ? `${Math.round(confidence * 100)}%`
+        : 'N/A';
+    const idealModel = result.recommendedFromDatabase;
+    const usesFallback = idealModel && idealModel !== result.bestModel && result.isRecommendedInstalled === false;
+    const measuredSpeed = formatAiRunMeasuredSpeed(benchmark);
+
+    console.log('\n' + chalk.bold('AI Run reference'));
+    console.log(chalk.gray('----------------'));
+    console.log(`${chalk.gray('Task:')} ${chalk.white(taskHint || 'general')}`);
+    console.log(`${chalk.gray('Selected local model:')} ${chalk.green.bold(result.bestModel)}`);
+
+    if (idealModel) {
+        const idealStatus = usesFallback ? chalk.yellow('not installed') : chalk.green('available');
+        console.log(`${chalk.gray('Best database match:')} ${chalk.cyan(idealModel)} ${chalk.gray('(')}${idealStatus}${chalk.gray(')')}`);
+    }
+
+    console.log(`${chalk.gray('Why this model:')} ${formatAiRunReason(result.reasoning || result.reason)}`);
+    console.log(`${chalk.gray('Confidence:')} ${chalk.white(confidenceText)} ${chalk.gray(`via ${formatAiRunMethod(result.method)}`)}`);
+    console.log(`${chalk.gray('Models evaluated:')} ${chalk.white(`${localCount} local`)}${dbCount ? chalk.gray(`, ${dbCount} database`) : ''}`);
+    console.log(`${chalk.gray('Hardware:')} ${formatAiRunHardwareSummary(systemInfo)}`);
+    console.log(`${chalk.gray('Estimated speed:')} ${chalk.yellow(`~${speedEstimate.tokensPerSecond} tokens/sec`)} ${chalk.gray(`${speedEstimate.backend}, generation only`)}`);
+
+    if (measuredSpeed) {
+        const speedColor = benchmark?.success ? chalk.green : chalk.yellow;
+        console.log(`${chalk.gray('Measured speed:')} ${speedColor(measuredSpeed)}`);
+    }
+
+    console.log(`${chalk.gray('Memory reference:')} ${chalk.white(`~${formatAiRunNumber(modelSizeB)}B params, ~${formatAiRunNumber(workingSetGB)}GB working set`)}`);
+
+    if (usesFallback) {
+        console.log(`${chalk.gray('Install ideal model:')} ${chalk.cyan(`ollama pull ${idealModel}`)}`);
+    }
+}
+
+function formatAiRunTurnSpeed(result = {}) {
+    const evalSpeed = Number(result.evalTokensPerSecond);
+    const preferredSpeed = evalSpeed > 0 ? evalSpeed : Number(result.tokensPerSecond);
+
+    if (!Number.isFinite(preferredSpeed) || preferredSpeed <= 0) {
+        return '[speed unavailable]';
+    }
+
+    return `[${formatAiRunNumber(preferredSpeed)} tokens/sec]`;
+}
+
+async function runAiRunChatTurn(client, modelName, messages) {
+    let printed = false;
+    const result = await client.streamChat(
+        modelName,
+        messages,
+        {
+            keepAlive: '5m',
+            timeoutMs: 180000
+        },
+        (chunk) => {
+            printed = true;
+            process.stdout.write(chunk);
+        }
+    );
+
+    if (!printed && result.response) {
+        process.stdout.write(result.response);
+    }
+
+    const responseText = result.response || result.message?.content || '';
+    const needsSpace = responseText.length > 0 && !/\s$/.test(responseText);
+    process.stdout.write(`${needsSpace ? ' ' : ''}${chalk.gray(formatAiRunTurnSpeed(result))}\n\n`);
+
+    return result;
+}
+
+function askAiRunQuestion(rl, promptText) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const handleClose = () => {
+            if (!settled) {
+                settled = true;
+                resolve(null);
+            }
+        };
+
+        rl.once('close', handleClose);
+        rl.question(promptText, (answer) => {
+            if (settled) return;
+            settled = true;
+            rl.off('close', handleClose);
+            resolve(answer);
+        });
+    });
+}
+
+async function runAiRunInteractiveChat(client, modelName) {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    const messages = [];
+    let closed = false;
+
+    rl.on('SIGINT', () => {
+        process.stdout.write('\n');
+        rl.close();
+    });
+    rl.on('close', () => {
+        closed = true;
+    });
+
+    try {
+        while (!closed) {
+            const input = await askAiRunQuestion(rl, chalk.cyan('>>> '));
+            if (input === null) break;
+
+            const trimmed = String(input || '').trim();
+
+            if (!trimmed) {
+                continue;
+            }
+
+            if (['/bye', '/exit', '/quit', 'q'].includes(trimmed.toLowerCase())) {
+                break;
+            }
+
+            if (['/?', '/help'].includes(trimmed.toLowerCase())) {
+                console.log('Commands: /bye, /exit, /quit');
+                continue;
+            }
+
+            messages.push({ role: 'user', content: input });
+
+            try {
+                const response = await runAiRunChatTurn(client, modelName, messages);
+                const assistantContent = response.response || response.message?.content || '';
+                messages.push({ role: 'assistant', content: assistantContent });
+            } catch (error) {
+                console.error(chalk.red(`Chat request failed: ${error.message}`));
+            }
+        }
+    } finally {
+        rl.close();
+    }
 }
 
 function displayModelsStats(originalCount, filteredCount, options) {
@@ -3210,7 +3472,7 @@ program
         const spinner = ora('Checking Ollama integration...').start();
 
         try {
-            const checker = new (getLLMChecker())();
+            const checker = new (getLLMChecker())({ verbose: false });
             const analysis = await checker.analyze();
 
             if (!analysis.ollamaInfo.available) {
@@ -3912,14 +4174,15 @@ program
     .option('--json', 'Output in JSON format')
     .action(async (options) => {
         if (!options.json) showAsciiArt('list-models');
-        const spinner = ora('📋 Loading models database...').start();
+        const spinner = options.json ? null : ora('📋 Loading models database...').start();
 
         try {
             const checker = new (getLLMChecker())();
-            const data = await checker.ollamaScraper.scrapeAllModels(false);
+            const data = await checker.loadOllamaModelData();
             
             if (!data || !data.models) {
-                spinner.fail('No models found in database');
+                if (spinner) spinner.fail('No models found in database');
+                else console.error('No models found in database');
                 return;
             }
 
@@ -4010,9 +4273,9 @@ program
                         return (b.pulls || 0) - (a.pulls || 0);
                     });
                     
-                    spinner.text = `Sorted by hardware compatibility (${getHardwareTierForDisplay(hardware)})`;
+                    if (spinner) spinner.text = `Sorted by hardware compatibility (${getHardwareTierForDisplay(hardware)})`;
                 } catch (error) {
-                    console.warn('Could not sort by hardware compatibility:', error.message);
+                    if (!options.json) console.warn('Could not sort by hardware compatibility:', error.message);
                     // Fallback a ordenar por popularidad
                     models.sort((a, b) => (b.pulls || 0) - (a.pulls || 0));
                 }
@@ -4025,7 +4288,7 @@ program
             const limit = parseInt(options.limit) || 50;
             const displayModels = models.slice(0, limit);
 
-            spinner.succeed(`✅ Found ${models.length} models (showing ${displayModels.length})`);
+            if (spinner) spinner.succeed(`✅ Found ${models.length} models (showing ${displayModels.length})`);
 
             if (options.json) {
                 console.log(JSON.stringify(displayModels, null, 2));
@@ -4048,7 +4311,7 @@ program
             }
 
         } catch (error) {
-            spinner.fail('Failed to load models');
+            if (spinner) spinner.fail('Failed to load models');
             console.error(chalk.red('Error:'), error.message);
             if (process.env.DEBUG) {
                 console.error(error.stack);
@@ -4149,6 +4412,8 @@ program
         '--calibrated [file]',
         'Enable calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
     )
+    .option('--benchmark', 'Run a short local speed test before launching')
+    .option('--reference-only', 'Show model choice and speed reference without launching Ollama')
     .action(async (options) => {
         showAsciiArt('ai-run');
         // Check if Ollama is installed first
@@ -4162,6 +4427,14 @@ program
             const aiSelector = new AIModelSelector();
             const checker = new (getLLMChecker())();
             const systemInfo = await checker.getSystemInfo();
+            let ollamaClient = null;
+            const getOllamaClient = () => {
+                if (!ollamaClient) {
+                    const OllamaClient = require('../src/ollama/client');
+                    ollamaClient = new OllamaClient();
+                }
+                return ollamaClient;
+            };
             const routingPreference = resolveRoutingPolicyPreference({
                 policyOption: options.policy,
                 calibratedOption: options.calibrated
@@ -4170,18 +4443,18 @@ program
             
             // Get available models or use provided ones
             let candidateModels = options.models;
+            let localModels = [];
             
             if (!candidateModels) {
-                spinner.text = '📋 Getting available Ollama models...';
-                const OllamaClient = require('../src/ollama/client');
-                const client = new OllamaClient();
+                spinner.text = 'Getting available Ollama models...';
+                const client = getOllamaClient();
                 
                 try {
-                    const models = await client.getLocalModels();
-                    candidateModels = models.map(m => m.name || m.model);
+                    localModels = await client.getLocalModels();
+                    candidateModels = localModels.map(m => m.name || m.model);
                     
                     if (candidateModels.length === 0) {
-                        spinner.fail('❌ No Ollama models found');
+                        spinner.fail('No Ollama models found');
                         console.log('\nInstall some models first:');
                         console.log('  ollama pull llama2:7b');
                         console.log('  ollama pull mistral:7b');
@@ -4189,7 +4462,7 @@ program
                         return;
                     }
                 } catch (error) {
-                    spinner.fail('❌ Failed to get Ollama models');
+                    spinner.fail('Failed to get Ollama models');
                     console.error(chalk.red('Error:'), error.message);
                     return;
                 }
@@ -4230,28 +4503,62 @@ program
                         )}) are not installed locally. Falling back to AI selector.`
                     );
                 }
-                result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint);
+                result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint, { silent: true });
             }
             
             spinner.succeed(`Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
+
+            let benchmark = null;
+            if (options.benchmark) {
+                const benchmarkSpinner = ora(`Measuring local throughput for ${result.bestModel}...`).start();
+                try {
+                    benchmark = await getOllamaClient().testModelPerformance(
+                        result.bestModel,
+                        'Write one concise sentence about local LLM performance.'
+                    );
+
+                    if (benchmark.success) {
+                        benchmarkSpinner.succeed(`Measured ${formatAiRunNumber(benchmark.tokensPerSecond)} tokens/sec`);
+                    } else {
+                        benchmarkSpinner.stop();
+                        console.log(chalk.yellow(`Benchmark unavailable: ${benchmark.error || 'unknown error'}`));
+                    }
+                } catch (error) {
+                    benchmark = { success: false, error: error.message };
+                    benchmarkSpinner.stop();
+                    console.log(chalk.yellow(`Benchmark unavailable: ${error.message}`));
+                }
+            }
+
             displayCalibratedRoutingDecision('ai-run', calibratedPolicy, routeDecision, routingPreference.warnings);
-            
-            // Execute the selected model
-            console.log(chalk.magenta.bold(`\nLaunching ${result.bestModel}...`));
-            console.log(chalk.gray(`Tip: Type ${chalk.cyan('/bye')} to exit the chat when finished\n`));
-            
-            const args = ['run', result.bestModel];
-            if (options.prompt) {
-                args.push(options.prompt);
+            displayAiRunReference({
+                result,
+                systemInfo,
+                taskHint,
+                candidateModels,
+                localModels,
+                aiSelector,
+                benchmark
+            });
+
+            if (options.referenceOnly) {
+                console.log(chalk.gray('\nReference-only mode: not launching Ollama.'));
+                return;
             }
             
-            const ollamaProcess = spawn('ollama', args, { 
-                stdio: 'inherit'
-            });
-            
-            ollamaProcess.on('error', (error) => {
-                console.error(chalk.red('Failed to launch Ollama:'), error.message);
-            });
+            if (options.prompt) {
+                console.log(chalk.cyan(`\n>>> ${options.prompt}`));
+                await runAiRunChatTurn(
+                    getOllamaClient(),
+                    result.bestModel,
+                    [{ role: 'user', content: options.prompt }]
+                );
+                return;
+            }
+
+            console.log(chalk.magenta.bold(`\nStarting chat with ${result.bestModel}...`));
+            console.log(chalk.gray(`Tip: Type ${chalk.cyan('/bye')} to exit the chat when finished\n`));
+            await runAiRunInteractiveChat(getOllamaClient(), result.bestModel);
             
         } catch (error) {
             console.error(chalk.red('❌ AI-powered execution failed:'), error.message);

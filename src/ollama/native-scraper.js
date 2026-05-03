@@ -83,7 +83,7 @@ class OllamaNativeScraper {
 
     parseModelFromHTML(html) {
         const models = [];
-        const pattern = /<a[^>]*href="\/library\/([^"]*)"[^>]*>[\s\S]{0,5000}?<h3[^>]*>([^<]*)<\/h3>[\s\S]{0,2000}?<p[^>]*>([^<]*)<\/p>[\s\S]{0,2000}?(?:<span[^>]*>([^<]*)<\/span>)[\s\S]{0,2000}?(?:(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls))[\s\S]{0,1000}?(?:(\d+)\s*(?:Tags|tags))[\s\S]{0,1000}?(?:Updated\s*(\d+\s*\w+\s*ago))?[\s\S]{0,500}?<\/a>/gi;
+        const pattern = /<a[^>]*href="\/library\/([^"]*)"[^>]*>[\s\S]{0,5000}?<h3[^>]*>([^<]*)<\/h3>[\s\S]{0,2000}?<p[^>]*>([^<]*)<\/p>[\s\S]{0,2000}?(?:<span[^>]*>([^<]*)<\/span>)[\s\S]{0,2000}?(?:(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|Downloads))[\s\S]{0,1000}?(?:(\d+)\s*(?:Tags|Models|tags|models))[\s\S]{0,1000}?(?:Updated\s*(\d+\s*\w+\s*ago))?[\s\S]{0,500}?<\/a>/gi;
 
         let match;
         while ((match = pattern.exec(html)) !== null) {
@@ -126,16 +126,18 @@ class OllamaNativeScraper {
                 const section = html.substring(Math.max(0, linkIndex - 500), linkIndex + 500);
                 const nameMatch = section.match(/<h[2-4][^>]*>([^<]*)<\/h[2-4]>/);
                 const descMatch = section.match(/<p[^>]*>([^<]*)<\/p>/);
-                const pullsMatch = section.match(/(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls)/i);
+                const sectionText = this.htmlToText(section);
+                const pullsMatch = sectionText.match(/(\d+(?:\.\d+)?\s*[KMB]?)\s*(?:Pulls|Downloads)/i);
+                const updatedMatch = sectionText.match(/Updated\s+(\d+\s*(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago)/i);
 
                 models.push({
                     model_identifier: identifier,
                     model_name: nameMatch ? this.cleanText(nameMatch[1]) : identifier,
                     description: descMatch ? this.cleanText(descMatch[1]) : '',
                     labels: [],
-                    pulls: pullsMatch ? this.parsePulls(pullsMatch[1]) : 0,
+                    pulls: pullsMatch ? this.parsePulls(pullsMatch[1].replace(/\s+/g, '')) : 0,
                     tags: 0,
-                    last_updated: 'Unknown',
+                    last_updated: updatedMatch ? updatedMatch[1].replace(/\s+/g, ' ').trim() : 'Unknown',
                     url: `${this.baseURL}/library/${identifier}`,
                     namespace: identifier.includes('/') ? identifier.split('/')[0] : null,
                     model_type: identifier.includes('/') ? 'community' : 'official'
@@ -147,14 +149,23 @@ class OllamaNativeScraper {
     }
 
     cleanText(text) {
-        return text
+        return String(text || '')
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;|&#160;/g, ' ')
             .replace(/&amp;/g, '&')
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
+            .replace(/&#x27;/g, "'")
             .replace(/&#39;/g, "'")
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    htmlToText(html) {
+        return this.cleanText(html);
     }
 
     parsePulls(pullsStr) {
@@ -165,6 +176,20 @@ class OllamaNativeScraper {
         if (str.includes('m')) return Math.floor(num * 1000000);
         if (str.includes('b')) return Math.floor(num * 1000000000);
         return Math.floor(num);
+    }
+
+    extractPageSummary(html) {
+        const text = this.htmlToText(html);
+        const downloadsMatch = text.match(/(\d+(?:\.\d+)?\s*[KMB]?)\s*(?:Downloads|Pulls)\b/i);
+        const updatedMatch = text.match(/Updated\s+(\d+\s*(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago)/i);
+        const modelCountMatch = text.match(/\bName\s+(\d+)\s+models?\s+Size\b/i) ||
+            text.match(/\b(\d+)\s+models?\s+Size\s+Context\s+Input\b/i);
+
+        return {
+            pulls: downloadsMatch ? this.parsePulls(downloadsMatch[1].replace(/\s+/g, '')) : 0,
+            lastUpdated: updatedMatch ? updatedMatch[1].replace(/\s+/g, ' ').trim() : 'Unknown',
+            tagsCount: modelCountMatch ? parseInt(modelCountMatch[1], 10) : 0
+        };
     }
 
     isCacheValid() {
@@ -280,6 +305,8 @@ class OllamaNativeScraper {
                 ...detailedInfo,
                 // Usar datos mejorados si están disponibles
                 pulls: detailedInfo.actual_pulls || basicModel.pulls || 0,
+                last_updated: detailedInfo.last_updated || basicModel.last_updated || 'Unknown',
+                tags: detailedInfo.tags_count || detailedInfo.tags?.length || basicModel.tags || 0,
                 main_size: detailedInfo.main_size || 'Unknown',
                 detailed_scraped_at: new Date().toISOString()
             };
@@ -302,11 +329,18 @@ class OllamaNativeScraper {
             use_cases: [],
             main_size: 'Unknown',
             actual_pulls: 0,
+            tags_count: 0,
+            last_updated: 'Unknown',
             context_length: 'Unknown',
             input_types: []
         };
 
         try {
+            const pageSummary = this.extractPageSummary(html);
+            details.actual_pulls = pageSummary.pulls;
+            details.last_updated = pageSummary.lastUpdated;
+            details.tags_count = pageSummary.tagsCount;
+
             // MEJORAR: Extraer TODOS los tags incluyendo quantizaciones específicas
             const allTagMatches = [];
             
@@ -370,37 +404,28 @@ class OllamaNativeScraper {
             }
 
             // NUEVO: Detectar tipos de input soportados
-            const inputTypes = [];
-            if (html.toLowerCase().includes('text') || html.toLowerCase().includes('chat')) {
-                inputTypes.push('text');
-            }
-            if (html.toLowerCase().includes('image') || html.toLowerCase().includes('vision') || 
-                html.toLowerCase().includes('visual')) {
+            const modelNameForInputs = String(basicModel.model_identifier || '').toLowerCase();
+            const inputTypes = ['text'];
+            if (/llava|bakllava|moondream|vision|vl\b|qwen2\.5vl|qwen-vl|qwen3-vl|minicpm-v|pixtral|gemma3n|llama3\.2-vision/.test(modelNameForInputs)) {
                 inputTypes.push('image');
             }
-            if (html.toLowerCase().includes('code') || html.toLowerCase().includes('programming')) {
-                inputTypes.push('code');
-            }
-            if (html.toLowerCase().includes('audio') || html.toLowerCase().includes('speech')) {
-                inputTypes.push('audio');
-            }
             
-            details.input_types = inputTypes.length > 0 ? inputTypes : ['text'];
+            details.input_types = [...new Set(inputTypes)];
 
             // Mejor extracción de tamaños con regex más específico
-            const sizeMatches = html.match(/\b(\d+(?:\.\d+)?)\s*[BG]B?\b/gi);
-            if (sizeMatches) {
-                details.model_sizes = [...new Set(sizeMatches.map(size => size.toLowerCase()))];
-                // Determinar el tamaño principal (más común)
-                if (details.model_sizes.length > 0) {
-                    details.main_size = details.model_sizes[0];
-                }
+            details.model_sizes = [...new Set(
+                details.tags
+                    .map(tag => this.extractSizeFromTag(tag))
+                    .filter(size => size !== 'unknown')
+            )];
+            if (details.model_sizes.length > 0) {
+                details.main_size = details.model_sizes[0];
             }
 
             // Extraer pulls reales del HTML
-            const pullsMatch = html.match(/(\d+(?:\.\d+)?[KMB]?)\s*pulls?/i);
+            const pullsMatch = this.htmlToText(html).match(/(\d+(?:\.\d+)?\s*[KMB]?)\s*(?:pulls?|downloads?)/i);
             if (pullsMatch) {
-                details.actual_pulls = this.parsePulls(pullsMatch[1]);
+                details.actual_pulls = this.parsePulls(pullsMatch[1].replace(/\s+/g, ''));
             }
 
             // Mejorar detección de quantizaciones

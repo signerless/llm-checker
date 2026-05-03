@@ -668,6 +668,127 @@ class OllamaClient {
             throw new Error(`Failed to run chat request: ${error.message}`);
         }
     }
+
+    async streamChat(modelName, messages, options = {}, onChunk = null) {
+        const availability = await this.checkOllamaAvailability();
+        if (!availability.available) {
+            throw new Error(`Ollama not available: ${availability.error}`);
+        }
+
+        const {
+            tools,
+            format,
+            keepAlive,
+            timeoutMs = 120000,
+            generationOptions = {}
+        } = options;
+
+        const payload = {
+            model: modelName,
+            messages: Array.isArray(messages) ? messages : [],
+            stream: true
+        };
+
+        if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+        if (format) payload.format = format;
+        if (keepAlive) payload.keep_alive = keepAlive;
+        if (generationOptions && Object.keys(generationOptions).length > 0) {
+            payload.options = generationOptions;
+        }
+
+        const startTime = Date.now();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${this.baseURL}/api/chat`, {
+                method: 'POST',
+                signal: controller.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let content = '';
+            let finalData = null;
+
+            const handleLine = (line) => {
+                if (!line.trim()) return;
+
+                const data = JSON.parse(line);
+                const chunk = data?.message?.content || '';
+                if (chunk) {
+                    content += chunk;
+                    if (typeof onChunk === 'function') {
+                        onChunk(chunk, data);
+                    }
+                }
+
+                if (data.done) {
+                    finalData = data;
+                }
+            };
+
+            if (response.body && typeof response.body.getReader === 'function') {
+                const reader = response.body.getReader();
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        handleLine(line);
+                    }
+                }
+            } else if (response.body && typeof response.body[Symbol.asyncIterator] === 'function') {
+                for await (const value of response.body) {
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        handleLine(line);
+                    }
+                }
+            } else {
+                throw new Error('Streaming response body is not readable');
+            }
+
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+                handleLine(buffer);
+            }
+
+            const responseTime = Date.now() - startTime;
+            const speed = this.calculateTokensPerSecond(finalData || {}, responseTime);
+
+            return {
+                ...(finalData || {}),
+                message: {
+                    role: 'assistant',
+                    content
+                },
+                response: content,
+                responseTime,
+                tokensPerSecond: speed.tokensPerSecond,
+                evalTokensPerSecond: speed.evalTokensPerSecond,
+                endToEndTokensPerSecond: speed.endToEndTokensPerSecond
+            };
+        } catch (error) {
+            throw new Error(`Failed to run streaming chat request: ${error.message}`);
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
 }
 
 module.exports = OllamaClient;

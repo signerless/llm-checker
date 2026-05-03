@@ -1,6 +1,7 @@
 'use strict';
 
 const chalk = require('chalk');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -51,14 +52,46 @@ const FRAMES_PER_SECOND = 14;
 // Security: do not auto-load executable-style banner sources from user-writable folders.
 // External banner loading is opt-in via LLM_CHECKER_BANNER_SOURCE and supports JSON only.
 const DEFAULT_BANNER_SOURCE = null;
-const DEFAULT_TEXT_BANNER_SOURCE = path.join(
-    os.homedir(),
-    'Desktop',
-    'llm-checker',
-    'banner-profesional-v2.txt'
-);
+const DEFAULT_TEXT_BANNER_SOURCES = [
+    path.join(os.homedir(), 'Desktop', 'llm-checker', 'banner-profesional-v2.txt'),
+    path.join(
+        os.homedir(),
+        'Library',
+        'Mobile Documents',
+        'com~apple~CloudDocs',
+        'Desktop',
+        'llm-checker',
+        'banner-profesional-v2.txt'
+    )
+];
 let cachedExternalBanner = null;
 let cachedTextBanner = null;
+let cachedMacOsDarkBackground = null;
+
+const TEXT_BANNER_PALETTES = {
+    dark: {
+        border: '#0066FF',
+        primary: '#60A5FA',
+        feature: '#A7F3D0',
+        subtitle: '#C7D2FE',
+        link: '#3B82F6',
+        install: '#F8FAFC',
+        art: '#F8FAFC',
+        solidLogo: ['#F8FAFC', '#E2ECFF', '#DBEAFE', '#E2ECFF'],
+        shadedLogo: ['#93C5FD', '#60A5FA', '#38BDF8', '#22D3EE', '#38BDF8', '#60A5FA']
+    },
+    light: {
+        border: '#0047B3',
+        primary: '#003A8C',
+        feature: '#047857',
+        subtitle: '#3730A3',
+        link: '#1D4ED8',
+        install: '#111827',
+        art: '#111827',
+        solidLogo: ['#0F172A', '#1E3A8A', '#111827', '#1E40AF'],
+        shadedLogo: ['#1D4ED8', '#0369A1', '#0F766E', '#047857', '#1D4ED8']
+    }
+};
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,6 +99,78 @@ function sleep(ms) {
 
 function clearTerminal() {
     process.stdout.write('\x1b[2J\x1b[0f');
+}
+
+function parseDarkBackgroundValue(value) {
+    if (typeof value !== 'string' || value.trim() === '') return null;
+    const normalized = value.trim().toLowerCase();
+
+    if (['dark', 'true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['light', 'false', '0', 'no', 'off'].includes(normalized)) return false;
+
+    return null;
+}
+
+function detectDarkBackgroundFromColorFgbg(value) {
+    if (typeof value !== 'string' || value.trim() === '') return null;
+
+    const parts = value.split(';');
+    const backgroundCode = Number.parseInt(parts[parts.length - 1], 10);
+    if (!Number.isFinite(backgroundCode)) return null;
+
+    const lightBackgrounds = new Set([7, 10, 11, 14, 15]);
+    const darkBackgrounds = new Set([0, 1, 2, 4, 5, 6, 8]);
+
+    if (lightBackgrounds.has(backgroundCode)) return false;
+    if (darkBackgrounds.has(backgroundCode)) return true;
+
+    return null;
+}
+
+function detectDarkBackgroundFromMacOsAppearance() {
+    if (process.platform !== 'darwin') return null;
+    if (cachedMacOsDarkBackground !== null) return cachedMacOsDarkBackground;
+
+    try {
+        const output = execFileSync('defaults', ['read', '-g', 'AppleInterfaceStyle'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 100
+        });
+        cachedMacOsDarkBackground = output.trim().toLowerCase().includes('dark');
+    } catch {
+        // macOS omits AppleInterfaceStyle when the system appearance is Light.
+        cachedMacOsDarkBackground = false;
+    }
+
+    return cachedMacOsDarkBackground;
+}
+
+function resolveHasDarkBackground(options = {}) {
+    if (typeof options.hasDarkBackground === 'boolean') {
+        return options.hasDarkBackground;
+    }
+
+    const explicit =
+        parseDarkBackgroundValue(process.env.LLM_CHECKER_BANNER_THEME) ??
+        parseDarkBackgroundValue(process.env.LLM_CHECKER_HAS_DARK_BACKGROUND) ??
+        parseDarkBackgroundValue(process.env.TERM_BACKGROUND);
+
+    if (explicit !== null) return explicit;
+
+    const colorFgbg = detectDarkBackgroundFromColorFgbg(process.env.COLORFGBG);
+    if (colorFgbg !== null) return colorFgbg;
+
+    const macOsAppearance = detectDarkBackgroundFromMacOsAppearance();
+    if (macOsAppearance !== null) return macOsAppearance;
+
+    return true;
+}
+
+function getTextBannerPalette(options = {}) {
+    return resolveHasDarkBackground(options)
+        ? TEXT_BANNER_PALETTES.dark
+        : TEXT_BANNER_PALETTES.light;
 }
 
 function fitLine(line, width) {
@@ -190,10 +295,12 @@ function loadExternalBanner(sourceFile) {
 }
 
 function loadTextBanner(sourceFile) {
-    const filePath =
+    const requestedFile =
         sourceFile ||
         process.env.LLM_CHECKER_TEXT_BANNER_SOURCE ||
-        DEFAULT_TEXT_BANNER_SOURCE;
+        DEFAULT_TEXT_BANNER_SOURCES.find((candidate) => fs.existsSync(candidate)) ||
+        DEFAULT_TEXT_BANNER_SOURCES[0];
+    const filePath = requestedFile;
     let mtimeMs = -1;
 
     try {
@@ -236,6 +343,7 @@ function loadTextBanner(sourceFile) {
 }
 
 function drawTextBanner(lines, options = {}) {
+    const palette = getTextBannerPalette(options);
     const colorPhase = Number.isFinite(options.colorPhase)
         ? Math.max(0, Math.floor(options.colorPhase))
         : 0;
@@ -265,8 +373,8 @@ function drawTextBanner(lines, options = {}) {
     };
 
     const colorizeDosRebelLine = (text) => {
-        const solidPalette = ['#F8FAFC', '#E2ECFF', '#DBEAFE', '#E2ECFF'];
-        const shadePalette = ['#93C5FD', '#60A5FA', '#38BDF8', '#22D3EE', '#38BDF8', '#60A5FA'];
+        const solidPalette = palette.solidLogo;
+        const shadePalette = palette.shadedLogo;
         let out = '';
         for (let index = 0; index < text.length; index += 1) {
             const ch = text[index];
@@ -292,9 +400,9 @@ function drawTextBanner(lines, options = {}) {
         if (/^\s*\+[-+]+\+\s*$/.test(line)) {
             if (terminalWidth && terminalWidth >= 10) {
                 const inner = Math.max(6, terminalWidth - 4);
-                console.log(chalk.hex('#0066FF')(` +${'-'.repeat(inner)}+ `));
+                console.log(chalk.hex(palette.border)(` +${'-'.repeat(inner)}+ `));
             } else {
-                console.log(chalk.hex('#0066FF')(line));
+                console.log(chalk.hex(palette.border)(line));
             }
             continue;
         }
@@ -305,8 +413,8 @@ function drawTextBanner(lines, options = {}) {
             continue;
         }
 
-        const left = chalk.hex('#0066FF')(frameMatch[1]);
-        const right = chalk.hex('#0066FF')(frameMatch[3]);
+        const left = chalk.hex(palette.border)(frameMatch[1]);
+        const right = chalk.hex(palette.border)(frameMatch[3]);
         const content = frameMatch[2];
         const maxInnerWidth = terminalWidth
             ? Math.max(0, terminalWidth - (frameMatch[1].length + frameMatch[3].length))
@@ -336,7 +444,7 @@ function drawTextBanner(lines, options = {}) {
             fittedContent.includes('Deterministic scoring across') ||
             fittedContent.includes('Run: llm-checker recommend')
         ) {
-            inner = chalk.hex('#60A5FA')(fittedContent);
+            inner = chalk.hex(palette.primary)(fittedContent);
         } else if (
             fittedContent.includes('[200+ DYNAMIC MODELS]') ||
             fittedContent.includes('[35+ FALLBACK]') ||
@@ -344,18 +452,18 @@ function drawTextBanner(lines, options = {}) {
             fittedContent.includes('[MULTI-GPU]') ||
             fittedContent.includes('[MCP SERVER]')
         ) {
-            inner = chalk.hex('#A7F3D0')(fittedContent);
+            inner = chalk.hex(palette.feature)(fittedContent);
         } else if (
             fittedContent.includes('AI-powered CLI for hardware-aware local LLM recommendations')
         ) {
-            inner = chalk.hex('#C7D2FE')(fittedContent);
+            inner = chalk.hex(palette.subtitle)(fittedContent);
         } else if (
             fittedContent.includes('github.com/Pavelevich/llm-checker') ||
             fittedContent.includes('npmjs.com/package/llm-checker')
         ) {
-            inner = chalk.hex('#3B82F6')(fittedContent);
+            inner = chalk.hex(palette.link)(fittedContent);
         } else if (fittedContent.includes('Install: npm install -g llm-checker')) {
-            inner = chalk.hex('#F8FAFC')(fittedContent);
+            inner = chalk.hex(palette.install)(fittedContent);
         } else if (
             fittedContent.includes('█') ||
             fittedContent.includes('░') ||
@@ -369,7 +477,7 @@ function drawTextBanner(lines, options = {}) {
             fittedContent.includes('▀') ||
             fittedContent.includes('▄')
         ) {
-            inner = chalk.hex('#F8FAFC')(fittedContent);
+            inner = chalk.hex(palette.art)(fittedContent);
         }
 
         console.log(left + inner + right);
@@ -625,14 +733,14 @@ async function animateBanner(options = {}) {
     if (textBanner && textBanner.length > 0) {
         if (!shouldAnimate) {
             clearTerminal();
-            drawTextBanner(textBanner);
+            drawTextBanner(textBanner, { hasDarkBackground });
             return;
         }
 
         const textFrames = Math.max(10, Math.min(24, frames));
         for (let frameIndex = 0; frameIndex < textFrames; frameIndex += 1) {
             clearTerminal();
-            drawTextBanner(textBanner, { colorPhase: frameIndex });
+            drawTextBanner(textBanner, { colorPhase: frameIndex, hasDarkBackground });
             await sleep(frameDurationMs);
         }
         return;
@@ -658,7 +766,11 @@ function renderPersistentBanner(width = 74, options = {}) {
         return;
     }
 
-    const prepared = makeFrames({ frameCount: 1, width });
+    const prepared = makeFrames({
+        frameCount: 1,
+        width,
+        hasDarkBackground: resolveHasDarkBackground(options)
+    });
     drawFrame(prepared.frames[0], prepared.width, prepared.theme);
 }
 
@@ -674,7 +786,10 @@ module.exports = {
     renderPersistentBanner,
     renderCommandHeader,
     __private: {
+        detectDarkBackgroundFromColorFgbg,
+        detectDarkBackgroundFromMacOsAppearance,
         makeFrames,
-        drawFrame
+        drawFrame,
+        resolveHasDarkBackground
     }
 };

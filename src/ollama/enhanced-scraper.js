@@ -143,7 +143,8 @@ class EnhancedOllamaScraper {
                 seen.add(id);
 
                 // Try to extract pulls
-                const pullsMatch = match[0].match(/(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls)/i);
+                const cardText = this.cleanText(match[0]);
+                const pullsMatch = cardText.match(/(\d+(?:\.\d+)?\s*[KMB]?)\s*(?:Pulls|Downloads)/i);
                 const pulls = pullsMatch ? this.parsePulls(pullsMatch[1]) : 0;
 
                 models.push({ id, pulls });
@@ -160,11 +161,27 @@ class EnhancedOllamaScraper {
      */
     parsePulls(pullStr) {
         if (!pullStr) return 0;
-        const num = parseFloat(pullStr);
-        if (pullStr.includes('B')) return Math.round(num * 1e9);
-        if (pullStr.includes('M')) return Math.round(num * 1e6);
-        if (pullStr.includes('K')) return Math.round(num * 1e3);
+        const normalized = String(pullStr).replace(/\s+/g, '');
+        const num = parseFloat(normalized);
+        if (normalized.includes('B')) return Math.round(num * 1e9);
+        if (normalized.includes('M')) return Math.round(num * 1e6);
+        if (normalized.includes('K')) return Math.round(num * 1e3);
         return Math.round(num);
+    }
+
+    cleanText(html = '') {
+        return String(html || '')
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;|&#160;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#x27;|&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     /**
@@ -296,24 +313,12 @@ class EnhancedOllamaScraper {
      * Extract parameter count from tag
      */
     extractParams(tag) {
-        // Match patterns like: 8b, 70b, 7b, 1.5b, 0.5b, 405b
-        const match = tag.match(/(\d+\.?\d*)[bB](?:[^a-zA-Z]|$)/);
+        // Match patterns like: 8b, 70b, 1.5b, 335m, 22m
+        const match = tag.match(/(\d+\.?\d*)\s*([bBmM])(?:[^a-zA-Z]|$)/);
         if (match) {
-            return parseFloat(match[1]);
-        }
-
-        // Check for known sizes in model names
-        const sizePatterns = [
-            { pattern: /mini/i, size: 3.8 },
-            { pattern: /tiny/i, size: 1.1 },
-            { pattern: /small/i, size: 7 },
-            { pattern: /medium/i, size: 13 },
-            { pattern: /large/i, size: 34 },
-            { pattern: /xl/i, size: 70 },
-        ];
-
-        for (const { pattern, size } of sizePatterns) {
-            if (pattern.test(tag)) return size;
+            const value = parseFloat(match[1]);
+            const unit = match[2].toLowerCase();
+            return unit === 'm' ? value / 1000 : value;
         }
 
         return null;
@@ -329,9 +334,11 @@ class EnhancedOllamaScraper {
             { pattern: /q6[_-]?k/i, quant: 'Q6_K' },
             { pattern: /q5[_-]?k[_-]?m/i, quant: 'Q5_K_M' },
             { pattern: /q5[_-]?k[_-]?s/i, quant: 'Q5_K_S' },
+            { pattern: /q5[_-]?1/i, quant: 'Q5_K_M' },
             { pattern: /q5[_-]?0/i, quant: 'Q5_0' },
             { pattern: /q4[_-]?k[_-]?m/i, quant: 'Q4_K_M' },
             { pattern: /q4[_-]?k[_-]?s/i, quant: 'Q4_K_S' },
+            { pattern: /q4[_-]?1/i, quant: 'Q4_K_M' },
             { pattern: /q4[_-]?0/i, quant: 'Q4_0' },
             { pattern: /q3[_-]?k[_-]?m/i, quant: 'Q3_K_M' },
             { pattern: /q3[_-]?k[_-]?s/i, quant: 'Q3_K_S' },
@@ -468,7 +475,10 @@ class EnhancedOllamaScraper {
         // Try to get display name from title or h1
         const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
         if (titleMatch) {
-            const title = titleMatch[1].split('·')[0].split('-')[0].trim();
+            const title = this.cleanText(titleMatch[1])
+                .split('·')[0]
+                .replace(/\s+-\s+Ollama.*$/i, '')
+                .trim();
             if (title && title.toLowerCase() !== 'ollama') {
                 return title;
             }
@@ -500,12 +510,15 @@ class EnhancedOllamaScraper {
     }
 
     extractPulls(html) {
-        const match = html.match(/(\d+(?:\.\d+)?[KMB]?)\s*(?:Pulls|pulls|Downloads|downloads)/i);
+        const text = this.cleanText(html);
+        const match = text.match(/(\d+(?:\.\d+)?\s*[KMB]?)\s*(?:Pulls|Downloads)\b/i);
         return match ? this.parsePulls(match[1]) : 0;
     }
 
     extractTagsCount(html) {
-        const match = html.match(/(\d+)\s*(?:Tags|tags|Versions|versions)/i);
+        const text = this.cleanText(html);
+        const match = text.match(/\bName\s+(\d+)\s+models?\s+Size\b/i) ||
+            text.match(/\b(\d+)\s+(?:Tags|Versions|models?)\b/i);
         return match ? parseInt(match[1]) : 1;
     }
 
@@ -534,7 +547,8 @@ class EnhancedOllamaScraper {
     }
 
     extractLastUpdated(html) {
-        const match = html.match(/Updated?\s*(\d+\s*(?:days?|weeks?|months?|hours?)\s*ago)/i);
+        const text = this.cleanText(html);
+        const match = text.match(/Updated\s+(\d+\s*(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago)/i);
         return match ? match[1] : '';
     }
 

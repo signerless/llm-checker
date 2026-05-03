@@ -44,11 +44,16 @@ class DeterministicModelSelector {
         this.familyBumps = {
             'qwen2.5': 2,
             'qwen3': 4,
+            'gemma3': 3,
             'deepseek': 3,
+            'deepseek-r1': 5,
+            'deepseek-coder': 4,
             'mistral': 1,
             'llama3.1': 1,
             'llama3.2': 2,
             'gemma2': 1,
+            'yi': -3,
+            'yi-coder': 1,
             'phi-3': 0,
             'granite': 0,
             'solar': 0,
@@ -750,7 +755,13 @@ class DeterministicModelSelector {
         if (ollamaModel.primary_category === 'reasoning') derivedTags.add('reasoning');
         if (ollamaModel.primary_category === 'creative') derivedTags.add('creative');
 
-        return variants.map((variant) => {
+        const hasConcreteVariants = variants.some((variant) => this.variantHasConcreteSizeOrParams(variant));
+        const selectableVariants = hasConcreteVariants
+            ? variants.filter((variant) => this.variantHasConcreteSizeOrParams(variant))
+            : variants;
+
+        return selectableVariants
+            .map((variant) => {
             const variantTag = variant.tag || fallbackTag;
             const quant = this.resolveVariantQuantization(variant, variantTag);
             const paramsB = this.resolveVariantParamsB(ollamaModel, variant, quant);
@@ -821,6 +832,8 @@ class DeterministicModelSelector {
                 modalities,
                 tags: modelTags,
                 model_identifier: variantTag,
+                last_updated: ollamaModel.last_updated || ollamaModel.lastUpdated || '',
+                updated_at: ollamaModel.updated_at || ollamaModel.updatedAt || '',
                 installed: false,
                 pulls: ollamaModel.actual_pulls || ollamaModel.pulls || 0,
                 availableQuantizations,
@@ -842,6 +855,28 @@ class DeterministicModelSelector {
         });
     }
 
+    variantHasConcreteSizeOrParams(variant = {}) {
+        const params = this.extractParamsFromString(
+            variant.params_b,
+            variant.paramsB,
+            variant.parameter_size,
+            variant.size,
+            variant.tag,
+            variant.label,
+            variant.name
+        );
+        if (Number.isFinite(params) && params > 0) return true;
+
+        const artifactSize = Number(
+            variant.real_size_gb ??
+            variant.estimated_size_gb ??
+            variant.size_gb ??
+            NaN
+        );
+
+        return Number.isFinite(artifactSize) && artifactSize > 0;
+    }
+
     parseBillionsValue(rawValue) {
         return parseMoEBillionsValue(rawValue);
     }
@@ -861,7 +896,26 @@ class DeterministicModelSelector {
 
     parseDateSafe(value) {
         if (!value || typeof value !== 'string') return null;
-        const parsed = new Date(value);
+        const normalized = value.trim();
+        const relativeMatch = normalized.match(/^(\d+)\s*(minutes?|hours?|days?|weeks?|months?|years?)\s+ago$/i);
+        if (relativeMatch) {
+            const amount = parseInt(relativeMatch[1], 10);
+            const unit = relativeMatch[2].toLowerCase();
+            const days =
+                unit.startsWith('minute') ? amount / (24 * 60) :
+                unit.startsWith('hour') ? amount / 24 :
+                unit.startsWith('day') ? amount :
+                unit.startsWith('week') ? amount * 7 :
+                unit.startsWith('month') ? amount * 30 :
+                unit.startsWith('year') ? amount * 365 :
+                null;
+
+            if (Number.isFinite(days)) {
+                return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+            }
+        }
+
+        const parsed = new Date(normalized);
         if (Number.isNaN(parsed.getTime())) return null;
         return parsed;
     }
@@ -912,8 +966,7 @@ class DeterministicModelSelector {
             model.updatedAt,
             model.release_date,
             model.released_at,
-            model.created_at,
-            model.detailed_scraped_at
+            model.created_at
         ];
 
         const updatedAt = dateCandidates
@@ -1027,6 +1080,9 @@ class DeterministicModelSelector {
 
             const regex = /(\d+\.?\d*)\s*([BbMm])/g;
             for (const match of value.matchAll(regex)) {
+                const suffix = value.slice(match.index + match[0].length, match.index + match[0].length + 2);
+                if (/^\s*b\b/i.test(suffix) || /^\s*[gk]b\b/i.test(suffix)) continue;
+
                 const amount = parseFloat(match[1]);
                 const unit = match[2].toUpperCase();
                 pushCandidate(unit === 'M' ? amount / 1000 : amount);
@@ -1103,7 +1159,7 @@ class DeterministicModelSelector {
             ollamaModel.parameter_count
         );
         if (metadataCandidates.length > 0) {
-            return Math.max(...metadataCandidates);
+            return metadataCandidates[0];
         }
 
         const artifactSizeGB = this.extractVariantSizeGB(variant, null);
@@ -1136,7 +1192,7 @@ class DeterministicModelSelector {
     }
 
     extractVariantSizeGB(variant, paramsB) {
-        const candidate = Number(variant.real_size_gb ?? variant.estimated_size_gb ?? NaN);
+        const candidate = Number(variant.real_size_gb ?? variant.estimated_size_gb ?? variant.size_gb ?? NaN);
         if (Number.isFinite(candidate) && candidate > 0) return candidate;
         if (!Number.isFinite(paramsB) || paramsB <= 0) return 0.5;
         return Math.max(0.5, Math.round((paramsB * 0.58 + 0.5) * 10) / 10);
@@ -1207,11 +1263,14 @@ class DeterministicModelSelector {
         if (name.includes('qwen2.5')) return 'qwen2.5';
         if (name.includes('qwen3')) return 'qwen3';
         if (name.includes('qwen')) return 'qwen2.5';
+        if (name.includes('deepseek-r1')) return 'deepseek-r1';
+        if (name.includes('deepseek-coder')) return 'deepseek-coder';
         if (name.includes('deepseek')) return 'deepseek';
         if (name.includes('llama3.2') || name.includes('llama3.3')) return 'llama3.2';
         if (name.includes('llama3.1')) return 'llama3.1';
         if (name.includes('llama')) return 'llama';
         if (name.includes('mistral')) return 'mistral';
+        if (name.includes('gemma3')) return 'gemma3';
         if (name.includes('gemma')) return 'gemma2';
         if (name.includes('phi')) return 'phi-3';
         if (name.includes('llava')) return 'llava';
@@ -1219,6 +1278,8 @@ class DeterministicModelSelector {
         if (name.includes('solar')) return 'solar';
         if (name.includes('starcoder')) return 'starcoder';
         if (name.includes('minicpm')) return 'minicpm';
+        if (name.includes('yi-coder')) return 'yi-coder';
+        if (name.includes('yi')) return 'yi';
         return 'unknown';
     }
 
@@ -1351,7 +1412,9 @@ class DeterministicModelSelector {
         const hardware = this.normalizeHardwareProfile(detectedHardware);
         const installed = Array.isArray(installedModels) ? installedModels : await this.getInstalledModels();
         const externalPool = Array.isArray(modelPool) && modelPool.length > 0
-            ? this.normalizeExternalModels(modelPool)
+            ? (modelPool.some(model => typeof model?.paramsB === 'number' && model?.model_identifier)
+                ? modelPool
+                : this.normalizeExternalModels(modelPool))
             : await this.loadModelPool();
         
         if (!silent) {
@@ -1445,6 +1508,10 @@ class DeterministicModelSelector {
 
     filterByCategory(models, category) {
         return models.filter(model => {
+            if (this.isCloudVariantTag(model.model_identifier || model.name)) {
+                return false;
+            }
+
             switch (category) {
                 case 'coding':
                     return model.tags.some(tag => ['coder', 'code', 'instruct'].includes(tag)) ||
@@ -1682,6 +1749,12 @@ class DeterministicModelSelector {
         // Freshness/deprecation adjustment
         const freshnessAdjustment = this.calculateFreshnessAdjustment(model);
         Q += freshnessAdjustment;
+
+        const pulls = Number(model.pulls || model.actual_pulls || 0);
+        if (pulls >= 100000000) Q += 4;
+        else if (pulls >= 20000000) Q += 3;
+        else if (pulls >= 5000000) Q += 2;
+        else if (pulls >= 1000000) Q += 1;
         
         // Task alignment bump
         const taskBump = this.getTaskAlignmentBump(model, category);

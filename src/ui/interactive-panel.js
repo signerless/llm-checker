@@ -13,6 +13,7 @@ const PRIMARY_COMMAND_PRIORITY = [
     'recommend',
     'simulate',
     'ai-run',
+    'sync',
     'ollama-plan',
     'list-models',
     'search',
@@ -314,7 +315,6 @@ async function collectCommandArgs(commandMeta) {
     const prompts = [];
     const requiredPrompts = REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
     const requiredOptionPrompts = getRequiredOptionPrompts(commandMeta);
-    const promptOptionalArgs = commandMeta.name !== 'help';
 
     for (const requiredPrompt of requiredPrompts) {
         prompts.push({
@@ -354,16 +354,6 @@ async function collectCommandArgs(commandMeta) {
         });
     }
 
-    if (promptOptionalArgs) {
-        prompts.push({
-            type: 'input',
-            name: 'extraArgs',
-            message: 'Optional extra params (example: --json --limit 5):',
-            prefix: ' ',
-            default: ''
-        });
-    }
-
     if (prompts.length === 0) {
         return [];
     }
@@ -377,13 +367,6 @@ async function collectCommandArgs(commandMeta) {
     }
 
     args.push(...buildRequiredOptionArgs(requiredOptionPrompts, answers));
-
-    if (promptOptionalArgs) {
-        const extraArgs = String(answers.extraArgs || '').trim();
-        if (extraArgs) {
-            args.push(...tokenizeArgString(extraArgs));
-        }
-    }
 
     return args;
 }

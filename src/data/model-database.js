@@ -10,8 +10,21 @@ const fs = require('fs');
 class ModelDatabase {
     constructor(options = {}) {
         this.dbPath = options.dbPath || path.join(os.homedir(), '.llm-checker', 'models.db');
+        this.seedDbPath = options.seedDbPath || path.join(__dirname, 'seed', 'models.db');
         this.db = null;
         this.initialized = false;
+    }
+
+    /**
+     * Seed a first-run user database from the packaged npm snapshot.
+     */
+    seedDatabaseIfNeeded() {
+        if (fs.existsSync(this.dbPath) || !fs.existsSync(this.seedDbPath)) {
+            return false;
+        }
+
+        fs.copyFileSync(this.seedDbPath, this.dbPath);
+        return true;
     }
 
     /**
@@ -25,6 +38,7 @@ class ModelDatabase {
         if (!fs.existsSync(dbDir)) {
             fs.mkdirSync(dbDir, { recursive: true });
         }
+        this.seedDatabaseIfNeeded();
 
         // Use sql.js (optional dependency)
         let initSqlJs;
@@ -229,18 +243,20 @@ class ModelDatabase {
             { pattern: /llama3\.1/, family: 'llama3.1' },
             { pattern: /llama3/, family: 'llama3' },
             { pattern: /llama2/, family: 'llama2' },
+            { pattern: /qwen3/, family: 'qwen3' },
             { pattern: /qwen2\.5/, family: 'qwen2.5' },
             { pattern: /qwen2/, family: 'qwen2' },
             { pattern: /qwen/, family: 'qwen' },
             { pattern: /mistral/, family: 'mistral' },
             { pattern: /mixtral/, family: 'mixtral' },
+            { pattern: /gemma3/, family: 'gemma3' },
             { pattern: /gemma2/, family: 'gemma2' },
             { pattern: /gemma/, family: 'gemma' },
             { pattern: /phi-?3/, family: 'phi3' },
             { pattern: /phi-?4/, family: 'phi4' },
             { pattern: /phi/, family: 'phi' },
-            { pattern: /deepseek-?coder/, family: 'deepseek-coder' },
             { pattern: /deepseek-?r1/, family: 'deepseek-r1' },
+            { pattern: /deepseek-?coder/, family: 'deepseek-coder' },
             { pattern: /deepseek/, family: 'deepseek' },
             { pattern: /codellama/, family: 'codellama' },
             { pattern: /starcoder/, family: 'starcoder' },
@@ -251,6 +267,7 @@ class ModelDatabase {
             { pattern: /neural-chat/, family: 'neural-chat' },
             { pattern: /orca/, family: 'orca' },
             { pattern: /vicuna/, family: 'vicuna' },
+            { pattern: /yi-?coder/, family: 'yi-coder' },
             { pattern: /yi/, family: 'yi' },
             { pattern: /solar/, family: 'solar' },
             { pattern: /command-r/, family: 'command-r' },
@@ -538,6 +555,80 @@ class ModelDatabase {
         }
 
         return this.all(sql, params);
+    }
+
+    /**
+     * Export the synced SQLite catalog in the shape expected by recommendation engines.
+     */
+    getAllModelsWithVariants() {
+        const models = this.all(`SELECT * FROM models ORDER BY pulls DESC, id ASC`);
+        const variants = this.all(`SELECT * FROM variants ORDER BY model_id ASC, params_b DESC, size_gb ASC`);
+        const variantsByModel = new Map();
+
+        const parseJson = (value, fallback) => {
+            if (!value) return fallback;
+            try {
+                const parsed = JSON.parse(value);
+                return parsed;
+            } catch {
+                return fallback;
+            }
+        };
+
+        for (const variant of variants) {
+            const list = variantsByModel.get(variant.model_id) || [];
+            const inputTypes = parseJson(variant.input_types, ['text']);
+            list.push({
+                model_id: variant.model_id,
+                tag: variant.tag,
+                params_b: variant.params_b,
+                quant: variant.quant,
+                quantization: variant.quant,
+                size_gb: variant.size_gb,
+                real_size_gb: variant.size_gb,
+                estimated_size_gb: variant.size_gb,
+                context_length: variant.context_length,
+                input_types: Array.isArray(inputTypes) ? inputTypes : ['text'],
+                is_moe: Boolean(variant.is_moe),
+                expert_count: variant.expert_count
+            });
+            variantsByModel.set(variant.model_id, list);
+        }
+
+        return models.map((model) => {
+            const capabilities = parseJson(model.capabilities, []);
+            const capabilityList = Array.isArray(capabilities) ? capabilities : [];
+            const primaryCategory =
+                capabilityList.find((cap) => ['coding', 'reasoning', 'multimodal', 'embeddings', 'creative', 'chat'].includes(cap)) ||
+                (capabilityList.includes('multimodal') ? 'multimodal' : 'general');
+
+            return {
+                id: model.id,
+                model_identifier: model.id,
+                model_name: model.name || model.id,
+                family: model.family || this.inferFamily(model.id),
+                model_type: model.type || 'official',
+                type: model.type || 'official',
+                description: model.description || '',
+                capabilities: capabilityList,
+                categories: capabilityList,
+                primary_category: primaryCategory,
+                use_cases: capabilityList,
+                pulls: model.pulls || 0,
+                actual_pulls: model.pulls || 0,
+                tags_count: model.tags_count || 0,
+                namespace: model.namespace || '',
+                url: model.url || `https://ollama.com/library/${model.id}`,
+                last_updated: model.last_updated || '',
+                updated_at: model.updated_at || '',
+                variants: variantsByModel.get(model.id) || [],
+                source: 'ollama_sqlite_database',
+                registry: 'ollama.com',
+                version: model.updated_at || model.last_updated || 'unknown',
+                license: 'unknown',
+                digest: 'unknown'
+            };
+        });
     }
 
     /**

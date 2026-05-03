@@ -78,7 +78,6 @@ class LLMChecker {
             // Report hardware detection progress before platform-specific analysis
             if (this.progress) {
                 this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
-                await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for demo
                 const isApple = detectedPlatform === 'darwin';
                 const memLabel = isApple ? 'unified memory' : 'RAM';
                 this.progress.substep(`Memory detected: ${hardware.memory.total}GB ${memLabel}`, true);
@@ -117,7 +116,6 @@ class LLMChecker {
         // Apple Silicon optimized analysis with unified memory consideration
         if (this.progress) {
             this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
-            await new Promise(resolve => setTimeout(resolve, 200));
             this.progress.substep(`Memory detected: ${hardware.memory.total}GB unified memory`, true);
             const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Apple Silicon GPU'}`;
             this.progress.stepComplete(summary);
@@ -131,7 +129,6 @@ class LLMChecker {
         // Windows-specific analysis with discrete GPU / iGPU handling
         if (this.progress) {
             this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
-            await new Promise(resolve => setTimeout(resolve, 200));
             this.progress.substep(`Memory detected: ${hardware.memory.total}GB RAM`, true);
             const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'Integrated GPU'}`;
             this.progress.stepComplete(summary);
@@ -145,7 +142,6 @@ class LLMChecker {
         // Linux-specific analysis (similar to Windows but with Linux considerations)
         if (this.progress) {
             this.progress.substep(`CPU detected: ${hardware.cpu.brand} (${hardware.cpu.cores} cores)`);
-            await new Promise(resolve => setTimeout(resolve, 200));
             this.progress.substep(`Memory detected: ${hardware.memory.total}GB RAM`, true);
             const summary = `${hardware.cpu.brand}, ${hardware.memory.total}GB RAM, ${hardware.gpu.model || 'GPU'}`;
             this.progress.stepComplete(summary);
@@ -516,7 +512,7 @@ class LLMChecker {
         
         try {
             // 1. Obtener TODOS los modelos de la base de datos de Ollama
-            const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
+            const ollamaData = await this.loadOllamaModelData();
             const allOllamaModels = ollamaData.models || [];
             this.logger.info(`Found ${allOllamaModels.length} models in Ollama database`);
 
@@ -2430,14 +2426,51 @@ class LLMChecker {
             this.getAllModels().find(m => m.name.toLowerCase().includes(name.toLowerCase()));
     }
 
+    async loadSyncedOllamaModelData() {
+        const ModelDatabase = require('./data/model-database');
+        const database = new ModelDatabase();
+
+        try {
+            await database.initialize();
+            const models = database.getAllModelsWithVariants();
+            const stats = database.getStats();
+
+            if (models.length > 0) {
+                return {
+                    models,
+                    total_count: models.length,
+                    cached_at: stats.lastSync || null,
+                    source: 'ollama_sqlite_database'
+                };
+            }
+        } finally {
+            database.close();
+        }
+
+        return null;
+    }
+
+    async loadOllamaModelData() {
+        try {
+            const syncedData = await this.loadSyncedOllamaModelData();
+            if (syncedData?.models?.length > 0) {
+                return syncedData;
+            }
+        } catch (error) {
+            this.logger.warn('Synced SQLite model database unavailable, falling back to Ollama cache', { error: error.message });
+        }
+
+        return this.ollamaScraper.scrapeAllModels(false);
+    }
+
 
     async generateIntelligentRecommendations(hardware, options = {}) {
         try {
             this.logger.info('Generating intelligent recommendations...');
             const selectedRuntime = normalizeRuntime(options.runtime || 'ollama');
             
-            // Obtener todos los modelos de Ollama
-            const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
+            // Prefer the synced SQLite catalog so `llm-checker sync` updates recommendations immediately.
+            const ollamaData = await this.loadOllamaModelData();
             const allModels = ollamaData.models || [];
 
             if (allModels.length === 0) {

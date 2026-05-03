@@ -77,8 +77,8 @@ Respond with JSON only, no additional text.`;
         // Phase 1: Get ALL available models from the 177-model Ollama database
         const hardware = await this.deterministicSelector.getHardware();
         
-        // Use the same large database that check command uses (177 models)
-        const ollamaData = await this.ollamaScraper.scrapeAllModels(false);
+        // Use the same synced database that recommend/check use.
+        const ollamaData = await this.loadModelDatabase();
         const allOllamaModels = ollamaData.models || [];
         
         if (!silent) {
@@ -246,6 +246,31 @@ Respond with JSON only, no additional text.`;
             aiResult,
             note: `AI-evaluated using ${evaluatorModel}`
         };
+    }
+
+    async loadModelDatabase() {
+        try {
+            const ModelDatabase = require('../data/model-database');
+            const database = new ModelDatabase();
+            await database.initialize();
+
+            try {
+                const models = database.getAllModelsWithVariants();
+                if (models.length > 0) {
+                    return {
+                        models,
+                        total_count: models.length,
+                        source: 'ollama_sqlite_database'
+                    };
+                }
+            } finally {
+                database.close();
+            }
+        } catch {
+            // Fall through to scraper cache.
+        }
+
+        return this.ollamaScraper.scrapeAllModels(false);
     }
 
     /**

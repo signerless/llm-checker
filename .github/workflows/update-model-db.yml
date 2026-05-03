@@ -1,0 +1,65 @@
+name: Update Ollama Model Database
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-model-db:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh packaged model database
+        run: npm run sync:seed
+
+      - name: Verify packaged model database
+        run: |
+          node - <<'NODE'
+          const ModelDatabase = require('./src/data/model-database');
+
+          (async () => {
+            const db = new ModelDatabase({ dbPath: 'src/data/seed/models.db' });
+            await db.initialize();
+            const stats = db.getStats();
+            db.close();
+
+            if (stats.models < 100 || stats.variants < 1000) {
+              throw new Error(`Seed DB looks incomplete: ${stats.models} models, ${stats.variants} variants`);
+            }
+
+            console.log(`Seed DB OK: ${stats.models} models, ${stats.variants} variants`);
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Open update PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/update-ollama-model-db
+          delete-branch: true
+          title: 'chore: update packaged Ollama model database'
+          commit-message: 'chore: update packaged Ollama model database'
+          body: |
+            Weekly refresh of the packaged Ollama model database snapshot.
+
+            This keeps npm installs useful on first run without requiring an immediate sync.
+          labels: dependencies, data

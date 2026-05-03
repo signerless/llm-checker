@@ -5,7 +5,7 @@
 **Intelligent Ollama Model Selector**
 
 AI-powered CLI that analyzes your hardware and recommends optimal LLM models.  
-Deterministic scoring across **200+ dynamic models** (35+ curated fallback) with hardware-calibrated memory estimation.
+Deterministic scoring across **200+ Ollama models** and **7k+ variants** with a packaged SQLite catalog, live sync, and hardware-calibrated memory estimation.
 
 [![npm version](https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
 [![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
@@ -38,12 +38,12 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 
 | | Feature | Description |
 |:---:|---|---|
-| **200+** | Dynamic Model Pool | Uses full scraped Ollama catalog/variants when available (with curated fallback) |
+| **200+** | Packaged Model Catalog | Ships with a synced Ollama SQLite catalog and can refresh from Ollama on demand |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
 | **Zero** | Native Dependencies | Pure JavaScript &mdash; works on any Node.js 16+ system |
-| **Optional** | SQLite Search | Install `sql.js` to unlock `sync`, `search`, and `smart-recommend` |
+| **Live** | AI Run Metrics | `ai-run` shows response speed in tokens/sec next to model output |
 
 ---
 
@@ -93,9 +93,10 @@ npm install -g llm-checker
 - Node.js 16+ (any version: 16, 18, 20, 22, 24)
 - [Ollama](https://ollama.ai) installed for running models
 
-**Optional:** For database search features (`sync`, `search`, `smart-recommend`):
+The package includes a prebuilt model catalog and declares `sql.js` as an optional dependency for SQLite-powered commands. If your package manager skips optional dependencies and database commands report `sql.js` missing, reinstall with optional dependencies enabled:
+
 ```bash
-npm install sql.js
+npm install -g llm-checker --include=optional
 ```
 
 ---
@@ -114,7 +115,10 @@ llm-checker hw-detect
 # 3) Get recommendations by category
 llm-checker recommend --category coding
 
-# 4) Run with auto-selection
+# 4) Refresh the catalog when you want current Ollama references
+llm-checker sync
+
+# 5) Run with auto-selection and tokens/sec metrics
 llm-checker ai-run --category coding --prompt "Write a hello world in Python"
 ```
 
@@ -146,6 +150,21 @@ npm install -g llm-checker@latest
 hash -r
 llm-checker --version
 ```
+
+### v3.5.13 Highlights
+
+- Ships npm packages with a ready-to-use SQLite model catalog:
+  - 229 Ollama models
+  - 7176 variants
+  - real pull counts and `last_updated` metadata
+- `sync` refreshes the local SQLite catalog from Ollama; `recommend`, `list-models`, `ai-run`, and `ai-check` now prefer that synced catalog instead of stale scraper cache data.
+- Recommendation normalization was hardened:
+  - no more `pulls: 0` for the full catalog after sync
+  - `335m` style tags are treated as millions, not billions
+  - ambiguous aliases like `latest`, `small`, `medium`, and `large` are not guessed into fake parameter counts
+  - cloud variants are filtered out of local recommendations
+- `ai-run` streams model responses through Ollama and appends measured tokens/sec so users can compare installed models by real local speed.
+- The interactive panel no longer asks for optional parameters before every command.
 
 ### v3.3.0 Highlights
 
@@ -185,7 +204,7 @@ llm-checker check
 # 3. Get intelligent recommendations by category
 llm-checker recommend
 
-# 4. (Optional) Sync full database and search
+# 4. Refresh the catalog when you want current Ollama metadata
 llm-checker sync
 llm-checker search qwen --use-case coding
 ```
@@ -354,6 +373,7 @@ llm-checker search "qwen coder" --json
 | `recommend` | Intelligent recommendations by category (coding, reasoning, multimodal, etc.) |
 | `calibrate` | Generate calibration result + routing policy artifacts from a JSONL prompt suite |
 | `installed` | Rank your installed Ollama models by compatibility |
+| `list-models` | List the synced Ollama catalog by popularity, category, size, or JSON output |
 | `ollama-plan` | Compute safe Ollama runtime env vars (`NUM_CTX`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) for selected local models |
 | `mcp-setup` | Print/apply Claude MCP setup command and config snippet (`--apply`, `--json`, `--npx`) |
 | `gpu-plan` | Multi-GPU placement advisor with single/pooled model-size envelopes |
@@ -361,12 +381,12 @@ llm-checker search "qwen coder" --json
 | `amd-guard` | AMD/Windows reliability guard with mitigation hints |
 | `toolcheck` | Test tool-calling compatibility for local models |
 
-### Advanced Commands (require `sql.js`)
+### Database Commands
 
 | Command | Description |
 |---------|-------------|
-| `sync` | Download the latest model catalog from Ollama registry |
-| `search <query>` | Search models with filters and intelligent scoring |
+| `sync` | Refresh the local SQLite model catalog from Ollama |
+| `search <query>` | Search the synced catalog with filters and intelligent scoring |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
 
 ### Enterprise Policy Commands
@@ -487,7 +507,29 @@ License values are canonicalized for policy checks (for example `MIT License` ->
 | Command | Description |
 |---------|-------------|
 | `ai-check` | AI-powered model evaluation with meta-analysis |
-| `ai-run` | AI-powered model selection and execution |
+| `ai-run` | AI-powered model selection and execution with live tokens/sec output |
+
+---
+
+### `ai-run` &mdash; Auto-Select and Run
+
+```bash
+llm-checker ai-run --category coding --prompt "Write a file parser in Node.js"
+llm-checker ai-run --benchmark --category general
+llm-checker ai-run --reference-only --category reasoning
+```
+
+`ai-run` chooses the best installed model for the requested category, falls back to the best local alternative when the top catalog pick is not installed, and streams through Ollama directly.
+
+When a response completes, the CLI appends measured local speed:
+
+```text
+>>> hi
+Hello! How can I help you today?
+[42.8 tokens/sec]
+```
+
+Use `--reference-only` when you only want the recommendation card and pull command without starting a chat. Use `--benchmark` for a quick measured speed check on the selected local model.
 
 ---
 
@@ -586,9 +628,32 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 ## Model Catalog
 
-LLM Checker prioritizes the full scraped Ollama model cache (all families/sizes/variants) and falls back to a built-in curated catalog when cache is unavailable.
+LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install.
 
-The curated fallback catalog includes 35+ models from the most popular Ollama families (used only when the dynamic scraped pool is unavailable):
+The packaged snapshot currently includes:
+
+- 229 Ollama models
+- 7176 variants
+- pull counts
+- tag counts
+- last-updated metadata
+- variant params, quantization, size, context, and input type fields when available
+
+Refresh it any time:
+
+```bash
+llm-checker sync
+```
+
+For release maintainers, the packaged seed can be regenerated from the synced local DB:
+
+```bash
+npm run sync:seed
+```
+
+`recommend`, `list-models`, `ai-run`, and `ai-check` prefer the synced SQLite catalog. If the SQLite catalog is unavailable, LLM Checker falls back to the scraped cache and then to the curated catalog.
+
+The curated fallback catalog includes 35+ models from the most popular Ollama families:
 
 | Family | Models | Best For |
 |--------|--------|----------|
@@ -602,7 +667,7 @@ The curated fallback catalog includes 35+ models from the most popular Ollama fa
 | **LLaVA** | 7B, 13B | Vision |
 | **Embeddings** | nomic-embed-text, mxbai-embed-large, bge-m3, all-minilm | RAG, search |
 
-All available models are automatically combined with locally installed Ollama models for scoring.
+All available models are automatically combined with locally installed Ollama models for scoring. Ambiguous tags such as `latest`, cloud-only variants, and aliases without reliable size metadata are kept out of local recommendations unless they can be resolved to concrete parameters or artifact sizes.
 
 ---
 
@@ -758,7 +823,7 @@ LLM Checker uses a deterministic pipeline so the same inputs produce the same ra
 flowchart LR
   subgraph Inputs
     HW["Hardware detector<br/>CPU/GPU/RAM/backend"]
-    REG["Dynamic Ollama catalog<br/>(curated fallback if unavailable)"]
+    REG["Synced SQLite Ollama catalog<br/>(packaged seed + live sync)"]
     LOCAL["Installed local models"]
     FLAGS["CLI options<br/>use-case/runtime/limits/policy"]
   end
@@ -807,7 +872,7 @@ flowchart LR
 ### Execution Stages
 
 1. **Hardware profiling**: Detect CPU/GPU/RAM and effective backend capabilities.
-2. **Model pool assembly**: Merge dynamic scraped catalog (or curated fallback) with locally installed models.
+2. **Model pool assembly**: Merge the synced SQLite catalog (or fallback cache/catalog) with locally installed models.
 3. **Candidate filtering**: Keep only relevant models for the requested use case.
 4. **Fit selection**: Choose the best quantization for available memory budget.
 5. **Deterministic scoring**: Score each candidate across quality, speed, fit, and context.
@@ -874,7 +939,8 @@ src/
     detector.js                # Hardware detection
     unified-detector.js        # Cross-platform detection
   data/
-    model-database.js          # SQLite storage (optional)
+    model-database.js          # SQLite storage and packaged seed loading
+    seed/models.db             # npm-packaged Ollama catalog snapshot
     sync-manager.js            # Database sync from Ollama registry
 bin/
   enhanced_cli.js              # CLI entry point
