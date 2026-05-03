@@ -983,6 +983,12 @@ function displaySystemInfo(hardware, analysis) {
     const gpuColor = hardware.gpu.dedicated ? chalk.green : chalk.hex('#FFA500');
     const integratedList = formatGpuInventoryList(hardware.gpu.integratedGpuModels || hardware.summary?.integratedGpuModels);
     const dedicatedList = formatGpuInventoryList(hardware.gpu.dedicatedGpuModels || hardware.summary?.dedicatedGpuModels);
+    const integratedSharedMemory = hardware.gpu.sharedMemory || hardware.summary?.integratedSharedMemory || 0;
+    const vramDisplay = !hardware.gpu.dedicated && integratedSharedMemory > 0
+        ? `${integratedSharedMemory}GB shared`
+        : (hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple')
+            ? 'Unified Memory'
+            : `${hardware.gpu.vram || 'N/A'}GB`);
 
     const lines = [
         `${chalk.cyan('CPU:')} ${cpuColor(hardware.cpu.brand)} ${chalk.gray(`(${hardware.cpu.cores} cores, ${hardware.cpu.speed}GHz)`)}`,
@@ -990,7 +996,7 @@ function displaySystemInfo(hardware, analysis) {
         `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')}`,
         `${chalk.cyan('GPU:')} ${gpuColor(hardware.gpu.model || 'Not detected')}`,
         `${chalk.cyan('Backend:')} ${chalk.white(getBackendLabelForDisplay(hardware))}`,
-        `${chalk.cyan('VRAM:')} ${hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple') ? 'Unified Memory' : `${hardware.gpu.vram || 'N/A'}GB`}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
+        `${chalk.cyan('VRAM:')} ${vramDisplay}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
         `${chalk.cyan('Dedicated GPUs:')} ${chalk.green(dedicatedList)}`,
         `${chalk.cyan('Integrated GPUs:')} ${chalk.hex('#FFA500')(integratedList)}`,
     ];
@@ -5128,9 +5134,23 @@ program
 
                 if (backend === 'rocm' && info.info) {
                     console.log(`  ROCm: ${info.info.rocmVersion}`);
-                    console.log(`  Total VRAM: ${info.info.totalVRAM}GB`);
+                    const integratedOnly = (info.info.gpus || []).length > 0 &&
+                        (info.info.gpus || []).every((gpu) => gpu.type === 'integrated');
+                    if (integratedOnly) {
+                        console.log(`  Total dedicated aperture: ${info.info.totalVRAM || 0}GB`);
+                        console.log(`  Total shared memory: ${info.info.totalSharedMemory || 0}GB`);
+                    } else {
+                        console.log(`  Total VRAM: ${info.info.totalVRAM}GB`);
+                    }
                     for (const gpu of info.info.gpus) {
-                        console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);
+                        if (gpu.type === 'integrated') {
+                            const dedicated = gpu.memory?.dedicated || 0;
+                            const shared = gpu.memory?.shared || gpu.memory?.total || 0;
+                            const dedicatedLabel = dedicated > 0 ? `, ${dedicated}GB aperture` : '';
+                            console.log(`  ${gpu.name}: ${shared}GB shared${dedicatedLabel} (Integrated)`);
+                        } else {
+                            console.log(`  ${gpu.name}: ${gpu.memory.total}GB`);
+                        }
                     }
                 }
 

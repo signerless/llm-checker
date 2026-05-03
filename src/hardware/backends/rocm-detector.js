@@ -7,6 +7,7 @@
 
 const { execSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 class ROCmDetector {
@@ -20,6 +21,9 @@ class ROCmDetector {
     static AMD_DEVICE_IDS = {
         // RDNA 4 / Radeon AI PRO
         '7551': { name: 'AMD Radeon AI PRO R9700', vram: 32 },
+        '7590': { name: 'AMD Radeon RX 9060 XT', vram: 16 },
+        '7580': { name: 'AMD Radeon RX 9070 XT', vram: 16 },
+        '7581': { name: 'AMD Radeon RX 9070', vram: 16 },
         // RDNA 3 (RX 7000 series)
         '744c': { name: 'AMD Radeon RX 7900 XTX', vram: 24 },
         '7448': { name: 'AMD Radeon RX 7900 XT', vram: 20 },
@@ -170,6 +174,7 @@ class ROCmDetector {
             gpus: [],
             rocmVersion: null,
             totalVRAM: 0,
+            totalSharedMemory: 0,
             backend: 'rocm',
             isMultiGPU: false,
             speedCoefficient: 0
@@ -235,12 +240,7 @@ class ROCmDetector {
                 timeout: 10000
             });
 
-            // Parse GPU names
-            const gpuNames = [];
-            const nameMatches = gpuList.matchAll(/GPU\[(\d+)\].*?:\s*(.+)/g);
-            for (const match of nameMatches) {
-                gpuNames[parseInt(match[1])] = match[2].trim();
-            }
+            const gpuNames = this.parseRocmSmiProductNames(gpuList);
 
             // Get VRAM info
             const memInfo = execSync('rocm-smi --showmeminfo vram', {
@@ -248,21 +248,7 @@ class ROCmDetector {
                 timeout: 10000
             });
 
-            // Parse memory info. Newer rocm-smi reports bytes "(B)" while some
-            // systems expose MiB; normalize to GB safely.
-            const gpuMemory = {};
-            const memLines = String(memInfo || '').split('\n');
-            for (const line of memLines) {
-                const lineMatch = line.match(/GPU\[(\d+)\].*?Total.*?Memory\s*(?:\(([^)]+)\))?\s*:\s*(\d+)/i);
-                if (!lineMatch) continue;
-
-                const idx = parseInt(lineMatch[1], 10);
-                const unitHint = lineMatch[2] || '';
-                const rawValue = parseInt(lineMatch[3], 10);
-
-                if (!Number.isFinite(rawValue) || rawValue <= 0) continue;
-                gpuMemory[idx] = this.normalizeRocmMemoryToGB(rawValue, unitHint);
-            }
+            const gpuMemory = this.parseRocmSmiMemoryInfo(memInfo);
 
             // Get temperature and utilization
             let temps = {};
@@ -294,22 +280,27 @@ class ROCmDetector {
             for (let i = 0; i < numGPUs; i++) {
                 const name = gpuNames[i] || `AMD GPU ${i}`;
                 const detectedVram = gpuMemory[i];
-                let vram = Number.isFinite(detectedVram) && detectedVram > 0
-                    ? this.applyIntegratedVramHeuristic(name, detectedVram)
-                    : this.estimateVRAMFromModel(name);
+                const memoryProfile = this.resolveGpuMemoryProfile(name, detectedVram);
+                const vram = memoryProfile.total;
 
                 if (!Number.isFinite(vram) || vram <= 0) {
-                    vram = 8;
+                    continue;
                 }
 
                 const gpu = {
                     index: i,
                     name: name,
+                    type: memoryProfile.type,
                     memory: {
                         total: vram,
                         free: vram,
-                        used: 0
+                        used: 0,
+                        dedicated: memoryProfile.dedicated,
+                        shared: memoryProfile.shared
                     },
+                    dedicatedMemory: memoryProfile.dedicated,
+                    sharedMemory: memoryProfile.shared,
+                    unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
                     temperature: temps[i] || 0,
                     utilization: utils[i] || 0,
                     capabilities: this.getGPUCapabilities(name),
@@ -317,13 +308,100 @@ class ROCmDetector {
                 };
 
                 result.gpus.push(gpu);
-                result.totalVRAM += vram;
+                result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : vram;
+                result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
             }
 
             return result.gpus.length > 0;
         } catch (e) {
             return false;
         }
+    }
+
+    parseRocmSmiProductNames(productOutput) {
+        const names = [];
+        const gfxFallbacks = {};
+        const deviceFallbacks = {};
+        const lines = String(productOutput || '').split('\n');
+
+        for (const line of lines) {
+            let match = line.match(/GPU\[(\d+)\]\s*:\s*Card Series\s*:\s*(.+)$/i);
+            if (match) {
+                names[parseInt(match[1], 10)] = this.normalizeRocmGpuName(match[2]);
+                continue;
+            }
+
+            match = line.match(/GPU\[(\d+)\]\s*:\s*Card Model\s*:\s*(?:0x)?([0-9a-f]{4})/i);
+            if (match) {
+                const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[String(match[2]).toLowerCase()];
+                if (deviceInfo?.name) {
+                    deviceFallbacks[parseInt(match[1], 10)] = deviceInfo.name;
+                }
+                continue;
+            }
+
+            match = line.match(/GPU\[(\d+)\]\s*:\s*GFX Version\s*:\s*(gfx\d+)/i);
+            if (match) {
+                gfxFallbacks[parseInt(match[1], 10)] = match[2].toLowerCase();
+            }
+        }
+
+        const maxIndex = Math.max(
+            names.length - 1,
+            ...Object.keys(gfxFallbacks).map(Number),
+            ...Object.keys(deviceFallbacks).map(Number),
+            -1
+        );
+
+        for (let index = 0; index <= maxIndex; index += 1) {
+            if (!names[index]) {
+                names[index] = deviceFallbacks[index] || this.resolveGfxDisplayName(gfxFallbacks[index]);
+            }
+        }
+
+        return names;
+    }
+
+    normalizeRocmGpuName(value) {
+        return String(value || '')
+            .replace(/^GFX Version\s*:\s*/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    resolveGfxDisplayName(gfxVersion) {
+        const gfx = String(gfxVersion || '').toLowerCase().trim();
+        if (!gfx) return null;
+
+        if (gfx === 'gfx1151') return 'AMD Radeon 8060S (gfx1151)';
+        if (gfx === 'gfx1150' || gfx === 'gfx1152') return `AMD Strix Halo GPU (${gfx})`;
+        if (gfx === 'gfx1103') return 'AMD Radeon 780M (gfx1103)';
+        if (gfx === 'gfx1200' || gfx === 'gfx1201') return `AMD RDNA 4 GPU (${gfx})`;
+
+        return gfx;
+    }
+
+    parseRocmSmiMemoryInfo(memInfo) {
+        const gpuMemory = {};
+        const memLines = String(memInfo || '').split('\n');
+
+        for (const line of memLines) {
+            if (/Total\s+Used\s+Memory/i.test(line)) continue;
+
+            const lineMatch =
+                line.match(/GPU\[(\d+)\]\s*:\s*VRAM\s+Total\s+Memory\s*(?:\(([^)]+)\))?\s*:\s*(\d+)/i) ||
+                line.match(/GPU\[(\d+)\].*?\bTotal\s+Memory\s*(?:\(([^)]+)\))?\s*:\s*(\d+)/i);
+            if (!lineMatch) continue;
+
+            const idx = parseInt(lineMatch[1], 10);
+            const unitHint = lineMatch[2] || '';
+            const rawValue = parseInt(lineMatch[3], 10);
+
+            if (!Number.isFinite(rawValue) || rawValue <= 0) continue;
+            gpuMemory[idx] = this.normalizeRocmMemoryToGB(rawValue, unitHint);
+        }
+
+        return gpuMemory;
     }
 
     /**
@@ -464,24 +542,23 @@ class ROCmDetector {
     }
 
     getRocmAgentDisplayName(agent = {}) {
-        const marketingName = String(agent.marketingName || '').trim();
-        if (marketingName && marketingName.toLowerCase() !== 'n/a') {
-            return marketingName;
-        }
+        const candidates = [
+            agent.marketingName,
+            agent.name,
+            ...(Array.isArray(agent.aliases) ? agent.aliases : [])
+        ]
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+            .filter((item) => item.toLowerCase() !== 'n/a');
 
-        const name = String(agent.name || '').trim();
-        if (name) {
-            return name;
-        }
+        const descriptive = candidates.find((item) => !this.isGenericRocmName(item) && !/^gfx\d+$/i.test(item));
+        if (descriptive) return descriptive;
 
-        if (Array.isArray(agent.aliases)) {
-            const fallback = agent.aliases
-                .map((item) => String(item || '').trim())
-                .find(Boolean);
-            if (fallback) {
-                return fallback;
-            }
-        }
+        const gfx = candidates.find((item) => /^gfx\d+$/i.test(item) || /--gfx\d+/i.test(item));
+        if (gfx) return this.resolveGfxDisplayName((gfx.match(/gfx\d+/i) || [gfx])[0]) || gfx;
+
+        const fallback = candidates.find((item) => !this.isGenericRocmName(item));
+        if (fallback) return fallback;
 
         return 'AMD GPU';
     }
@@ -490,6 +567,17 @@ class ROCmDetector {
         const uuid = String(agent.uuid || '').trim().toLowerCase();
         if (uuid) {
             return `uuid:${uuid}`;
+        }
+
+        const probe = [
+            resolvedName,
+            agent.marketingName,
+            agent.name,
+            ...(Array.isArray(agent.aliases) ? agent.aliases : [])
+        ].join(' ').toLowerCase();
+        const gfxMatch = probe.match(/\bgfx\d{3,4}\b/);
+        if (gfxMatch) {
+            return `gfx:${gfxMatch[0]}`;
         }
 
         const normalizedName = String(resolvedName || '')
@@ -504,13 +592,26 @@ class ROCmDetector {
         return `agent:${agent.index || 0}`;
     }
 
+    isGenericRocmName(name = '') {
+        const lower = String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        return lower === 'amd' ||
+            lower === 'advanced micro devices' ||
+            lower === 'advanced micro devices, inc.' ||
+            lower === 'advanced micro devices, inc. [amd/ati]' ||
+            lower.startsWith('amdgcn-amd-amdhsa--');
+    }
+
     isLikelyIntegratedGPU(name = '') {
         const nameLower = String(name || '').toLowerCase();
         if (!nameLower) return false;
 
         if (nameLower.includes('integrated') || nameLower.includes('apu')) return true;
         if (nameLower.includes('radeon graphics') && !nameLower.includes('rx')) return true;
+        if (nameLower.includes('radeon 8060s') || nameLower.includes('radeon 890m') ||
+            nameLower.includes('radeon 880m') || nameLower.includes('radeon 780m') ||
+            nameLower.includes('radeon 680m')) return true;
         if (nameLower.includes('gfx1150') || nameLower.includes('gfx1151') || nameLower.includes('gfx1152')) return true;
+        if (nameLower.includes('gfx1103') || nameLower.includes('gfx1035')) return true;
 
         return false;
     }
@@ -537,6 +638,91 @@ class ROCmDetector {
         return 8;
     }
 
+    resolveGpuMemoryProfile(name, detectedVramGB) {
+        const detected = Number(detectedVramGB);
+        const detectedVram = Number.isFinite(detected) && detected > 0 ? detected : 0;
+
+        if (!this.isLikelyIntegratedGPU(name)) {
+            const total = detectedVram || this.estimateVRAMFromModel(name) || 8;
+            return {
+                type: 'dedicated',
+                total,
+                dedicated: total,
+                shared: 0
+            };
+        }
+
+        const sysfsProfile = this.getIntegratedMemoryProfile();
+        const estimatedShared = this.applyIntegratedVramHeuristic(
+            name,
+            detectedVram || this.estimateVRAMFromModel(name)
+        );
+        const dedicated = sysfsProfile.dedicated || detectedVram || 0;
+        const shared = Math.max(sysfsProfile.shared || 0, estimatedShared || 0, dedicated);
+        const total = shared || dedicated || this.estimateVRAMFromModel(name) || 8;
+
+        return {
+            type: 'integrated',
+            total,
+            dedicated,
+            shared: total
+        };
+    }
+
+    getIntegratedMemoryProfile() {
+        const dedicatedValues = this.readAmdSysfsMemoryValues('mem_info_vram_total');
+        const sharedValues = this.readAmdSysfsMemoryValues('mem_info_gtt_total');
+        const totalSystemGB = Math.max(1, Math.round(os.totalmem() / (1024 ** 3)));
+        const rawShared = sharedValues.length > 0 ? Math.max(...sharedValues) : 0;
+
+        return {
+            dedicated: dedicatedValues.length > 0 ? Math.max(...dedicatedValues) : 0,
+            shared: rawShared > 0 ? Math.min(rawShared, Math.round(totalSystemGB * 0.95)) : 0
+        };
+    }
+
+    readAmdSysfsMemoryValues(fileName) {
+        const values = [];
+        const candidatePaths = [];
+
+        try {
+            const moduleRoot = '/sys/module/amdgpu/drivers/pci:amdgpu';
+            for (const entry of fs.readdirSync(moduleRoot)) {
+                candidatePaths.push(path.join(moduleRoot, entry, fileName));
+            }
+        } catch (e) {
+            // sysfs may be unavailable or restricted
+        }
+
+        try {
+            const drmRoot = '/sys/class/drm';
+            for (const entry of fs.readdirSync(drmRoot)) {
+                if (!/^card\d+$/.test(entry)) continue;
+                candidatePaths.push(path.join(drmRoot, entry, 'device', fileName));
+            }
+        } catch (e) {
+            // sysfs may be unavailable or restricted
+        }
+
+        const seen = new Set();
+        for (const candidatePath of candidatePaths) {
+            if (seen.has(candidatePath)) continue;
+            seen.add(candidatePath);
+
+            try {
+                const raw = parseInt(fs.readFileSync(candidatePath, 'utf8').trim(), 10);
+                const gb = this.normalizeRocmMemoryToGB(raw, 'B');
+                if (Number.isFinite(gb) && gb > 0) {
+                    values.push(gb);
+                }
+            } catch (e) {
+                continue;
+            }
+        }
+
+        return values;
+    }
+
     /**
      * Detect GPUs via rocminfo
      */
@@ -551,7 +737,8 @@ class ROCmDetector {
             for (let index = 0; index < agents.length; index += 1) {
                 const name = agents[index].name;
                 let vram = this.estimateVRAMFromGfxName(name);
-                vram = this.applyIntegratedVramHeuristic(name, vram);
+                const memoryProfile = this.resolveGpuMemoryProfile(name, vram);
+                vram = memoryProfile.total;
 
                 if (!Number.isFinite(vram) || vram <= 0) {
                     vram = 8;
@@ -560,11 +747,22 @@ class ROCmDetector {
                 result.gpus.push({
                     index,
                     name,
-                    memory: { total: vram, free: vram, used: 0 },
+                    type: memoryProfile.type,
+                    memory: {
+                        total: vram,
+                        free: vram,
+                        used: 0,
+                        dedicated: memoryProfile.dedicated,
+                        shared: memoryProfile.shared
+                    },
+                    dedicatedMemory: memoryProfile.dedicated,
+                    sharedMemory: memoryProfile.shared,
+                    unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
                     capabilities: this.getGPUCapabilities(name),
                     speedCoefficient: this.calculateSpeedCoefficient(name, vram)
                 });
-                result.totalVRAM += vram;
+                result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : vram;
+                result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
             }
 
             return result.gpus.length > 0;
@@ -776,6 +974,7 @@ class ROCmDetector {
 
         // RDNA 4 / Radeon AI PRO
         if (nameLower.includes('r9700') || nameLower.includes('ai pro') ||
+            nameLower.includes('rx 9070') || nameLower.includes('rx 9060') ||
             nameLower.includes('gfx1200') || nameLower.includes('gfx1201')) {
             capabilities.bf16 = true;
             capabilities.matrixCores = true;
@@ -837,11 +1036,17 @@ class ROCmDetector {
 
         // Known integrated/APU labels where ROCm can report small dedicated aperture
         if (nameLower.includes('gfx1151') || nameLower.includes('gfx1150') || nameLower.includes('gfx1152')) return 16;
+        if (nameLower.includes('radeon 8060s')) return 16;
         if (nameLower.includes('radeon 890m')) return 16;
         if (nameLower.includes('radeon 880m')) return 12;
         if (nameLower.includes('radeon 780m')) return 8;
+        if (nameLower.includes('radeon 680m')) return 8;
 
         // RDNA 4 / Radeon AI PRO
+        if (nameLower.includes('rx 9070 xt')) return 16;
+        if (nameLower.includes('rx 9070')) return 16;
+        if (nameLower.includes('rx 9060 xt')) return 16;
+        if (nameLower.includes('rx 9060')) return 8;
         if (nameLower.includes('r9700') || nameLower.includes('ai pro r9700')) return 32;
 
         // RX 7000 series
@@ -880,7 +1085,7 @@ class ROCmDetector {
     estimateVRAMFromGfxName(name) {
         const nameLower = (name || '').toLowerCase();
 
-        if (nameLower.includes('gfx1200') || nameLower.includes('gfx1201')) return 32; // Radeon AI PRO R9700
+        if (nameLower.includes('gfx1200') || nameLower.includes('gfx1201')) return 16; // RDNA 4 desktop default
         if (nameLower.includes('gfx1150') || nameLower.includes('gfx1151') || nameLower.includes('gfx1152')) return 16; // Strix Halo / Radeon 890M class
         if (nameLower.includes('gfx1100')) return 24;  // RX 7900 XTX
         if (nameLower.includes('gfx1101')) return 16;  // RX 7800
@@ -902,40 +1107,48 @@ class ROCmDetector {
         const nameLower = (name || '').toLowerCase();
 
         // Speed coefficients (tokens/sec per B params at Q4)
-        const speedMap = {
+        const speedMap = new Map([
             // RDNA 4 / Radeon AI PRO
-            'r9700': 230,
-            'ai pro r9700': 230,
+            ['ai pro r9700', 230],
+            ['r9700', 230],
+            ['rx 9070 xt', 190],
+            ['rx 9070', 175],
+            ['rx 9060 xt', 170],
+            ['rx 9060', 150],
+            ['radeon 8060s', 160],
+            ['gfx1151', 160],
+            ['gfx1150', 150],
+            ['gfx1152', 150],
 
             // RX 7000 series (RDNA 3)
-            '7900 xtx': 200,
-            '7900 xt': 180,
-            '7900 gre': 160,
-            '7800 xt': 150,
-            '7700 xt': 120,
-            '7600': 90,
+            ['7900 xtx', 200],
+            ['7900 xt', 180],
+            ['7900 gre', 160],
+            ['7800 xt', 150],
+            ['7700 xt', 120],
+            ['7600', 90],
 
             // RX 6000 series (RDNA 2)
-            '6950 xt': 150,
-            '6900 xt': 140,
-            '6800 xt': 130,
-            '6800': 120,
-            '6750 xt': 100,
-            '6700 xt': 90,
-            '6700': 80,
-            '6600 xt': 70,
-            '6600': 60,
+            ['6950 xt', 150],
+            ['6900 xt', 140],
+            ['6800 xt', 130],
+            ['6800', 120],
+            ['6750 xt', 100],
+            ['6700 xt', 90],
+            ['6700', 80],
+            ['6600 xt', 70],
+            ['6600', 60],
 
             // Instinct series
-            'mi300x': 400,
-            'mi300': 350,
-            'mi250x': 280,
-            'mi250': 250,
-            'mi210': 200,
-            'mi100': 150
-        };
+            ['mi300x', 400],
+            ['mi300', 350],
+            ['mi250x', 280],
+            ['mi250', 250],
+            ['mi210', 200],
+            ['mi100', 150]
+        ]);
 
-        for (const [model, speed] of Object.entries(speedMap)) {
+        for (const [model, speed] of speedMap) {
             if (nameLower.includes(model)) {
                 return speed;
             }

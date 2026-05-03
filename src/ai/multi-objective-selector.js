@@ -111,10 +111,45 @@ class MultiObjectiveSelector {
             return false; // Model too large for this tier regardless of RAM
         }
         
-        // Memory check with tier-appropriate safety margin
-        const availableMemory = hardware.memory.total * limits.availableMemoryRatio;
+        // Memory check with tier-appropriate safety margin. Dedicated GPUs can
+        // run quantized models primarily from VRAM with limited RAM offload, so
+        // using only system RAM underestimates mid-range cards such as RTX 5060.
+        const availableMemory = this.getAvailableModelMemoryGB(hardware, limits.availableMemoryRatio);
         
         return totalMemoryNeeded <= availableMemory;
+    }
+
+    getAvailableModelMemoryGB(hardware, fallbackRatio = 0.7) {
+        const ramGB = Number(hardware?.memory?.total ?? hardware?.memory?.totalGB ?? 0) || 0;
+        const vramGB = Number(
+            hardware?.gpu?.vram ??
+            hardware?.gpu?.vramGB ??
+            hardware?.summary?.totalVRAM ??
+            0
+        ) || 0;
+        const hasIntegratedGPU = typeof hardware?.summary?.hasIntegratedGPU === 'boolean'
+            ? hardware.summary.hasIntegratedGPU
+            : false;
+        const hasDedicatedGPU = typeof hardware?.summary?.hasDedicatedGPU === 'boolean'
+            ? hardware.summary.hasDedicatedGPU
+            : Boolean(hardware?.gpu?.dedicated || (vramGB > 0 && !hasIntegratedGPU));
+
+        if (hasDedicatedGPU && vramGB > 0) {
+            const pcSpecs = this.getPCGPUSpecs(hardware, vramGB, ramGB);
+            const vramBudget = vramGB * (pcSpecs.memoryEfficiency || 0.85);
+            const offloadBudget = Math.min(
+                pcSpecs.offloadCapacity || 0,
+                Math.max(0, ramGB * 0.5)
+            );
+            return Math.max(vramBudget, vramBudget + offloadBudget);
+        }
+
+        const sharedMemory = Number(hardware?.summary?.integratedSharedMemory || hardware?.gpu?.sharedMemory || 0);
+        if (sharedMemory > 0 && !hasDedicatedGPU) {
+            return sharedMemory * Math.max(fallbackRatio, 0.85);
+        }
+
+        return ramGB * fallbackRatio;
     }
 
     /**
@@ -274,8 +309,10 @@ class MultiObjectiveSelector {
                 return num / (1024 ** 3); // Convert bytes to GB
             } else if (num >= 0.1 && num <= 100) {
                 // Small numbers (0.1-100) are likely billion parameters - convert to file size
-                // Rough estimate: 1B params ≈ 2GB in Q4 quantization
-                return Math.max(0.5, num * 2);
+                // Static catalog `B` values are parameter counts. Default check
+                // recommendations target quantized local inference, where Q4
+                // artifacts are roughly 0.6-0.7GB per billion parameters.
+                return Math.max(0.5, Math.round(num * 0.65 * 10) / 10);
             } else {
                 // Fallback for edge cases
                 return Math.max(0.5, num);
@@ -329,7 +366,7 @@ class MultiObjectiveSelector {
         const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
         
         const ramGB = hardware.memory.total || 0;
-        const vramGB = hardware.gpu?.vram || 0;
+        const vramGB = hardware.gpu?.vram || hardware.gpu?.vramGB || hardware.summary?.totalVRAM || 0;
         const cpuModel = hardware.cpu?.brand || hardware.cpu?.model || '';
         const gpuModel = hardware.gpu?.model || '';
         const architecture = hardware.cpu?.architecture || hardware.cpu?.brand || '';
@@ -406,6 +443,7 @@ class MultiObjectiveSelector {
         else if (gpu.includes('rtx 4090')) memBandwidthGBs = 1008;
         else if (gpu.includes('rtx 4080')) memBandwidthGBs = 716;
         else if (gpu.includes('rtx 4070')) memBandwidthGBs = 448;
+        else if (gpu.includes('rtx 5060')) memBandwidthGBs = 336;
         else if (gpu.includes('iris xe')) memBandwidthGBs = 68;
         
         const mem_bw = clamp(memBandwidthGBs / 500);  // Match main algorithm
@@ -419,6 +457,7 @@ class MultiObjectiveSelector {
         else if (gpu.includes('m4')) compute = clamp(15 / 80);
         else if (gpu.includes('rtx 4090')) compute = clamp(165 / 80);
         else if (gpu.includes('rtx 4080')) compute = clamp(121 / 80);
+        else if (gpu.includes('rtx 5060')) compute = clamp(38 / 80);
         else if (gpu.includes('iris xe')) compute = 0.02;
         else {
             // CPU fallback
@@ -464,7 +503,7 @@ class MultiObjectiveSelector {
         }
         
         // Special flagship GPU detection by model name
-        if (gpuModel.toLowerCase().includes('rtx 50') || 
+        if (gpuModel.toLowerCase().includes('rtx 5090') ||
             gpuModel.toLowerCase().includes('gb10') ||
             gpuModel.toLowerCase().includes('grace blackwell') ||
             gpuModel.toLowerCase().includes('dgx spark') ||
@@ -472,6 +511,10 @@ class MultiObjectiveSelector {
             gpuModel.toLowerCase().includes('h100') || 
             gpuModel.toLowerCase().includes('a100')) {
             tier = 'flagship';
+        } else if (gpuModel.toLowerCase().includes('rtx 5080')) {
+            tier = bumpTier(tier, tier === 'ultra_high' || tier === 'flagship' ? 0 : +1);
+        } else if (gpuModel.toLowerCase().includes('rtx 5070') && !gpuModel.toLowerCase().includes('rtx 5070 ti')) {
+            tier = bumpTier(tier, tier === 'high' || tier === 'ultra_high' || tier === 'flagship' ? 0 : +1);
         }
         
         return tier;
@@ -624,10 +667,13 @@ class MultiObjectiveSelector {
                 specs.offloadCapacity = Math.min(ramGB * 0.6, 32);
                 specs.memoryEfficiency = 0.96;
                 specs.backendOptimization = 1.25;
-            } else if (gpu.includes('rtx 50')) {
-                // RTX 50xx series - flagship tier with massive VRAM + excellent offload
+            } else if (gpu.includes('rtx 5090') || gpu.includes('rtx 5080') || gpu.includes('rtx 5070')) {
+                // Upper RTX 50xx cards have excellent offload behavior.
                 specs.offloadCapacity = Math.min(ramGB * 0.5, 24);
                 specs.memoryEfficiency = 0.95;
+            } else if (gpu.includes('rtx 5060')) {
+                specs.offloadCapacity = Math.min(ramGB * 0.35, 12);
+                specs.memoryEfficiency = 0.90;
             } else if (gpu.includes('rtx 40')) {
                 specs.offloadCapacity = Math.min(ramGB * 0.35, 16);
                 specs.memoryEfficiency = 0.90;
@@ -751,7 +797,7 @@ class MultiObjectiveSelector {
         const gpuModel = hardware.gpu?.model || '';
         const cores = hardware.cpu?.physicalCores || hardware.cpu?.cores || 1;
         const baseSpeed = hardware.cpu?.speed || 2.0;
-        const vramGB = hardware.gpu?.vram || 0;
+        const vramGB = hardware.gpu?.vram || hardware.gpu?.vramGB || hardware.summary?.totalVRAM || 0;
         const hasIntegratedGPU = typeof hardware.summary?.hasIntegratedGPU === 'boolean'
             ? hardware.summary.hasIntegratedGPU
             : false;

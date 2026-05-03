@@ -307,7 +307,10 @@ class UnifiedDetector {
         summary.dedicatedGpuCount = topology.dedicatedCount;
         summary.integratedGpuModels = topology.integratedModels;
         summary.dedicatedGpuModels = topology.dedicatedModels;
-        summary.integratedSharedMemory = topology.integratedSharedMemory;
+        summary.integratedSharedMemory = Math.max(
+            topology.integratedSharedMemory,
+            this.getPrimaryIntegratedSharedMemory(primary)
+        );
         if (!summary.gpuModel) {
             summary.gpuModel = topology.primaryModel || null;
         }
@@ -324,9 +327,17 @@ class UnifiedDetector {
         summary.runtimeBackendName = runtimeSelection.name;
         summary.hasRuntimeAssist = runtimeSelection.assisted;
 
-        // Effective memory for LLM loading
-        // For GPU: use VRAM; for CPU/Metal: use system RAM
-        if (summary.totalVRAM > 0 && ['cuda', 'rocm', 'intel'].includes(primary?.type)) {
+        // Effective memory for LLM loading. Integrated ROCm/iGPU devices expose
+        // a small aperture as VRAM and a much larger shared pool for model-fit
+        // decisions, so avoid treating the aperture as dedicated VRAM.
+        if (
+            ['rocm', 'intel'].includes(primary?.type) &&
+            summary.hasIntegratedGPU &&
+            !summary.hasDedicatedGPU &&
+            summary.integratedSharedMemory > 0
+        ) {
+            summary.effectiveMemory = summary.integratedSharedMemory;
+        } else if (summary.totalVRAM > 0 && ['cuda', 'rocm', 'intel'].includes(primary?.type)) {
             summary.effectiveMemory = summary.totalVRAM;
         } else {
             // Use 70% of system RAM for models (leave room for OS)
@@ -337,6 +348,21 @@ class UnifiedDetector {
         summary.bestBackendLabel = this.getBestBackendLabel(summary);
 
         return summary;
+    }
+
+    getPrimaryIntegratedSharedMemory(primary) {
+        const gpus = Array.isArray(primary?.info?.gpus) ? primary.info.gpus : [];
+        return gpus
+            .filter((gpu) => gpu?.type === 'integrated')
+            .reduce((max, gpu) => {
+                const candidates = [
+                    gpu?.sharedMemory,
+                    gpu?.unifiedMemory,
+                    gpu?.memory?.shared,
+                    gpu?.memory?.total
+                ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
+                return Math.max(max, ...candidates, 0);
+            }, 0);
     }
 
     classifyHardwareTierFromSummary(summary = {}) {
@@ -848,7 +874,11 @@ class UnifiedDetector {
         const summary = result.summary;
 
         // Leave headroom (2GB for GPU, 20% for RAM)
-        if (summary.bestBackend === 'cpu' || summary.bestBackend === 'metal') {
+        if (
+            summary.bestBackend === 'cpu' ||
+            summary.bestBackend === 'metal' ||
+            (summary.hasIntegratedGPU && !summary.hasDedicatedGPU && summary.integratedSharedMemory > 0)
+        ) {
             return sizeGB <= (summary.effectiveMemory - 2);
         } else {
             const availableVRAM = useMultiGPU ? summary.totalVRAM : (summary.totalVRAM / summary.gpuCount);
@@ -939,6 +969,10 @@ class UnifiedDetector {
             const gpuDesc = summary.gpuInventory || (
                 summary.isMultiGPU ? `${summary.gpuCount}x ${summary.gpuModel}` : summary.gpuModel
             );
+            if (summary.hasIntegratedGPU && !summary.hasDedicatedGPU && summary.integratedSharedMemory > 0) {
+                const dedicatedLabel = summary.totalVRAM > 0 ? `, ${summary.totalVRAM}GB aperture` : '';
+                return `${gpuDesc} (${summary.integratedSharedMemory}GB shared memory${dedicatedLabel}) + ${summary.cpuModel}`;
+            }
             return `${gpuDesc} (${summary.totalVRAM}GB VRAM) + ${summary.cpuModel}`;
         }
         else if (summary.bestBackend === 'metal') {
