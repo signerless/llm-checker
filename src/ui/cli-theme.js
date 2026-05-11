@@ -4,6 +4,7 @@ const chalk = require('chalk');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
 // Adapted from ~/Downloads/ascii-motion-cli.tsx frame model.
 const THEME_DARK = {
@@ -41,6 +42,8 @@ const FRAMES_PER_SECOND = 14;
 // Security: do not auto-load executable-style banner sources from user-writable folders.
 // External banner loading is opt-in via LLM_CHECKER_BANNER_SOURCE and supports JSON only.
 const DEFAULT_BANNER_SOURCE = null;
+// Canonical startup banner asset. Do not edit casually: treat as product identity.
+// Any intentional change should update tests/banner-canonical.test.js in the same commit.
 const BUNDLED_TEXT_BANNER_SOURCE = path.join(__dirname, 'banner-profesional-v2.txt');
 const DEFAULT_TEXT_BANNER_SOURCES = [
     BUNDLED_TEXT_BANNER_SOURCE
@@ -79,7 +82,14 @@ function sleep(ms) {
 }
 
 function clearTerminal() {
-    process.stdout.write('\x1b[2J\x1b[0f');
+    if (!process.stdout.isTTY) return;
+
+    try {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+    } catch {
+        process.stdout.write('\x1b[2J\x1b[H');
+    }
 }
 
 function parseDarkBackgroundValue(value) {

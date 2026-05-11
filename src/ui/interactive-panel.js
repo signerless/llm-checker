@@ -32,7 +32,14 @@ const REQUIRED_ARG_PROMPTS = {
 };
 
 function clearTerminal() {
-    process.stdout.write('\x1b[2J\x1b[0f');
+    if (!process.stdout.isTTY) return;
+
+    try {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+    } catch {
+        process.stdout.write('\x1b[2J\x1b[H');
+    }
 }
 
 function truncateText(text, maxLength) {
@@ -311,6 +318,18 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
     );
 }
 
+function shouldEnableBannerPulse({
+    isTTY = process.stdout.isTTY,
+    disableAnimation = process.env.LLM_CHECKER_DISABLE_ANIMATION,
+    forcePulse = process.env.LLM_CHECKER_FORCE_PANEL_PULSE,
+    platform = process.platform
+} = {}) {
+    if (!isTTY) return false;
+    if (disableAnimation === '1') return false;
+    if (forcePulse === '1') return true;
+    return platform !== 'win32';
+}
+
 async function collectCommandArgs(commandMeta) {
     const prompts = [];
     const requiredPrompts = REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
@@ -421,9 +440,7 @@ async function launchInteractivePanel(options) {
     readline.emitKeypressEvents(process.stdin);
 
     return new Promise((resolve) => {
-        const shouldPulseBanner =
-            process.stdout.isTTY &&
-            process.env.LLM_CHECKER_DISABLE_ANIMATION !== '1';
+        const shouldPulseBanner = shouldEnableBannerPulse();
         let pulseTimer = null;
 
         const stopBannerPulse = () => {
@@ -578,6 +595,7 @@ module.exports = {
         buildCommandCatalog,
         buildPrimaryCommands,
         getVisibleCommands,
-        truncateText
+        truncateText,
+        shouldEnableBannerPulse
     }
 };

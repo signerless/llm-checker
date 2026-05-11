@@ -9,7 +9,8 @@ const {
         buildCommandCatalog,
         buildPrimaryCommands,
         getVisibleCommands,
-        truncateText
+        truncateText,
+        shouldEnableBannerPulse
     }
 } = require('../src/ui/interactive-panel');
 
@@ -104,6 +105,37 @@ function run() {
         visibleOpen.map((item) => item.name),
         ['search'],
         'open palette should filter commands by query'
+    );
+
+    assert.strictEqual(
+        shouldEnableBannerPulse({ isTTY: true, platform: 'linux', disableAnimation: '0' }),
+        true,
+        'pulse should run on non-Windows TTY terminals'
+    );
+    assert.strictEqual(
+        shouldEnableBannerPulse({ isTTY: true, platform: 'win32', disableAnimation: '0' }),
+        false,
+        'pulse should be disabled on Windows by default to avoid redraw flicker'
+    );
+    assert.strictEqual(
+        shouldEnableBannerPulse({
+            isTTY: true,
+            platform: 'win32',
+            disableAnimation: '0',
+            forcePulse: '1'
+        }),
+        true,
+        'pulse can be explicitly re-enabled on Windows when requested'
+    );
+    assert.strictEqual(
+        shouldEnableBannerPulse({ isTTY: false, platform: 'linux', disableAnimation: '0' }),
+        false,
+        'pulse should stay off for non-TTY outputs'
+    );
+    assert.strictEqual(
+        shouldEnableBannerPulse({ isTTY: true, platform: 'linux', disableAnimation: '1' }),
+        false,
+        'pulse should respect disable animation env'
     );
 
     console.log('cli-interactive-panel.test.js: OK');

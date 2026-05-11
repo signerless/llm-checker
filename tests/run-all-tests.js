@@ -28,6 +28,7 @@ const TESTS = [
     { name: 'Ollama selector IPv6 fallback', file: 'ollama-selector-ipv6-fallback.test.js', category: 'Ollama' },
     { name: 'Ollama speed metrics', file: 'ollama-client-speed-metrics.test.js', category: 'Ollama' },
     { name: 'Runtime + speculative decoding', file: 'runtime-specdec-tests.js', category: 'Runtime' },
+    { name: 'Startup banner canonical integrity', file: 'banner-canonical.test.js', category: 'UI' },
     { name: 'CLI interface smoke', file: 'ui-cli-smoke.test.js', category: 'UI' },
     { name: 'CLI interactive panel helpers', file: 'cli-interactive-panel.test.js', category: 'UI' },
     { name: 'Local features end-to-end', file: 'local-features-e2e.test.js', category: 'E2E' },
