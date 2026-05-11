@@ -3,7 +3,6 @@
 const chalk = require('chalk');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 // Adapted from ~/Downloads/ascii-motion-cli.tsx frame model.
@@ -37,32 +36,14 @@ const LOGO_LINES = [
     '|_____||_____||_|  |_|  \\____|_| |_|\\___|\\___|_|\\_\\___|_|   '
 ];
 
-const MASCOT_MASK = [
-    '             /\\_/\\             ',
-    '            / o o \\            ',
-    '           (   ^   )           ',
-    '            \\  _  /            ',
-    '             /___\\             ',
-    '            /     \\            ',
-    '           (_/   \\_)           '
-];
-
 const DEFAULT_LOOP = true;
 const FRAMES_PER_SECOND = 14;
 // Security: do not auto-load executable-style banner sources from user-writable folders.
 // External banner loading is opt-in via LLM_CHECKER_BANNER_SOURCE and supports JSON only.
 const DEFAULT_BANNER_SOURCE = null;
+const BUNDLED_TEXT_BANNER_SOURCE = path.join(__dirname, 'banner-profesional-v2.txt');
 const DEFAULT_TEXT_BANNER_SOURCES = [
-    path.join(os.homedir(), 'Desktop', 'llm-checker', 'banner-profesional-v2.txt'),
-    path.join(
-        os.homedir(),
-        'Library',
-        'Mobile Documents',
-        'com~apple~CloudDocs',
-        'Desktop',
-        'llm-checker',
-        'banner-profesional-v2.txt'
-    )
+    BUNDLED_TEXT_BANNER_SOURCE
 ];
 let cachedExternalBanner = null;
 let cachedTextBanner = null;
@@ -484,41 +465,9 @@ function drawTextBanner(lines, options = {}) {
     }
 }
 
-function buildScanline(width, row, phase) {
-    const stripe = (row + phase) % 2 === 0 ? '=' : '-';
-    return stripe.repeat(width);
-}
-
-function applyMask(baseLine, maskLine) {
-    if (!maskLine) return baseLine;
-
-    const result = baseLine.split('');
-    const limit = Math.min(baseLine.length, maskLine.length);
-    for (let index = 0; index < limit; index += 1) {
-        const symbol = maskLine[index];
-        if (symbol !== ' ') result[index] = symbol;
-    }
-
-    return result.join('');
-}
-
-function buildMascotLines(phase) {
-    const width = 34;
-    const rows = 11;
-    const maskOffset = 2;
-    const lines = [];
-
-    for (let row = 0; row < rows; row += 1) {
-        const maskLine = MASCOT_MASK[row - maskOffset];
-        lines.push(applyMask(buildScanline(width, row, phase), maskLine));
-    }
-
-    return lines;
-}
-
 function buildRows(phase) {
+    void phase;
     return [
-        ...buildMascotLines(phase).map((text) => ({ kind: 'mascot', text })),
         { kind: 'blank', text: '' },
         ...LOGO_LINES.map((text) => ({ kind: 'logo', text })),
         { kind: 'blank', text: '' },
@@ -527,23 +476,14 @@ function buildRows(phase) {
     ];
 }
 
-function classifyMascotColor(char) {
-    if (char === '=' || char === '-') return 'scan';
-    if (char === 'o' || char === '^') return 'accent';
-    if (char === '/' || char === '\\' || char === '(' || char === ')' || char === '_') {
-        return 'outline';
-    }
-    return 'outline';
-}
-
 function colorKeyForChar(kind, char, visible) {
+    void char;
     if (!visible) return 'muted';
 
     if (kind === 'blank') return 'muted';
     if (kind === 'logo') return 'logo';
     if (kind === 'byline') return 'byline';
     if (kind === 'subtitle') return 'subtitle';
-    if (kind === 'mascot') return classifyMascotColor(char);
     return 'logo';
 }
 
