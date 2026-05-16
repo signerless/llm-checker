@@ -133,6 +133,78 @@ function buildDualGpu36GbHardware() {
     };
 }
 
+function buildDualBlackwellHardware() {
+    return {
+        cpu: { cores: 32, architecture: 'x86_64' },
+        gpu: {
+            model: 'NVIDIA RTX PRO 6000 Blackwell Workstation Edition',
+            vendor: 'NVIDIA',
+            type: 'nvidia',
+            vram: 192,
+            vramPerGPU: 96,
+            gpuCount: 2,
+            isMultiGPU: true,
+            all: [
+                { model: 'NVIDIA RTX PRO 6000 Blackwell Workstation Edition', vram: 96, vendor: 'NVIDIA' },
+                { model: 'NVIDIA RTX PRO 6000 Blackwell Workstation Edition', vram: 96, vendor: 'NVIDIA' }
+            ]
+        },
+        memory: { total: 123 },
+        acceleration: { supports_metal: false, supports_cuda: true, supports_rocm: false },
+        summary: {
+            hardwareTier: 'VERY HIGH',
+            hasDedicatedGPU: true,
+            totalVRAM: 192
+        }
+    };
+}
+
+function buildBlackwellRecommendationPool() {
+    return [
+        {
+            model_identifier: 'blackwell-chat',
+            model_name: 'blackwell-chat',
+            description: 'Synthetic chat family with tiny and high-capacity variants',
+            primary_category: 'chat',
+            context_length: '64K',
+            variants: [
+                { tag: 'blackwell-chat:2b', size: '2b', quantization: 'Q4_0', real_size_gb: 1.6, categories: ['chat'] },
+                { tag: 'blackwell-chat:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.1, categories: ['chat'] },
+                { tag: 'blackwell-chat:32b', size: '32b', quantization: 'Q4_0', real_size_gb: 19, categories: ['chat'] },
+                { tag: 'blackwell-chat:70b', size: '70b', quantization: 'Q4_0', real_size_gb: 42, categories: ['chat'] }
+            ],
+            tags: ['blackwell-chat:2b', 'blackwell-chat:8b', 'blackwell-chat:32b', 'blackwell-chat:70b'],
+            use_cases: ['chat']
+        },
+        {
+            model_identifier: 'blackwell-coder',
+            model_name: 'blackwell-coder',
+            description: 'Synthetic coding family for high-end GPU regression',
+            primary_category: 'coding',
+            context_length: '32K',
+            variants: [
+                { tag: 'blackwell-coder:8b', size: '8b', quantization: 'Q4_0', real_size_gb: 5.3, categories: ['coding'] },
+                { tag: 'blackwell-coder:34b', size: '34b', quantization: 'Q4_0', real_size_gb: 20.5, categories: ['coding'] }
+            ],
+            tags: ['blackwell-coder:8b', 'blackwell-coder:34b'],
+            use_cases: ['coding', 'programming']
+        },
+        {
+            model_identifier: 'blackwell-reason',
+            model_name: 'blackwell-reason',
+            description: 'Synthetic reasoning family for high-end GPU regression',
+            primary_category: 'reasoning',
+            context_length: '64K',
+            variants: [
+                { tag: 'blackwell-reason:7b', size: '7b', quantization: 'Q4_0', real_size_gb: 4.8, categories: ['reasoning'] },
+                { tag: 'blackwell-reason:70b', size: '70b', quantization: 'Q4_0', real_size_gb: 43, categories: ['reasoning'] }
+            ],
+            tags: ['blackwell-reason:7b', 'blackwell-reason:70b'],
+            use_cases: ['reasoning', 'math']
+        }
+    ];
+}
+
 function buildFreshnessRegressionPool() {
     return [
         {
@@ -498,6 +570,28 @@ async function runMultiGpu36GbIncludesThirtyBWhenFeasible() {
     );
 }
 
+async function runVeryHighMultiGpuPrefersHighCapacityModels() {
+    const selector = new DeterministicModelSelector();
+    const hardware = buildDualBlackwellHardware();
+    const pool = buildBlackwellRecommendationPool();
+
+    selector.getInstalledModels = async () => [];
+    const recommendations = await selector.getBestModelsForHardware(hardware, pool, { runtime: 'ollama' });
+
+    for (const category of ['general', 'coding', 'reasoning', 'reading']) {
+        const topModel = recommendations[category]?.bestModels?.[0];
+        assert.ok(topModel, `${category} should return a top recommendation`);
+        assert.ok(
+            topModel.size >= 30,
+            `${category} should prefer >=30B models on dual RTX PRO 6000 Blackwell, got ${topModel.model_identifier} (${topModel.size}B)`
+        );
+        assert.ok(
+            /high-capacity/i.test(topModel.reasoning),
+            `${category} rationale should explain high-capacity right-sizing, got: ${topModel.reasoning}`
+        );
+    }
+}
+
 async function runFreshnessPenaltyPrefersRecentModel() {
     const selector = new DeterministicModelSelector();
     const hardware = buildHighEndHardware();
@@ -834,6 +928,7 @@ async function runAll() {
     await runOptimizationProfilesInfluenceRanking();
     await runMultiGpuNormalizationUsesCombinedVram();
     await runMultiGpu36GbIncludesThirtyBWhenFeasible();
+    await runVeryHighMultiGpuPrefersHighCapacityModels();
     await runFreshnessPenaltyPrefersRecentModel();
     await runQuantizedLargeModelCanBeRecommended();
     await runUnified24GbIncludesMidTierWhenFeasible();

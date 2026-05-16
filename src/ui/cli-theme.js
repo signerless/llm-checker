@@ -81,14 +81,42 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function clearTerminal() {
+function getSafeTerminalWidth(columns = process.stdout.columns, platform = process.platform) {
+    const value = Number(columns);
+    if (!Number.isFinite(value) || value <= 0) return null;
+
+    const width = Math.floor(value);
+    // Windows terminals commonly wrap when output writes exactly `columns` cells.
+    // Keep the canonical banner intact while rendering one cell inside the edge.
+    if (platform === 'win32') {
+        return Math.max(20, width - 1);
+    }
+
+    return Math.max(20, width);
+}
+
+function getTerminalClearSequence(platform = process.platform) {
+    if (platform === 'win32') {
+        return '\x1b[1;1H\x1b[0J';
+    }
+
+    return '\x1b[2J\x1b[H';
+}
+
+function clearTerminal(options = {}) {
     if (!process.stdout.isTTY) return;
+
+    const platform = options.platform || process.platform;
+    if (platform === 'win32') {
+        process.stdout.write(getTerminalClearSequence(platform));
+        return;
+    }
 
     try {
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
     } catch {
-        process.stdout.write('\x1b[2J\x1b[H');
+        process.stdout.write(getTerminalClearSequence(platform));
     }
 }
 
@@ -338,9 +366,10 @@ function drawTextBanner(lines, options = {}) {
     const colorPhase = Number.isFinite(options.colorPhase)
         ? Math.max(0, Math.floor(options.colorPhase))
         : 0;
-    const terminalWidth = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
-        ? process.stdout.columns
-        : null;
+    const terminalWidth = getSafeTerminalWidth(
+        options.columns ?? process.stdout.columns,
+        options.platform || process.platform
+    );
 
     const centerToWidth = (text, width) => {
         const value = String(text || '').replace(/\s+$/g, '');
@@ -400,7 +429,7 @@ function drawTextBanner(lines, options = {}) {
 
         const frameMatch = line.match(/^(\s*\|)(.*)(\|\s*)$/);
         if (!frameMatch) {
-            console.log(line);
+            console.log(terminalWidth ? fitLine(line, terminalWidth) : line);
             continue;
         }
 
@@ -738,6 +767,11 @@ module.exports = {
     __private: {
         detectDarkBackgroundFromColorFgbg,
         detectDarkBackgroundFromMacOsAppearance,
+        fitLine,
+        drawTextBanner,
+        clearTerminal,
+        getSafeTerminalWidth,
+        getTerminalClearSequence,
         makeFrames,
         drawFrame,
         resolveHasDarkBackground

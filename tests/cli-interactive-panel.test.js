@@ -10,9 +10,39 @@ const {
         buildPrimaryCommands,
         getVisibleCommands,
         truncateText,
-        shouldEnableBannerPulse
+        shouldEnableBannerPulse,
+        getPanelWidth,
+        getMaxCommandRows,
+        shouldUseCompactPanelLayout
     }
 } = require('../src/ui/interactive-panel');
+const {
+    __private: {
+        drawTextBanner,
+        getSafeTerminalWidth,
+        getTerminalClearSequence
+    }
+} = require('../src/ui/cli-theme');
+
+function stripAnsi(value) {
+    return String(value).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+function captureConsoleLogs(callback) {
+    const originalLog = console.log;
+    const logs = [];
+    console.log = (...args) => {
+        logs.push(args.join(' '));
+    };
+
+    try {
+        callback();
+    } finally {
+        console.log = originalLog;
+    }
+
+    return logs;
+}
 
 function createMockCommand(name, description) {
     return {
@@ -136,6 +166,80 @@ function run() {
         shouldEnableBannerPulse({ isTTY: true, platform: 'linux', disableAnimation: '1' }),
         false,
         'pulse should respect disable animation env'
+    );
+
+    assert.strictEqual(
+        getSafeTerminalWidth(207, 'win32'),
+        206,
+        'Windows rendering should stay one cell inside the reported terminal width'
+    );
+    assert.strictEqual(
+        getSafeTerminalWidth(207, 'linux'),
+        207,
+        'Non-Windows rendering can use the reported terminal width'
+    );
+    assert.strictEqual(
+        getTerminalClearSequence('win32'),
+        '\x1b[1;1H\x1b[0J',
+        'Windows clear sequence should move home before clearing below'
+    );
+    assert.strictEqual(
+        getPanelWidth({ columns: 207, platform: 'win32' }),
+        128,
+        'wide Windows panel should still respect the 128-column design cap'
+    );
+    assert.strictEqual(
+        getPanelWidth({ columns: 60, platform: 'win32' }),
+        59,
+        'narrow Windows panel should not force the old 76-column minimum'
+    );
+    assert.strictEqual(
+        shouldUseCompactPanelLayout({ rows: 50, platform: 'win32' }),
+        true,
+        'Windows terminals under 64 rows should use the compact panel header'
+    );
+    assert.strictEqual(
+        shouldUseCompactPanelLayout({ rows: 50, platform: 'linux' }),
+        false,
+        'non-Windows terminals at 50 rows can keep the full banner'
+    );
+    assert.strictEqual(
+        getMaxCommandRows({ rows: 50, compact: true }),
+        16,
+        'compact panel should leave enough room for the command list at 50 rows'
+    );
+    assert.strictEqual(
+        getMaxCommandRows({ rows: 50, compact: false }),
+        3,
+        'full banner layout should not overflow a 50-row terminal'
+    );
+
+    const bannerLogs = captureConsoleLogs(() => {
+        drawTextBanner(
+            [
+                ' +------+ ',
+                ' | █████████████████████████████████████████████████████████████████████████████ | ',
+                ' | INTELLIGENT OLLAMA MODEL SELECTOR | ',
+                ' +------+ '
+            ],
+            { columns: 207, platform: 'win32', hasDarkBackground: true }
+        );
+    }).map(stripAnsi);
+
+    assert.ok(bannerLogs.length > 0, 'banner layout test should capture rendered lines');
+    assert.ok(
+        bannerLogs.every((line) => line.length <= 206),
+        `Windows banner lines should not exceed safe width: ${bannerLogs.map((line) => line.length).join(', ')}`
+    );
+    assert.strictEqual(
+        bannerLogs[0].length,
+        206,
+        'top border should match safe Windows width'
+    );
+    assert.strictEqual(
+        bannerLogs[bannerLogs.length - 1].length,
+        206,
+        'bottom border should match safe Windows width'
     );
 
     console.log('cli-interactive-panel.test.js: OK');

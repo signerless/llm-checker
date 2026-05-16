@@ -1556,10 +1556,21 @@ class DeterministicModelSelector {
         const S = speedEstimate.score;
         const F = this.calculateFitScore(requiredGB, budget);
         const C = this.calculateContextScore(model, targetCtx);
+        const capacityAdjustment = this.calculateHighCapacitySizeAdjustment(
+            hardware,
+            model,
+            budget,
+            category,
+            optimizeFor
+        );
 
         // 4. Calculate final weighted score
         const weights = this.getScoringWeights(category, optimizeFor);
-        const score = Math.round((Q * weights[0] + S * weights[1] + F * weights[2] + C * weights[3]) * 10) / 10;
+        const weightedScore = Q * weights[0] + S * weights[1] + F * weights[2] + C * weights[3];
+        const score = Math.max(
+            0,
+            Math.min(100, Math.round((weightedScore + capacityAdjustment.score) * 10) / 10)
+        );
 
         // 5. Build rationale
         const rationale = this.buildRationale(
@@ -1572,7 +1583,8 @@ class DeterministicModelSelector {
             Q,
             S,
             memoryEstimate,
-            speedEstimate
+            speedEstimate,
+            capacityAdjustment
         );
 
         return {
@@ -1599,7 +1611,7 @@ class DeterministicModelSelector {
                 runtime: speedEstimate.runtime,
                 moe: speedEstimate.moe
             },
-            components: { Q, S, F, C }
+            components: { Q, S, F, C, H: capacityAdjustment.score }
         };
     }
 
@@ -1858,6 +1870,9 @@ class DeterministicModelSelector {
         if (hardware.cpu.cores >= 8) base *= 1.1;
         if (hardware.acceleration.supports_metal || hardware.acceleration.supports_cuda) base *= 1.2;
 
+        const acceleratorScale = this.calculateAcceleratorSpeedScale(hardware, backend);
+        base *= acceleratorScale.multiplier;
+
         const normalizedRuntime = normalizeMoERuntime(runtime);
         const moe = estimateMoESpeedMultiplier({
             model,
@@ -1880,7 +1895,46 @@ class DeterministicModelSelector {
             estimatedTPS,
             score,
             runtime: normalizedRuntime,
-            moe
+            moe,
+            acceleratorScale
+        };
+    }
+
+    calculateAcceleratorSpeedScale(hardware = {}, backend = 'cpu_x86') {
+        if (backend !== 'cuda' && backend !== 'metal') {
+            return { multiplier: 1, reason: null };
+        }
+
+        const gpu = hardware.gpu || {};
+        const memory = hardware.memory || {};
+        const toFiniteNumber = (value, fallback = 0) => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : fallback;
+        };
+        const vramGB = toFiniteNumber(gpu.vramGB ?? gpu.vram ?? gpu.totalVRAM, 0);
+        const ramGB = toFiniteNumber(memory.totalGB ?? memory.total, 0);
+        const acceleratorMemoryGB = backend === 'metal' && Boolean(gpu.unified)
+            ? Math.max(vramGB, ramGB)
+            : vramGB;
+        const gpuCount = Math.max(1, toFiniteNumber(gpu.gpuCount ?? gpu.count, 1));
+
+        let multiplier = 1;
+        if (acceleratorMemoryGB >= 160) multiplier *= 3.2;
+        else if (acceleratorMemoryGB >= 96) multiplier *= 2.6;
+        else if (acceleratorMemoryGB >= 80) multiplier *= 2.2;
+        else if (acceleratorMemoryGB >= 48) multiplier *= 1.7;
+        else if (acceleratorMemoryGB >= 24) multiplier *= 1.15;
+
+        if (backend === 'cuda' && gpuCount > 1) {
+            multiplier *= Math.min(1.8, 1 + ((gpuCount - 1) * 0.25));
+        }
+
+        const rounded = Math.round(multiplier * 100) / 100;
+        return {
+            multiplier: rounded,
+            reason: rounded > 1
+                ? `${backend.toUpperCase()} capacity x${rounded}`
+                : null
         };
     }
 
@@ -1895,6 +1949,68 @@ class DeterministicModelSelector {
         if (model.ctxMax >= targetCtx) return 100;
         if (model.ctxMax >= targetCtx * 0.5) return 70;
         return 0; // Should be filtered out earlier
+    }
+
+    getHighCapacitySizeTarget(budgetGB, hardware = {}) {
+        if (!Number.isFinite(budgetGB) || budgetGB < 32) return null;
+
+        const isMultiGPU = Boolean(hardware?.gpu?.isMultiGPU);
+        if (budgetGB >= 128) return { minParamsB: 30, sweetSpotParamsB: 70 };
+        if (budgetGB >= 80) return { minParamsB: 30, sweetSpotParamsB: 70 };
+        if (budgetGB >= 48) return { minParamsB: 20, sweetSpotParamsB: 34 };
+        if (budgetGB >= 32 && isMultiGPU) return { minParamsB: 30, sweetSpotParamsB: 30 };
+        if (budgetGB >= 32) return { minParamsB: 13, sweetSpotParamsB: 30 };
+        return null;
+    }
+
+    calculateHighCapacitySizeAdjustment(hardware, model, budgetGB, category, optimizeFor = 'balanced') {
+        const objective = this.normalizeOptimizationObjective(optimizeFor);
+        if (objective === 'speed' || category === 'embeddings') {
+            return { score: 0, reason: null };
+        }
+
+        const normalizedHardware = this.normalizeHardwareProfile(hardware || {});
+        const tier = this.mapHardwareTier(normalizedHardware);
+        const highCapacityTiers = new Set(['very_high', 'ultra_high', 'extreme', 'flagship']);
+        const target = this.getHighCapacitySizeTarget(budgetGB, normalizedHardware);
+        const hasHighCapacitySignal =
+            Boolean(target) ||
+            highCapacityTiers.has(tier) ||
+            Number(normalizedHardware?.gpu?.vramGB || 0) >= 48;
+
+        if (!hasHighCapacitySignal || !target) {
+            return { score: 0, reason: null };
+        }
+
+        const params = this.parseBillionsValue(model?.paramsB);
+        if (!Number.isFinite(params) || params <= 0) {
+            return { score: 0, reason: null };
+        }
+
+        const categoryMultiplier = category === 'multimodal' ? 0.6 : 1;
+        if (params < target.minParamsB) {
+            const deficitRatio = (target.minParamsB - params) / target.minParamsB;
+            const penalty = -Math.min(24, deficitRatio * 24) * categoryMultiplier;
+            const roundedPenalty = Math.round(penalty * 10) / 10;
+            return {
+                score: roundedPenalty,
+                reason: `below ${target.minParamsB}B high-capacity floor`
+            };
+        }
+
+        const distanceRatio = Math.min(
+            1,
+            Math.abs(params - target.sweetSpotParamsB) / target.sweetSpotParamsB
+        );
+        const bonus = Math.max(0, 12 * (1 - distanceRatio)) * categoryMultiplier;
+        const roundedBonus = Math.round(bonus * 10) / 10;
+
+        return {
+            score: roundedBonus,
+            reason: roundedBonus > 0
+                ? `${target.sweetSpotParamsB}B high-capacity target`
+                : null
+        };
     }
 
     estimatePracticalMaxParamsForBudget(budgetGB) {
@@ -1994,7 +2110,19 @@ class DeterministicModelSelector {
         return highCapacityPromoted;
     }
 
-    buildRationale(hardware, model, quant, requiredGB, budget, category, Q, S, memoryEstimate = null, speedEstimate = null) {
+    buildRationale(
+        hardware,
+        model,
+        quant,
+        requiredGB,
+        budget,
+        category,
+        Q,
+        S,
+        memoryEstimate = null,
+        speedEstimate = null,
+        capacityAdjustment = null
+    ) {
         const parts = [];
         
         // Memory fit
@@ -2026,6 +2154,14 @@ class DeterministicModelSelector {
             const runtimeLabel = speedEstimate.runtime || 'ollama';
             const multiplier = Number(speedEstimate.moe.multiplier || 1).toFixed(2);
             parts.push(`MoE speed x${multiplier} (${runtimeLabel})`);
+        }
+
+        if (speedEstimate?.acceleratorScale?.multiplier > 1) {
+            parts.push(speedEstimate.acceleratorScale.reason);
+        }
+
+        if (capacityAdjustment?.reason) {
+            parts.push(capacityAdjustment.reason);
         }
         
         // Size sweet spot

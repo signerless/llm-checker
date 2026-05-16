@@ -4,7 +4,14 @@ const chalk = require('chalk');
 const inquirer = require('inquirer');
 const readline = require('readline');
 const { spawn } = require('child_process');
-const { animateBanner, renderPersistentBanner } = require('./cli-theme');
+const {
+    animateBanner,
+    renderPersistentBanner,
+    __private: {
+        clearTerminal,
+        getSafeTerminalWidth
+    }
+} = require('./cli-theme');
 
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
@@ -31,22 +38,49 @@ const REQUIRED_ARG_PROMPTS = {
     ]
 };
 
-function clearTerminal() {
-    if (!process.stdout.isTTY) return;
-
-    try {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-    } catch {
-        process.stdout.write('\x1b[2J\x1b[H');
-    }
-}
-
 function truncateText(text, maxLength) {
     const value = String(text || '');
     if (value.length <= maxLength) return value;
     if (maxLength <= 3) return value.slice(0, maxLength);
     return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function getPanelWidth({
+    columns = process.stdout.columns,
+    platform = process.platform
+} = {}) {
+    const safeWidth = getSafeTerminalWidth(columns, platform) || 100;
+    return Math.max(40, Math.min(safeWidth, 128));
+}
+
+function getTerminalRows(rows = process.stdout.rows) {
+    const value = Number(rows);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.floor(value);
+}
+
+function shouldUseCompactPanelLayout({
+    rows = process.stdout.rows,
+    platform = process.platform,
+    forceFullBanner = process.env.LLM_CHECKER_FORCE_FULL_PANEL_BANNER
+} = {}) {
+    if (forceFullBanner === '1') return false;
+
+    const terminalRows = getTerminalRows(rows);
+    if (!terminalRows) return false;
+
+    if (platform === 'win32' && terminalRows < 64) return true;
+    return terminalRows < 46;
+}
+
+function getMaxCommandRows({
+    rows = process.stdout.rows,
+    compact = false
+} = {}) {
+    const terminalRows = getTerminalRows(rows) || 40;
+    const reservedRows = compact ? 9 : 47;
+    const minimumRows = compact ? 4 : 3;
+    return Math.max(minimumRows, Math.min(16, terminalRows - reservedRows));
 }
 
 function tokenizeArgString(rawInput = '') {
@@ -252,10 +286,16 @@ function getCommandWindow(commands, selectedIndex, maxRows) {
 
 function renderPanel(state, catalog, primaryCommands, options = {}) {
     const colorPhase = Number.isFinite(options.colorPhase) ? options.colorPhase : 0;
-    const width = Math.max(76, Math.min(process.stdout.columns || 100, 128));
+    const platform = options.platform || process.platform;
+    const rows = options.rows ?? process.stdout.rows;
+    const columns = options.columns ?? process.stdout.columns;
+    const compact = typeof options.compact === 'boolean'
+        ? options.compact
+        : shouldUseCompactPanelLayout({ rows, platform });
+    const width = getPanelWidth({ columns, platform });
     const separator = '-'.repeat(width - 2);
     const visibleCommands = getVisibleCommands(state, catalog, primaryCommands);
-    const maxCommandRows = Math.max(6, Math.min(16, (process.stdout.rows || 40) - 28));
+    const maxCommandRows = getMaxCommandRows({ rows, compact });
     const selectedIndex =
         visibleCommands.length > 0
             ? Math.max(0, Math.min(state.selected, visibleCommands.length - 1))
@@ -265,11 +305,17 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
     }
     const commandWindow = getCommandWindow(visibleCommands, selectedIndex, maxCommandRows);
 
-    clearTerminal();
-    renderPersistentBanner(undefined, { colorPhase });
-    console.log('');
+    clearTerminal({ platform });
+    if (compact) {
+        console.log(chalk.cyan.bold('llm-checker | Interactive command panel'));
+    } else {
+        renderPersistentBanner(undefined, { colorPhase, columns, platform });
+        console.log('');
+    }
     console.log(chalk.gray(separator));
-    const inputLabel = state.paletteOpen ? `/${state.query}` : '';
+    const inputLabel = state.paletteOpen
+        ? truncateText(`/${state.query}`, Math.max(1, width - 4))
+        : '';
     console.log(`${chalk.white.bold('>')} ${chalk.white(inputLabel)}${chalk.gray('|')}`);
     console.log(chalk.gray(separator));
 
@@ -282,8 +328,8 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
     if (visibleCommands.length === 0) {
         console.log(chalk.yellow('No commands match your query.'));
     } else {
-        const commandCol = 26;
-        const descCol = Math.max(18, width - commandCol - 8);
+        const commandCol = Math.min(26, Math.max(12, Math.floor(width * 0.36)));
+        const descCol = Math.max(8, width - commandCol - 2);
         const hiddenAbove = commandWindow.start;
         const hiddenBelow = visibleCommands.length - commandWindow.end;
 
@@ -314,7 +360,7 @@ function renderPanel(state, catalog, primaryCommands, options = {}) {
     console.log('');
     console.log(chalk.gray(separator));
     console.log(
-        chalk.gray('up/down navigate | Enter run | / open all | Esc close all | q exit')
+        chalk.gray(truncateText('up/down navigate | Enter run | / open all | Esc close all | q exit', width))
     );
 }
 
@@ -434,7 +480,9 @@ async function launchInteractivePanel(options) {
         renderPanel(state, catalog, primaryCommands, { colorPhase: state.colorPhase });
     };
 
-    await animateBanner({ text: appName });
+    if (!shouldUseCompactPanelLayout()) {
+        await animateBanner({ text: appName });
+    }
     renderNow();
 
     readline.emitKeypressEvents(process.stdin);
@@ -596,6 +644,9 @@ module.exports = {
         buildPrimaryCommands,
         getVisibleCommands,
         truncateText,
-        shouldEnableBannerPulse
+        shouldEnableBannerPulse,
+        getPanelWidth,
+        getMaxCommandRows,
+        shouldUseCompactPanelLayout
     }
 };
