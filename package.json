@@ -42,19 +42,19 @@
     "postinstall": "echo 'LLM Checker installed. Run: llm-checker hw-detect'"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "inquirer": "^8.2.6",
     "node-fetch": "^2.7.0",
     "ora": "^5.4.1",
-    "systeminformation": "^5.31.1",
+    "systeminformation": "^5.31.6",
     "table": "^6.8.1",
-    "yaml": "^2.8.1",
+    "yaml": "^2.9.0",
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
-    "sql.js": "^1.14.0"
+    "sql.js": "^1.14.1"
   },
   "overrides": {
     "ajv": "^8.18.0",
@@ -64,8 +64,8 @@
     "test-exclude": "^7.0.1"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "jest": "^30.2.0"
+    "@types/node": "^20.19.41",
+    "jest": "^30.4.2"
   },
   "keywords": [
     "llm",
