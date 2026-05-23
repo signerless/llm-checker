@@ -67,6 +67,18 @@ function run() {
         'recommend help should expose calibrated routing option'
     );
 
+    const smartRecommendHelp = runCli(['smart-recommend', '--help']);
+    const smartRecommendHelpOutput = stripAnsi(smartRecommendHelp.stdout);
+    assert.strictEqual(smartRecommendHelp.status, 0, stripAnsi(smartRecommendHelp.stderr || smartRecommendHelp.stdout));
+    assert.ok(
+        smartRecommendHelpOutput.includes('Experimental recommendations using the alternate scoring engine'),
+        'smart-recommend help should label the command as experimental'
+    );
+    assert.ok(
+        smartRecommendHelpOutput.includes('Use "llm-checker recommend" for canonical package recommendations'),
+        'smart-recommend help should point users to canonical recommend output'
+    );
+
     const calibrateHelp = runCli(['calibrate', '--help']);
     assert.strictEqual(calibrateHelp.status, 0, stripAnsi(calibrateHelp.stderr || calibrateHelp.stdout));
     assert.ok(

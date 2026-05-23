@@ -58,7 +58,7 @@ const calibrationManager = new CalibrationManager();
 
 const COMMAND_HEADER_LABELS = {
     'hw-detect': 'Hardware Detection',
-    'smart-recommend': 'Smart Recommend',
+    'smart-recommend': 'Smart Recommend (Experimental)',
     search: 'Model Search',
     sync: 'Database Sync',
     'mcp-setup': 'Claude MCP Setup',
@@ -77,6 +77,19 @@ const COMMAND_HEADER_LABELS = {
 function showAsciiArt(command) {
     const label = COMMAND_HEADER_LABELS[command] || command;
     renderCommandHeader(label);
+}
+
+const RECOMMENDATION_COMMAND_NOTES = {
+    check: 'Compatibility report: shows hardware fit first. Use `llm-checker recommend` for canonical ranked model picks.',
+    recommend: 'Canonical recommendations: deterministic hardware-aware selector by category.',
+    'smart-recommend': 'Experimental scoring engine: results can differ from `recommend` while this path is being unified.'
+};
+
+function displayRecommendationCommandNote(command) {
+    const note = RECOMMENDATION_COMMAND_NOTES[command];
+    if (!note) return;
+    console.log(chalk.gray(`Recommendation mode: ${note}`));
+    console.log('');
 }
 
 // Function to search Ollama models by use case
@@ -3295,6 +3308,7 @@ Policy scope:
     )
     .action(async (options) => {
         showAsciiArt('check');
+        displayRecommendationCommandNote('check');
         try {
             // Use verbose progress unless explicitly disabled
             const verboseEnabled = options.verbose !== false;
@@ -3851,6 +3865,7 @@ Calibrated routing examples:
     )
     .action(async (options) => {
         showAsciiArt('recommend');
+        displayRecommendationCommandNote('recommend');
         try {
             const verboseEnabled = options.verbose !== false;
             const checker = new (getLLMChecker())({ verbose: verboseEnabled });
@@ -4806,7 +4821,7 @@ program
 
 program
     .command('smart-recommend')
-    .description('Get intelligent model recommendations using the new scoring engine')
+    .description('Experimental recommendations using the alternate scoring engine')
     .option('-u, --use-case <case>', 'Optimize for use case', 'general')
     .option('-l, --limit <n>', 'Maximum number of recommendations', '5')
     .option('--target-tps <n>', 'Target tokens per second', '20')
@@ -4814,8 +4829,19 @@ program
     .option('--include-vision', 'Include vision/multimodal models')
     .option('--include-embeddings', 'Include embedding models')
     .option('-j, --json', 'Output as JSON')
+    .addHelpText(
+        'after',
+        `
+Recommendation engine note:
+  smart-recommend is experimental and may intentionally differ from recommend.
+  Use "llm-checker recommend" for canonical package recommendations.
+`
+    )
     .action(async (options) => {
-        if (!options.json) showAsciiArt('smart-recommend');
+        if (!options.json) {
+            showAsciiArt('smart-recommend');
+            displayRecommendationCommandNote('smart-recommend');
+        }
         const SyncManager = require('../src/data/sync-manager');
         const IntelligentSelector = require('../src/models/intelligent-selector');
         const UnifiedDetector = require('../src/hardware/unified-detector');

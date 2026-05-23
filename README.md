@@ -573,6 +573,15 @@ This makes integrated GPUs visible even when the selected runtime backend is sti
 llm-checker recommend
 ```
 
+Use `recommend` as the canonical model-picking command. Other recommendation-like
+commands have narrower roles:
+
+| Command | Role | Expected to match `recommend`? |
+|---------|------|--------------------------------|
+| `recommend` | Canonical deterministic model recommendations by category | Yes, this is the reference output |
+| `check` | Hardware compatibility report with a compatibility-oriented recommendation card | Not exactly; it prioritizes fit/reporting context |
+| `smart-recommend` | Experimental alternate scoring engine used while scoring ideas are evaluated | No; it may differ until it is unified or retired |
+
 Use optimization profiles to steer ranking by intent:
 
 ```bash
@@ -695,7 +704,7 @@ Three scoring systems are available, each optimized for different workflows:
 | `reasoning` | 60% | 10% | 20% | 10% |
 | `multimodal` | 50% | 15% | 20% | 15% |
 
-**Scoring Engine** (used by `smart-recommend` and `search`):
+**Scoring Engine** (experimental &mdash; used by `smart-recommend` and `search`):
 
 | Use Case | Quality | Speed | Fit | Context |
 |----------|:-------:|:-----:|:---:|:-------:|
