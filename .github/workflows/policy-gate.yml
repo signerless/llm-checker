@@ -63,3 +63,28 @@ jobs:
           name: policy-audit-reports
           path: .ci-policy/reports
           if-no-files-found: warn
+
+  windows-ui-smoke:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Windows UI smoke tests
+        shell: pwsh
+        run: |
+          $env:NO_COLOR = '1'
+          $env:LLM_CHECKER_DISABLE_ANIMATION = '1'
+          node tests/cli-interactive-panel.test.js
+          node tests/ui-cli-smoke.test.js
+          node tests/cpu-detector-windows-fallback.test.js
