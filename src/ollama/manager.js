@@ -8,8 +8,11 @@ class OllamaManager extends EventEmitter {
         this.modelQueue = [];
         this.isProcessing = false;
         this.maxConcurrent = options.maxConcurrent || 1;
-        this.autoCleanup = options.autoCleanup || true;
+        // `options.autoCleanup || true` was always true, so passing { autoCleanup:
+        // false } could not actually disable the background timer.
+        this.autoCleanup = options.autoCleanup !== undefined ? Boolean(options.autoCleanup) : true;
         this.cleanupInterval = options.cleanupInterval || 30 * 60 * 1000; // 30 minutes
+        this._cleanupTimer = null;
 
         if (this.autoCleanup) {
             this.startCleanupTimer();
@@ -295,7 +298,7 @@ class OllamaManager extends EventEmitter {
     }
 
     startCleanupTimer() {
-        setInterval(async () => {
+        this._cleanupTimer = setInterval(async () => {
             try {
                 const analysis = await this.cleanupUnusedModels();
                 if (analysis.cleanupCandidates > 0) {
@@ -305,6 +308,11 @@ class OllamaManager extends EventEmitter {
                 this.emit('error', error);
             }
         }, this.cleanupInterval);
+        // Don't keep the event loop (and thus the CLI process) alive just for the
+        // periodic cleanup timer.
+        if (this._cleanupTimer && typeof this._cleanupTimer.unref === 'function') {
+            this._cleanupTimer.unref();
+        }
     }
 
     async getStatistics() {
@@ -348,6 +356,10 @@ class OllamaManager extends EventEmitter {
 
     destroy() {
         // Clean up resources
+        if (this._cleanupTimer) {
+            clearInterval(this._cleanupTimer);
+            this._cleanupTimer = null;
+        }
         this.removeAllListeners();
         this.modelQueue = [];
         this.isProcessing = false;

@@ -213,7 +213,9 @@ class OllamaClient {
                 return [];
             }
 
-            const models = data.models.map(model => this.parseOllamaModel(model));
+            const models = data.models
+                .map(model => this.parseOllamaModel(model))
+                .filter(Boolean);
             return models;
         } catch (error) {
             throw new Error(`Failed to fetch local models: ${error.message}`);
@@ -335,8 +337,13 @@ class OllamaClient {
         const sizeBytes = ollamaModel.size || 0;
         const sizeGB = Math.round(sizeBytes / (1024 ** 3) * 10) / 10;
 
+        // Guard against a malformed /api/tags entry missing its name: a single bad
+        // entry must not crash the whole local-model list (getLocalModels wraps this
+        // in one try/catch). Callers filter out null entries.
+        const rawName = ollamaModel.name || ollamaModel.model || '';
+        if (!rawName) return null;
 
-        const [modelFamily, version] = ollamaModel.name.split(':');
+        const [modelFamily, version] = rawName.split(':');
         const details = ollamaModel.details || {};
 
 
@@ -355,7 +362,7 @@ class OllamaClient {
         }
 
         return {
-            name: ollamaModel.name,
+            name: rawName,
             displayName: `${modelFamily} ${version || 'latest'}`,
             family: details.family || modelFamily.toLowerCase(),
             size: estimatedParams,
@@ -395,40 +402,63 @@ class OllamaClient {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let receivedSuccess = false;
+            let buffer = '';
+
+            // The pull stream is NDJSON. A single status object frequently spans two
+            // TCP reads, so we must keep a carry-over buffer across reads (and decode
+            // with { stream: true } so a multi-byte UTF-8 char split across a chunk
+            // boundary isn't corrupted) instead of parsing each chunk in isolation.
+            const handleData = (data) => {
+                if (onProgress && (data.status || data.completed !== undefined)) {
+                    onProgress({
+                        status: data.status,
+                        completed: data.completed,
+                        total: data.total,
+                        percent: data.total ? Math.round((data.completed / data.total) * 100) : 0
+                    });
+                }
+                if (data.status === 'success') {
+                    receivedSuccess = true;
+                    return true;
+                }
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                return false;
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n').filter(line => line.trim());
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // keep the trailing partial line
 
-                for (const line of lines) {
+                for (const rawLine of lines) {
+                    const line = rawLine.trim();
+                    if (!line) continue;
+
+                    let data;
                     try {
-                        const data = JSON.parse(line);
-
-                        if (onProgress && (data.status || data.completed !== undefined)) {
-                            onProgress({
-                                status: data.status,
-                                completed: data.completed,
-                                total: data.total,
-                                percent: data.total ? Math.round((data.completed / data.total) * 100) : 0
-                            });
-                        }
-
-                        if (data.status === 'success') {
-                            receivedSuccess = true;
-                            return { success: true, model: modelName };
-                        }
-
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-                    } catch (e) {
-                        if (e.message && !e.message.includes('Unexpected')) {
-                            throw e; // Re-throw real errors, skip JSON parse errors
-                        }
+                        data = JSON.parse(line);
+                    } catch {
+                        continue; // skip unparseable lines structurally (no message matching)
                     }
+
+                    if (handleData(data)) {
+                        return { success: true, model: modelName };
+                    }
+                }
+            }
+
+            // Flush a complete final line left in the buffer after the stream ends.
+            const tail = buffer.trim();
+            if (tail) {
+                let data = null;
+                try { data = JSON.parse(tail); } catch { data = null; }
+                if (data && handleData(data)) {
+                    return { success: true, model: modelName };
                 }
             }
 
@@ -721,7 +751,17 @@ class OllamaClient {
             const handleLine = (line) => {
                 if (!line.trim()) return;
 
-                const data = JSON.parse(line);
+                // Skip any line that isn't valid JSON (a partial/truncated final
+                // line when the connection is cut, or a proxy-injected keep-alive)
+                // instead of throwing — an unparseable trailing line must not discard
+                // all of the content already accumulated from the stream.
+                let data;
+                try {
+                    data = JSON.parse(line);
+                } catch {
+                    return;
+                }
+
                 const chunk = data?.message?.content || '';
                 if (chunk) {
                     content += chunk;

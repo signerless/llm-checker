@@ -60,8 +60,26 @@ class EnhancedOllamaClient extends OllamaClient {
                 }
             };
         } catch (error) {
-            console.error('Error in enhanced compatibility check:', error);
-            return await this.getCompatibleModels();
+            // Degrade gracefully when the enhanced scrape fails (e.g. ollama.com is
+            // unreachable). The previous fallback called this.getCompatibleModels(),
+            // which exists on neither this class nor its parent, so the catch itself
+            // threw "is not a function" and masked the real (often network) error.
+            console.error('Error in enhanced compatibility check:', error.message);
+            let installed = 0;
+            try {
+                const localModels = await this.getLocalModels();
+                installed = Array.isArray(localModels) ? localModels.length : 0;
+            } catch (_) {
+                installed = 0;
+            }
+            return {
+                installed,
+                compatible: 0,
+                compatible_models: [],
+                recommendations: [],
+                total_available: 0,
+                error: error.message
+            };
         }
     }
 
