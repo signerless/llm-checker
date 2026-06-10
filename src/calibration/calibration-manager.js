@@ -320,7 +320,10 @@ class CalibrationManager {
                 NO_COLOR: '1'
             }
         });
-        const latencyMs = Number((process.hrtime.bigint() - started) / 1_000_000n);
+        // Convert ns->ms in floating point: dividing the BigInt first floored away
+        // all sub-millisecond precision (a 0.5 ms call read as 0 ms, skewing p50/p95,
+        // ttft and tokens/sec). The ns diff is well within Number's safe range.
+        const latencyMs = Number(process.hrtime.bigint() - started) / 1_000_000;
 
         if (result.error) {
             const error = new Error(result.error.message || 'Failed to execute runtime prompt.');
