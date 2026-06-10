@@ -239,6 +239,10 @@ async function testUnifiedWindowsFallbackGpuDetection() {
     const originalGraphics = si.graphics;
     const originalMem = si.mem;
 
+    // Hermetic: simulate a Windows host, so the Linux-only lspci augmentation must
+    // not run and leak the real GPUs of the machine executing the suite.
+    detector.detectLinuxLspciGpus = () => [];
+
     si.graphics = async () => ({
         controllers: [
             {
@@ -355,6 +359,54 @@ function testUnifiedLinuxLspciHybridParsing() {
     assert.ok(
         parsed.some((gpu) => gpu.name.toLowerCase().includes('780m') && gpu.type === 'integrated'),
         'Hybrid parser should preserve integrated Radeon 780M as integrated'
+    );
+}
+
+function testUnresolvedPciGpusAreCleanedAndDeduped() {
+    const detector = new UnifiedDetector();
+
+    // lspci reports new cards (here a Blackwell RTX 5070 and an AMD Raphael iGPU)
+    // as a bare "Device [vendor:device]" string. The parser must NOT emit the raw
+    // lspci line as the GPU name, and must resolve / classify them correctly.
+    const parsed = detector.parseLinuxLspciGpus(`
+01:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device [10de:2f04] (rev a1)
+0c:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Device [1002:13c0] (rev c2)
+`);
+
+    assert.strictEqual(parsed.length, 2, `Expected exactly 2 parsed GPUs, got ${parsed.length}`);
+    for (const gpu of parsed) {
+        assert.ok(
+            !/vga compatible controller|\[0300\]|\[10de:|\[1002:/i.test(gpu.name),
+            `Parsed GPU name must not contain raw lspci text, got: ${gpu.name}`
+        );
+    }
+
+    const nvidia = parsed.find((g) => g.vendor === 'NVIDIA');
+    assert.ok(nvidia && nvidia.type === 'dedicated', 'NVIDIA card should be dedicated');
+    assert.strictEqual(nvidia.pciId, '2f04', 'NVIDIA card should carry its PCI device id');
+    assert.ok(/rtx\s*5070/i.test(nvidia.name), `NVIDIA card should resolve to RTX 5070, got: ${nvidia.name}`);
+
+    const amd = parsed.find((g) => g.vendor === 'AMD');
+    assert.ok(amd && amd.type === 'integrated', 'AMD Raphael device should be classified integrated');
+
+    // The same physical card surfaced by different sources must share one match key
+    // so it is not counted multiple times in the GPU inventory.
+    assert.strictEqual(
+        detector.getGpuMatchKey('NVIDIA GeForce RTX 5070'),
+        detector.getGpuMatchKey('Device 2f04'),
+        'systeminformation "Device 2f04" must dedupe against the named RTX 5070'
+    );
+    assert.strictEqual(
+        detector.getGpuMatchKey('NVIDIA GeForce RTX 5070'),
+        detector.getGpuMatchKey(nvidia.name),
+        'lspci-resolved name must dedupe against the named RTX 5070'
+    );
+
+    // Unknown device ids still degrade gracefully to a stable cross-source key.
+    assert.strictEqual(
+        detector.getGpuMatchKey('Device 9f9f'),
+        detector.getGpuMatchKey('NVIDIA Corporation Device [10de:9f9f]'),
+        'Unknown PCI ids should still produce a consistent pci:<id> match key'
     );
 }
 
@@ -618,6 +670,7 @@ async function run() {
     await testUnifiedWindowsFallbackGpuDetection();
     await testUnifiedWindowsFallbackIgnoresRemoteDisplayAdapter();
     testUnifiedLinuxLspciHybridParsing();
+    testUnresolvedPciGpusAreCleanedAndDeduped();
     await testHardwareDetectorUsesGenericFallbackGpuWhenPrimaryIsCpu();
     testUnifiedSummaryPreservesIntegratedGpuOnHybridDedicatedSystem();
     testWindowsIntegratedGpuReportsVulkanAssistPath();
