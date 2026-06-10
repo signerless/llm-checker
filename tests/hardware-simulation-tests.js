@@ -200,7 +200,7 @@ const EXPECTED_TPS_RANGES = {
         '7b': [4, 7],        // Baseline: 5 TPS
         '13b': [2, 4],       // ~0.4x baseline
         '32b': [1, 2],       // Very slow
-        '70b': [1, 1],       // Barely runs
+        '70b': [1, 3],       // Barely runs (non-degenerate band)
     }
 };
 
@@ -269,17 +269,24 @@ class HardwareSimulationTest {
             ['rtx4090', HARDWARE_PROFILES.rtx4090, 'llama3.2-3b', MODEL_VARIANTS['llama3.2-3b'], EXPECTED_TPS_RANGES.rtx4090['3b']],
             ['rtx4090', HARDWARE_PROFILES.rtx4090, 'llama3-7b', MODEL_VARIANTS['llama3-7b'], EXPECTED_TPS_RANGES.rtx4090['7b']],
             ['rtx4090', HARDWARE_PROFILES.rtx4090, 'llama3.1-13b', MODEL_VARIANTS['llama3.1-13b'], EXPECTED_TPS_RANGES.rtx4090['13b']],
+            ['rtx4090', HARDWARE_PROFILES.rtx4090, 'deepseek-r1-32b', MODEL_VARIANTS['deepseek-r1-32b'], EXPECTED_TPS_RANGES.rtx4090['32b']],
+            ['rtx4090', HARDWARE_PROFILES.rtx4090, 'llama3.1-70b', MODEL_VARIANTS['llama3.1-70b'], EXPECTED_TPS_RANGES.rtx4090['70b']],
 
             // M4 Pro tests
             ['m4Pro', HARDWARE_PROFILES.m4Pro, 'tinyllama-1b', MODEL_VARIANTS['tinyllama-1b'], EXPECTED_TPS_RANGES.m4Pro['1b']],
             ['m4Pro', HARDWARE_PROFILES.m4Pro, 'llama3.2-3b', MODEL_VARIANTS['llama3.2-3b'], EXPECTED_TPS_RANGES.m4Pro['3b']],
             ['m4Pro', HARDWARE_PROFILES.m4Pro, 'llama3-7b', MODEL_VARIANTS['llama3-7b'], EXPECTED_TPS_RANGES.m4Pro['7b']],
             ['m4Pro', HARDWARE_PROFILES.m4Pro, 'llama3.1-13b', MODEL_VARIANTS['llama3.1-13b'], EXPECTED_TPS_RANGES.m4Pro['13b']],
+            ['m4Pro', HARDWARE_PROFILES.m4Pro, 'deepseek-r1-32b', MODEL_VARIANTS['deepseek-r1-32b'], EXPECTED_TPS_RANGES.m4Pro['32b']],
+            ['m4Pro', HARDWARE_PROFILES.m4Pro, 'llama3.1-70b', MODEL_VARIANTS['llama3.1-70b'], EXPECTED_TPS_RANGES.m4Pro['70b']],
 
             // CPU-only tests
             ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'tinyllama-1b', MODEL_VARIANTS['tinyllama-1b'], EXPECTED_TPS_RANGES.cpuOnly['1b']],
             ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'llama3.2-3b', MODEL_VARIANTS['llama3.2-3b'], EXPECTED_TPS_RANGES.cpuOnly['3b']],
             ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'llama3-7b', MODEL_VARIANTS['llama3-7b'], EXPECTED_TPS_RANGES.cpuOnly['7b']],
+            ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'llama3.1-13b', MODEL_VARIANTS['llama3.1-13b'], EXPECTED_TPS_RANGES.cpuOnly['13b']],
+            ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'deepseek-r1-32b', MODEL_VARIANTS['deepseek-r1-32b'], EXPECTED_TPS_RANGES.cpuOnly['32b']],
+            ['cpuOnly', HARDWARE_PROFILES.cpuOnly, 'llama3.1-70b', MODEL_VARIANTS['llama3.1-70b'], EXPECTED_TPS_RANGES.cpuOnly['70b']],
         ];
 
         for (const [hwName, hardware, modelName, model, expected] of testCases) {
@@ -374,6 +381,9 @@ class HardwareSimulationTest {
             scored.sort((a, b) => b.final - a.final);
 
             const passed = test.check(scored);
+            // Record into this.results too so the summary's Total/Passed cover this
+            // group, not only the TPS tests (otherwise passed+failed != total).
+            this.results.push({ test: test.name, passed });
             if (passed) {
                 this.log(`PASS: ${test.name}`, 'pass');
             } else {
@@ -423,6 +433,7 @@ class HardwareSimulationTest {
             const tolerance = 0.15;
 
             const passed = Math.abs(actualMult - expectedMult) <= tolerance;
+            this.results.push({ test: `Quant ${test.quant}`, passed });
 
             if (passed) {
                 this.log(`PASS: ${test.quant} -> ${tps} TPS (${actualMult.toFixed(2)}x vs expected ${expectedMult}x)`, 'pass');
@@ -485,9 +496,9 @@ class HardwareSimulationTest {
 
         const totalTests = this.results.length;
         const passedTests = this.results.filter(r => r.passed).length;
-        const failedTests = this.failures.length;
+        const failedTests = totalTests - passedTests;
 
-        this.log(`\nTotal TPS tests: ${totalTests}`, 'info');
+        this.log(`\nTotal tests: ${totalTests}`, 'info');
         this.log(`Passed: ${passedTests}`, 'pass');
         this.log(`Failed: ${failedTests}`, failedTests > 0 ? 'fail' : 'pass');
 

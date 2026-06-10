@@ -7,6 +7,11 @@ const { spawnSync } = require('child_process');
 
 const BIN_PATH = path.resolve(__dirname, '..', 'bin', 'enhanced_cli.js');
 
+// Isolate HOME so the spawned CLI resolves its model DB under a throwaway dir
+// (seeded deterministically from the packaged seed) instead of reading whatever
+// ~/.llm-checker the host happens to have.
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-home-'));
+
 function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
 }
@@ -17,7 +22,9 @@ function runCli(args, cwd) {
         encoding: 'utf8',
         env: {
             ...process.env,
-            NO_COLOR: '1'
+            NO_COLOR: '1',
+            HOME: TEST_HOME,
+            USERPROFILE: TEST_HOME
         }
     });
 }

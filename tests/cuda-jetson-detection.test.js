@@ -98,21 +98,28 @@ function testNoFalsePositiveWithoutJetsonHints() {
 }
 
 function testJetsonPlatformMarkerFromNvTegraRelease() {
-    if (process.platform !== 'linux') {
-        return;
+    // isJetsonPlatform() returns false immediately on non-linux platforms, so the
+    // old early-return made this test pass vacuously (zero assertions) on macOS /
+    // Windows CI. Pin process.platform to 'linux' so the /etc/nv_tegra_release
+    // detection path is actually exercised everywhere.
+    const originalDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+
+    try {
+        const detector = new CUDADetector();
+
+        detector.readFileIfExists = (path) => (
+            path === '/etc/nv_tegra_release' ? '# R35 (release), REVISION: 4.1' : null
+        );
+
+        assert.strictEqual(
+            detector.isJetsonPlatform(),
+            true,
+            'Jetson platform should be detected via /etc/nv_tegra_release marker'
+        );
+    } finally {
+        Object.defineProperty(process, 'platform', originalDescriptor);
     }
-
-    const detector = new CUDADetector();
-
-    detector.readFileIfExists = (path) => (
-        path === '/etc/nv_tegra_release' ? '# R35 (release), REVISION: 4.1' : null
-    );
-
-    assert.strictEqual(
-        detector.isJetsonPlatform(),
-        true,
-        'Jetson platform should be detected via /etc/nv_tegra_release marker'
-    );
 }
 
 function testJetsonCudaSupportMarkerFromNvTegraRelease() {

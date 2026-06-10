@@ -11,13 +11,20 @@ function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
 }
 
+// Isolate HOME so the spawned CLI seeds its model DB deterministically from the
+// packaged seed rather than depending on the host's ~/.llm-checker model state
+// (which the fail_count > 0 assertion implicitly relied on being non-empty).
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-home-'));
+
 function runCli(args, cwd) {
     return spawnSync(process.execPath, [BIN_PATH, ...args], {
         cwd,
         encoding: 'utf8',
         env: {
             ...process.env,
-            NO_COLOR: '1'
+            NO_COLOR: '1',
+            HOME: TEST_HOME,
+            USERPROFILE: TEST_HOME
         }
     });
 }
