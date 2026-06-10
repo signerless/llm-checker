@@ -74,3 +74,7 @@ debug.log
 
 # LLM Checker analysis cache
 /.llm-checker-cache/
+
+# Transient feature-probe artifacts (never commit)
+.tmp-feature-check/
+.tmp-*/

@@ -300,6 +300,11 @@ async function testUnifiedWindowsFallbackIgnoresRemoteDisplayAdapter() {
     const originalGraphics = si.graphics;
     const originalMem = si.mem;
 
+    // Keep the test hermetic: this case simulates a Windows host via the mocked
+    // systeminformation controllers below, so the Linux-only lspci augmentation
+    // must not run and leak the real GPUs of the machine executing the suite.
+    detector.detectLinuxLspciGpus = () => [];
+
     si.graphics = async () => ({
         controllers: [
             {

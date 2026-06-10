@@ -77,24 +77,37 @@ function testFallbackToNodeWhenWindowsCommandsUnavailable() {
         throw new Error('command unavailable');
     });
 
-    const expectedCores = os.cpus().length;
-    const expectedSpeed = os.cpus()[0]?.speed || 0;
+    // Pin os.cpus() to a stable snapshot for the duration of this case. The Node
+    // fallback reads os.cpus()[0].speed, and reading the live value twice (once for
+    // the expectation, once inside the detector) is racy: CPU frequency scaling
+    // changes the reported clock between the two reads, which made this assertion
+    // flaky (e.g. 5614 vs 5618 MHz). Both reads now see identical values.
+    const originalCpus = os.cpus;
+    const fakeCpus = Array.from({ length: 8 }, () => ({ model: 'Mock CPU', speed: 3200 }));
+    os.cpus = () => fakeCpus.map((cpu) => ({ ...cpu }));
 
-    const result = withPlatform('win32', () => ({
-        physical: detector.getPhysicalCores(),
-        maxClock: detector.getMaxFrequency()
-    }));
+    try {
+        const expectedCores = os.cpus().length;
+        const expectedSpeed = os.cpus()[0]?.speed || 0;
 
-    assert.strictEqual(
-        result.physical,
-        expectedCores,
-        `Expected Node.js fallback core count (${expectedCores}), got ${result.physical}`
-    );
-    assert.strictEqual(
-        result.maxClock,
-        expectedSpeed,
-        `Expected Node.js fallback clock speed (${expectedSpeed}), got ${result.maxClock}`
-    );
+        const result = withPlatform('win32', () => ({
+            physical: detector.getPhysicalCores(),
+            maxClock: detector.getMaxFrequency()
+        }));
+
+        assert.strictEqual(
+            result.physical,
+            expectedCores,
+            `Expected Node.js fallback core count (${expectedCores}), got ${result.physical}`
+        );
+        assert.strictEqual(
+            result.maxClock,
+            expectedSpeed,
+            `Expected Node.js fallback clock speed (${expectedSpeed}), got ${result.maxClock}`
+        );
+    } finally {
+        os.cpus = originalCpus;
+    }
 }
 
 function testWindowsCommandRunnerSuppressesWmicShellNoise() {
