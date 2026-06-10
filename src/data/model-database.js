@@ -13,6 +13,11 @@ class ModelDatabase {
         this.seedDbPath = options.seedDbPath || path.join(__dirname, 'seed', 'models.db');
         this.db = null;
         this.initialized = false;
+        // Batched-write state: during a bulk sync we defer the (expensive) full
+        // sql.js export-and-write until the batch ends, instead of rewriting the
+        // whole DB file on every single row.
+        this._batchDepth = 0;
+        this._pendingSave = false;
     }
 
     /**
@@ -148,7 +153,29 @@ class ModelDatabase {
         if (!this.useBetterSqlite && this.db) {
             const data = this.db.export();
             const buffer = Buffer.from(data);
-            fs.writeFileSync(this.dbPath, buffer);
+            // Write to a temp file then atomically rename, so a crash/SIGINT
+            // mid-write can't leave a truncated, unreadable models.db behind.
+            const tmpPath = `${this.dbPath}.tmp`;
+            fs.writeFileSync(tmpPath, buffer);
+            fs.renameSync(tmpPath, this.dbPath);
+            this._pendingSave = false;
+        }
+    }
+
+    /**
+     * Group many writes so the database file is exported/written once at the end
+     * instead of on every row. Nestable; the outermost endBatch() flushes.
+     */
+    beginBatch() {
+        this._batchDepth += 1;
+    }
+
+    endBatch() {
+        if (this._batchDepth > 0) {
+            this._batchDepth -= 1;
+        }
+        if (this._batchDepth === 0 && this._pendingSave) {
+            this.saveToFile();
         }
     }
 
@@ -160,7 +187,11 @@ class ModelDatabase {
             return this.db.prepare(sql).run(...params);
         } else {
             this.db.run(sql, params);
-            this.saveToFile();
+            if (this._batchDepth > 0) {
+                this._pendingSave = true; // defer the full export until endBatch()
+            } else {
+                this.saveToFile();
+            }
         }
     }
 
@@ -406,9 +437,12 @@ class ModelDatabase {
             params.push(filters.maxSizeGB);
         }
 
-        // Order by
-        const orderBy = filters.orderBy || 'pulls';
-        const orderDir = filters.orderDir || 'DESC';
+        // Order by — column names and direction can't be parameterized, so whitelist
+        // them. A future caller forwarding a user-supplied sort field would otherwise
+        // be a SQL-injection / crash vector on this public filters API.
+        const ORDERABLE_COLUMNS = new Set(['pulls', 'name', 'tags_count', 'updated_at', 'created_at']);
+        const orderBy = ORDERABLE_COLUMNS.has(filters.orderBy) ? filters.orderBy : 'pulls';
+        const orderDir = String(filters.orderDir).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
         sql += ` ORDER BY m.${orderBy} ${orderDir}`;
 
         // Limit

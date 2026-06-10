@@ -47,22 +47,27 @@ class SyncManager {
 
         this.onProgress({ phase: 'start', message: 'Starting full sync...' });
 
-        // Clear existing data
-        this.db.clear();
+        // Batch all writes into a single atomic DB file write at the end. Saving on
+        // every upsert re-exported and rewrote the whole sql.js DB thousands of
+        // times, turning the sync into O(n^2) disk I/O.
+        this.db.beginBatch();
+        try {
+            // Clear existing data
+            this.db.clear();
 
-        // Scrape all models
-        const result = await this.scraper.scrapeAll((model, variants) => {
-            // Save model as we go
-            this.db.upsertModel(model);
+            // Scrape all models
+            await this.scraper.scrapeAll((model, variants) => {
+                this.db.upsertModel(model);
+                for (const variant of variants) {
+                    this.db.upsertVariant(variant);
+                }
+            });
 
-            // Save variants
-            for (const variant of variants) {
-                this.db.upsertVariant(variant);
-            }
-        });
-
-        // Update sync timestamp
-        this.db.setLastSync(new Date().toISOString());
+            // Update sync timestamp
+            this.db.setLastSync(new Date().toISOString());
+        } finally {
+            this.db.endBatch();
+        }
 
         const stats = this.db.getStats();
 
@@ -110,6 +115,9 @@ class SyncManager {
         let updated = 0;
         let added = 0;
 
+        // Batch all upserts into a single atomic DB write at the end (see fullSync).
+        this.db.beginBatch();
+        try {
         // Process new models
         for (const { id } of newModels) {
             try {
@@ -157,12 +165,18 @@ class SyncManager {
 
                 await this.sleep(100);
             } catch (error) {
-                // Ignore errors during incremental update
+                // Log instead of silently swallowing: a systematic failure here
+                // (network down, schema mismatch) would otherwise report success
+                // with updated: 0 and leave the catalog quietly stale.
+                this.onError(`Error updating ${id}: ${error.message}`);
             }
         }
 
-        // Update sync timestamp
-        this.db.setLastSync(new Date().toISOString());
+            // Update sync timestamp
+            this.db.setLastSync(new Date().toISOString());
+        } finally {
+            this.db.endBatch();
+        }
 
         const stats = this.db.getStats();
 
