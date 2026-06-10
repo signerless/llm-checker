@@ -158,7 +158,8 @@ function getCandidateTargets(model) {
 function patternToRegex(pattern) {
     const escaped = String(pattern || '')
         .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '.*');
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.'); // glob '?' = exactly one character (not a regex quantifier)
 
     return new RegExp(`^${escaped}$`, 'i');
 }
@@ -176,7 +177,12 @@ function parseExceptionExpiry(expiresAt) {
 }
 
 function isExceptionEntryActive(entry, now) {
-    const expiry = parseExceptionExpiry(entry?.expires_at);
+    const rawExpiry = entry?.expires_at;
+    const expiry = parseExceptionExpiry(rawExpiry);
+    // A provided-but-unparseable expiry (typo like '2026/06/01', free text like
+    // 'next friday') must NOT be treated as "no expiry" — that would silently make
+    // the exception permanent and suppress real policy violations. Fail closed.
+    if (rawExpiry && !expiry) return false;
     if (!expiry) return true;
     return expiry.getTime() >= now.getTime();
 }

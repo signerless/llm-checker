@@ -13,6 +13,21 @@ const si = require('systeminformation');
 const { execSync } = require('child_process');
 const { normalizePlatform } = require('../utils/platform');
 
+// Recent GPUs whose PCI device id is not yet resolved to a model name by the
+// distro pci.ids database (so lspci / systeminformation report them as a bare
+// "Device <id>"). Mapping the device id lets us (a) give them a real name and
+// (b) collapse the multiple raw views of the SAME card that different detection
+// sources produce into one inventory entry. Unknown ids degrade gracefully to a
+// stable `pci:<id>` match key, so this table only needs the newest cards.
+const PCI_GPU_MAP = {
+    // NVIDIA Blackwell (RTX 50 series, desktop)
+    '2f04': { family: 'rtx5070', type: 'dedicated', name: 'NVIDIA GeForce RTX 5070' },
+    '2c02': { family: 'rtx5080', type: 'dedicated', name: 'NVIDIA GeForce RTX 5080' },
+    '2b85': { family: 'rtx5090', type: 'dedicated', name: 'NVIDIA GeForce RTX 5090' },
+    // AMD Raphael / Granite Ridge desktop iGPU (Ryzen 7000/9000 non-G)
+    '13c0': { family: 'amd-raphael-igpu', type: 'integrated', name: 'AMD Radeon Graphics (Raphael)' }
+};
+
 class UnifiedDetector {
     constructor() {
         this.backends = {
@@ -613,14 +628,19 @@ class UnifiedDetector {
 
         const normalized = controllers
             .map((controller) => {
-                const name = String(controller?.model || controller?.name || '').replace(/\s+/g, ' ').trim();
+                let name = String(controller?.model || controller?.name || '').replace(/\s+/g, ' ').trim();
                 if (!name || name.toLowerCase() === 'unknown') return null;
                 if (this.isRemoteDisplayModel(name)) return null;
 
                 const nameLower = name.toLowerCase();
                 if (nameLower.includes('microsoft basic') || nameLower.includes('standard vga')) return null;
 
-                const isIntegrated = this.isIntegratedGPUModel(name);
+                // Resolve recent cards that the runtime could only report as a bare
+                // "Device <id>" so they get a real name and correct integrated flag.
+                const mapped = this.resolveMappedGpu(name) || this.resolveMappedGpu(controller?.deviceId);
+                if (mapped) name = mapped.name;
+
+                const isIntegrated = mapped ? mapped.type === 'integrated' : this.isIntegratedGPUModel(name);
                 let vram = isIntegrated
                     ? this.estimateIntegratedFallbackMemory(controller, memoryInfo)
                     : this.normalizeFallbackVRAM(controller?.vram || controller?.memoryTotal || controller?.memory || 0);
@@ -711,30 +731,55 @@ class UnifiedDetector {
 
             if (!isNvidia && !isAMD && !isIntel) continue;
 
-            const genericName = line
-                .replace(/^[0-9a-f:.]+\s+/i, '')
-                .replace(/\(rev\s+[0-9a-f]+\)$/i, '')
-                .trim();
+            const vendorLabel = isNvidia ? 'NVIDIA' : (isAMD ? 'AMD' : 'Intel');
+            const pciId = this.extractPciDeviceId(line);
+            const mapped = this.resolveMappedGpu(line);
 
+            // Prefer the resolved model name inside a trailing "[Model] [vvvv:dddd]"
+            // pair (e.g. "[GeForce RTX 4060]"). Otherwise clean the raw lspci line
+            // down to a readable device string instead of using the whole line.
             const bracketName = line.match(/\[(?![0-9a-f]{4}:[0-9a-f]{4}\])([^\]]+)\]\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]/i);
-            const name = (bracketName?.[1] || genericName || 'Unknown GPU').replace(/\s+/g, ' ').trim();
-            if (!name || name.toLowerCase() === 'unknown gpu') continue;
+            let name = (bracketName?.[1] || '').replace(/\s+/g, ' ').trim();
 
-            const isIntegrated = this.isIntegratedGPUModel(name) || isIntel;
+            if (!name) {
+                name = line
+                    .replace(/^[0-9a-f]{2,4}:[0-9a-f]{2}\.[0-9a-f]\s+/i, '')                  // PCI address
+                    .replace(/^(?:vga compatible|3d|display)\s+controller\s+\[[0-9a-f]{4}\]:\s*/i, '') // class prefix
+                    .replace(/\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]/i, '')                            // [vvvv:dddd]
+                    .replace(/\s*\(rev\s+[0-9a-f]+\)\s*$/i, '')                                // (rev xx)
+                    .replace(/\b(?:corporation|corp\.?|inc\.?|advanced micro devices,?)\b/gi, '')
+                    .replace(/\[amd\/ati\]/gi, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            }
+
+            // If the card could not be resolved to a real model, give it a stable,
+            // readable name that carries the PCI id so it dedupes across sources.
+            const meaningful = name.replace(/\b(?:nvidia|amd|ati|intel|device|graphics|gpu|controller)\b/gi, '').replace(/[^a-z0-9]/gi, '').trim();
+            if (mapped) {
+                name = mapped.name;
+            } else if (!meaningful) {
+                name = pciId ? `${vendorLabel} Device ${pciId.toUpperCase()}` : `${vendorLabel} GPU`;
+            }
+
+            const isIntegrated = mapped
+                ? mapped.type === 'integrated'
+                : (this.isIntegratedGPUModel(name) || (isIntel && !/\barc\b/i.test(name)));
             let vram = this.estimateFallbackVRAM(name);
             if (isIntegrated) {
                 vram = 0;
             }
 
-            const dedupeKey = `${name.toLowerCase()}|${isIntegrated ? 'i' : 'd'}`;
+            const dedupeKey = `${this.getGpuMatchKey(name)}|${isIntegrated ? 'i' : 'd'}`;
             if (seen.has(dedupeKey)) continue;
             seen.add(dedupeKey);
 
             results.push({
                 name,
-                vendor: isNvidia ? 'NVIDIA' : (isAMD ? 'AMD' : 'Intel'),
+                vendor: vendorLabel,
                 type: isIntegrated ? 'integrated' : 'dedicated',
                 memory: { total: vram },
+                pciId: pciId || null,
                 source: 'lspci'
             });
         }
@@ -817,12 +862,41 @@ class UnifiedDetector {
             return `${familyMatch[1]}${familyMatch[2]}`;
         }
 
+        // Different detection sources describe an unresolved card in different
+        // ways for the SAME hardware, e.g. systeminformation "Device 2f04" and
+        // lspci "...Device [10de:2f04]". Key on the PCI device id (mapped to a
+        // canonical family when known) so those collapse to one inventory entry.
+        const pciId = this.extractPciDeviceId(name);
+        if (pciId) {
+            return (PCI_GPU_MAP[pciId] && PCI_GPU_MAP[pciId].family) || `pci:${pciId}`;
+        }
+
         const concise = lower
             .replace(/nvidia|amd|ati|intel|corporation|geforce|radeon|graphics/g, '')
             .replace(/\s+/g, ' ')
             .trim();
 
         return concise || lower;
+    }
+
+    /**
+     * Extract a 4-hex PCI device id from a GPU name/description, handling both the
+     * lspci "[vendor:device]" form and the bare "Device <id>" form that
+     * systeminformation emits for cards it cannot name. Returns null when none.
+     */
+    extractPciDeviceId(text) {
+        const value = String(text || '');
+        const bracket = value.match(/\[[0-9a-f]{4}:([0-9a-f]{4})\]/i);
+        if (bracket) return bracket[1].toLowerCase();
+        const bare = value.match(/\bdevice\s+([0-9a-f]{4})\b/i);
+        if (bare) return bare[1].toLowerCase();
+        return null;
+    }
+
+    /** Look up a curated mapping for a recent card by PCI device id (or null). */
+    resolveMappedGpu(text) {
+        const pciId = this.extractPciDeviceId(text);
+        return pciId && PCI_GPU_MAP[pciId] ? { pciId, ...PCI_GPU_MAP[pciId] } : null;
     }
 
     /**

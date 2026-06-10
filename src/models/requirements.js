@@ -134,17 +134,22 @@ class RequirementsCalculator {
     }
 
     parseModelSize(sizeString) {
-        const normalized = sizeString.toLowerCase().replace(/[^0-9.kmb]/g, '');
+        // Anchor the number to its unit instead of globally stripping every char
+        // that isn't 0-9.kmb: the old approach kept stray k/m/b from model words, so
+        // "Llama 3.2 3B" normalized to "m3.23b" and parsed as 0.003B, and unit-only
+        // inputs produced NaN. Prefer a number that carries a B/M/K unit (the real
+        // size token, "3B") over a bare number (a version like "3.2").
+        const text = String(sizeString || '');
+        const match = text.match(/(\d+(?:\.\d+)?)\s*([kmb])\b/i) || text.match(/(\d+(?:\.\d+)?)/);
+        if (!match) return 1;
 
-        if (normalized.includes('k')) {
-            return parseFloat(normalized.replace('k', '')) / 1000;
-        } else if (normalized.includes('m')) {
-            return parseFloat(normalized.replace('m', '')) / 1000;
-        } else if (normalized.includes('b')) {
-            return parseFloat(normalized.replace('b', ''));
-        } else {
-            return parseFloat(normalized);
-        }
+        const value = parseFloat(match[1]);
+        if (!Number.isFinite(value)) return 1;
+
+        const unit = (match[2] || 'b').toLowerCase();
+        if (unit === 'k') return value / 1_000_000; // thousands of params -> billions
+        if (unit === 'm') return value / 1000;       // millions of params -> billions
+        return value;                                // billions
     }
 
     getContextMultiplier(contextLength) {

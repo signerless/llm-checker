@@ -3476,11 +3476,8 @@ Policy scope:
 
 program
     .command('ollama')
-    .description('Manage Ollama integration with hardware compatibility')
-    .option('-l, --list', 'List installed models with compatibility scores')
-    .option('-r, --running', 'Show running models with performance data')
-    .option('-c, --compatible', 'Show only hardware-compatible installed models')
-    .option('--recommendations', 'Show installation recommendations')
+    .description('Check Ollama integration status (use `installed` to rank installed models)')
+    .option('-l, --list', 'List installed models ranked by compatibility (runs `installed`)')
     .action(async (options) => {
         showAsciiArt('ollama');
         const spinner = ora('Checking Ollama integration...').start();
@@ -3506,7 +3503,9 @@ program
             spinner.succeed(`Ollama integration active`);
 
             if (options.list) {
-                console.log('Ollama models list feature coming soon...');
+                console.log(chalk.cyan('\nRun `llm-checker installed` to rank your installed models by compatibility and use-case.'));
+            } else {
+                console.log(chalk.gray('\nTip: `llm-checker installed` ranks installed models; `llm-checker recommend` suggests models for your hardware.'));
             }
 
         } catch (error) {
@@ -3534,10 +3533,18 @@ program
             const availability = await ollamaClient.checkOllamaAvailability();
             if (!availability.available) {
                 spinner.fail('Ollama not available');
-                console.log(chalk.red('\n' + availability.error));
-                if (availability.hint) {
-                    console.log(chalk.yellow('Hint: ' + availability.hint));
+                if (options.json) {
+                    // --json must always emit parseable JSON on stdout (the success
+                    // path prints an array); previously these branches printed
+                    // ANSI-colored prose and broke `installed --json | jq`.
+                    console.log(JSON.stringify([], null, 2));
+                } else {
+                    console.log(chalk.red('\n' + availability.error));
+                    if (availability.hint) {
+                        console.log(chalk.yellow('Hint: ' + availability.hint));
+                    }
                 }
+                process.exitCode = 1;
                 return;
             }
 
@@ -3545,8 +3552,12 @@ program
             const installedModels = await ollamaClient.getLocalModels();
             if (!installedModels || installedModels.length === 0) {
                 spinner.fail('No models installed');
-                console.log(chalk.yellow('\nNo Ollama models found. Install one with:'));
-                console.log(chalk.cyan('  ollama pull llama3.2:3b'));
+                if (options.json) {
+                    console.log(JSON.stringify([], null, 2));
+                } else {
+                    console.log(chalk.yellow('\nNo Ollama models found. Install one with:'));
+                    console.log(chalk.cyan('  ollama pull llama3.2:3b'));
+                }
                 return;
             }
 
@@ -4380,6 +4391,7 @@ program
     .option('--ctx <number>', 'Target context length', '8192')
     .option('-e, --evaluator <model>', 'Evaluator model (auto for best available)', 'auto')
     .option('-w, --weight <number>', 'AI weight (0.0-1.0, default 0.3)', '0.3')
+    .option('-m, --models <list>', 'Restrict evaluation to these models (comma-separated)')
     .action(async (options) => {
         showAsciiArt('ai-check');
         // Check if Ollama is installed first
@@ -4392,14 +4404,33 @@ program
             
             const aiCheckSelector = new AICheckSelector();
             
+            // Validate numeric options up front: bad input (e.g. --weight abc, --top
+            // foo) used to flow through as NaN, which survived the downstream clamp
+            // and made the displayed AI weight and every weighted score NaN.
+            const weight = Number.parseFloat(options.weight);
+            const top = Number.parseInt(options.top, 10);
+            const ctx = options.ctx ? Number.parseInt(options.ctx, 10) : undefined;
+            const invalidNumeric =
+                (!Number.isFinite(weight) || weight < 0 || weight > 1) ? `--weight ${options.weight} (use a number from 0.0 to 1.0)`
+                : (!Number.isInteger(top) || top <= 0) ? `--top ${options.top} (use a positive integer)`
+                : (ctx !== undefined && (!Number.isInteger(ctx) || ctx <= 0)) ? `--ctx ${options.ctx} (use a positive integer)`
+                : null;
+            if (invalidNumeric) {
+                spinner.stop();
+                console.error(chalk.red(`Invalid ${invalidNumeric}`));
+                process.exitCode = 1;
+                return;
+            }
+
             const checkOptions = {
                 category: options.category,
-                top: parseInt(options.top),
-                ctx: options.ctx ? parseInt(options.ctx) : undefined,
+                top,
+                ctx,
                 evaluator: options.evaluator,
-                weight: parseFloat(options.weight)
+                weight,
+                models: options.models || process.env.LLM_CHECKER_AI_CHECK_MODELS || undefined
             };
-            
+
             spinner.stop();
             
             const result = await aiCheckSelector.aiCheck(checkOptions);
@@ -4746,8 +4777,20 @@ program
             });
 
             if (searchResults.length === 0) {
-                if (spinner) spinner.info('No models found matching your query');
                 syncManager.close();
+                if (options.json) {
+                    // --json must always emit parseable JSON, even on zero matches
+                    // (previously it printed nothing and broke `search ... --json | jq`).
+                    console.log(JSON.stringify({
+                        query,
+                        all: [],
+                        recommendations: [],
+                        insights: [],
+                        meta: { afterFiltering: 0, totalMatches: 0 }
+                    }, null, 2));
+                } else if (spinner) {
+                    spinner.info('No models found matching your query');
+                }
                 return;
             }
 

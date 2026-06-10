@@ -15,13 +15,19 @@ function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
 }
 
+// Isolate HOME so the spawned CLI resolves its model DB under a throwaway dir
+// (seeded from the packaged seed) instead of the host's ~/.llm-checker.
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-home-'));
+
 function runCli(args, cwd) {
     return spawnSync(process.execPath, [BIN_PATH, ...args], {
         cwd,
         encoding: 'utf8',
         env: {
             ...process.env,
-            NO_COLOR: '1'
+            NO_COLOR: '1',
+            HOME: TEST_HOME,
+            USERPROFILE: TEST_HOME
         }
     });
 }

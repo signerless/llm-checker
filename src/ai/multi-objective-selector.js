@@ -784,11 +784,16 @@ class MultiObjectiveSelector {
     }
 
     estimateKVCache(model, contextLength) {
-        // Rough KV cache estimation: 2 * layers * hidden_size * seq_len * 2 bytes
+        // KV cache grows linearly with parameter count and context length. The old
+        // formula derived both "layers" and "hidden size" from params and multiplied
+        // them, making the estimate scale with params^2 — a 70B model at 8k came out
+        // at ~299 GB (real value ~11 GB), which made checkMemoryCompatibility reject
+        // every mid/large model. Use the same calibrated linear factor as the Ollama
+        // capacity planner (~0.08 GB per 1B params at 4k context).
         const params = this.estimateModelParams(model);
-        const layers = Math.round(params * 2); // Rough approximation
-        const hiddenSize = Math.round(params * 1000); // Rough approximation
-        return (2 * layers * hiddenSize * contextLength * 2) / (1024 ** 3); // GB
+        const ctx = Number.isFinite(contextLength) && contextLength > 0 ? contextLength : 4096;
+        const kvFactorPer4k = 0.08; // GB per 1B params at 4k context (fp16)
+        return Math.max(0, params * kvFactorPer4k * (ctx / 4096)); // GB
     }
 
     estimateTokensPerSecond(hardware, model) {

@@ -428,6 +428,11 @@ class CompatibilityAnalyzer {
     }
 
     parseModelSize(sizeString) {
+        // Guard non-string input (undefined / a numeric size) — this runs for every
+        // model in calculateModelCompatibility, so one bad entry must not crash the
+        // whole analysis. Matches the guard in analyzer/performance.js.
+        if (typeof sizeString !== 'string' || !sizeString.trim()) return 1;
+
         const match = sizeString.match(/(\d+\.?\d*)[BM]/i);
         if (!match) return 1;
 

@@ -1007,18 +1007,22 @@ class ExpandedModelsDatabase {
     }
 
     estimateMemoryUsage(model) {
-        const sizeGB = parseFloat(model.size.replace(/[^\d.]/g, ''));
+        // Derive footprint from parameter count, not by stripping the unit off the
+        // size string and treating the bare number as gigabytes — that read a 774M
+        // model ("774M") as ~774 GB and a 22M model as ~22 GB. ~0.7 GB per 1B params
+        // is a reasonable quantized-runtime footprint baseline.
+        const sizeGB = this.extractModelParams(model) * 0.7;
 
         // Rough estimates including model loading overhead
         return {
-            minimal: Math.round(sizeGB * 1.2), // With quantization
-            typical: Math.round(sizeGB * 1.5), // Standard loading
-            maximum: Math.round(sizeGB * 2.0)  // With full context
+            minimal: Math.max(1, Math.round(sizeGB * 1.2)), // With quantization
+            typical: Math.max(1, Math.round(sizeGB * 1.5)), // Standard loading
+            maximum: Math.max(1, Math.round(sizeGB * 2.0))  // With full context
         };
     }
 
     estimatePowerConsumption(model, hardware) {
-        const sizeGB = parseFloat(model.size.replace(/[^\d.]/g, ''));
+        const sizeGB = this.extractModelParams(model) * 0.7;
         const tier = this.getHardwareTier(hardware);
 
         const basePower = {

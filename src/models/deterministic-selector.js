@@ -1611,7 +1611,8 @@ class DeterministicModelSelector {
                 runtime: speedEstimate.runtime,
                 moe: speedEstimate.moe
             },
-            components: { Q, S, F, C, H: capacityAdjustment.score }
+            components: { Q, S, F, C, H: capacityAdjustment.score },
+            optimizeFor
         };
     }
 
@@ -1942,13 +1943,17 @@ class DeterministicModelSelector {
         const ratio = requiredGB / budgetGB;
         if (ratio <= 0.9) return 100;
         if (ratio <= 1.0) return 70;
-        return 0; // Should be filtered out earlier
+        return 0; // Unreachable in practice: evaluateModel drops requiredGB > budget.
     }
 
     calculateContextScore(model, targetCtx) {
-        if (model.ctxMax >= targetCtx) return 100;
-        if (model.ctxMax >= targetCtx * 0.5) return 70;
-        return 0; // Should be filtered out earlier
+        const ctxMax = Number(model?.ctxMax) || 0;
+        if (ctxMax >= targetCtx) return 100;
+        if (ctxMax >= targetCtx * 0.5) return 70;
+        // Context is NOT pre-filtered: a model that cannot serve the requested
+        // context still scores here (0 for this component) and stays eligible,
+        // weighted down rather than excluded.
+        return 0;
     }
 
     getHighCapacitySizeTarget(budgetGB, hardware = {}) {
@@ -2250,14 +2255,21 @@ class DeterministicModelSelector {
 
     updateCandidateWithMeasuredSpeed(candidate, measuredTPS, category) {
         const normalizedS = this.normalizeTPSToScore(measuredTPS, category);
-        
-        // Recalculate final score with measured speed
-        const weights = this.categoryWeights[category];
-        const { Q, F, C } = candidate.components;
-        
+
+        // Re-score with the measured speed using the SAME weighting source as
+        // evaluateModel: getScoringWeights honours the user's optimizeFor profile and
+        // falls back to the general weights for categories (e.g. 'talking') that have
+        // no entry in DETERMINISTIC_WEIGHTS — indexing this.categoryWeights[category]
+        // directly threw a TypeError for those. We also re-add the stored capacity
+        // adjustment (H) and clamp, so a probed score stays comparable to a
+        // non-probed one instead of being silently lower.
+        const weights = this.getScoringWeights(category, candidate.optimizeFor || 'balanced');
+        const { Q, F, C, H = 0 } = candidate.components;
+
         candidate.estTPS = measuredTPS;
         candidate.components.S = normalizedS;
-        candidate.score = Math.round((Q * weights[0] + normalizedS * weights[1] + F * weights[2] + C * weights[3]) * 10) / 10;
+        const weighted = Q * weights[0] + normalizedS * weights[1] + F * weights[2] + C * weights[3];
+        candidate.score = Math.max(0, Math.min(100, Math.round((weighted + H) * 10) / 10));
     }
 
     normalizeTPSToScore(tps, category) {

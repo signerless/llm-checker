@@ -420,7 +420,12 @@ class HardwareDetector {
                 driverVersion: backendInfo.driver || systemInfo.gpu.driverVersion
             };
         } catch (error) {
-            // Keep systeminformation-only results when backend-specific detection is unavailable
+            // Keep systeminformation-only results when backend-specific detection is
+            // unavailable. Surface the cause under a debug flag so a genuine bug in the
+            // enrichment path is distinguishable from "no backend tools installed".
+            if (process.env.DEBUG_GPU || process.env.LLM_CHECKER_DEBUG) {
+                console.error('[llm-checker] enrichWithUnifiedHardware failed:', error && error.stack ? error.stack : error);
+            }
         }
     }
 
@@ -738,34 +743,23 @@ class HardwareDetector {
      * Normalize VRAM values (handle different units and wrong totals)
      */
     normalizeVRAM(vram) {
-        if (!vram || vram <= 0) return 0;
-        
-        let vramValue = vram;
-        
-        // Handle VRAM in bytes (some systems report this way)  
-        if (vramValue > 100000) {
-            vramValue = Math.round(vramValue / (1024 * 1024)); // Convert bytes to MB
-        }
-        
-        // Now determine if we have MB or GB values
-        if (vramValue >= 1024) {
-            // Values >= 1024 are likely MB, convert to GB
-            vramValue = Math.round(vramValue / 1024);
-        } else if (vramValue >= 512 && vramValue < 1024) {
-            // 512-1023 MB, round to 1GB
-            vramValue = 1;
-        } else if (vramValue > 80) {
-            // Values between 80-511 are likely incorrect MB values, treat as MB
-            vramValue = Math.round(vramValue / 1024) || 1;
-        } else if (vramValue >= 1 && vramValue <= 80) {
-            // Values 1-80 are likely already in GB, keep as is
-            vramValue = vramValue;
-        } else {
-            // Values < 1 round to 0
-            vramValue = 0;
-        }
-        
-        return vramValue;
+        const raw = Number(vram);
+        if (!Number.isFinite(raw) || raw <= 0) return 0;
+
+        // Inputs reaching this function are reported by systeminformation / lspci,
+        // which express controller VRAM in megabytes — except very large values,
+        // which are raw bytes on the systems that report that way. No source ever
+        // supplies gigabytes here, so the old "1-80 means GB" heuristic was wrong
+        // (it turned a 64 MB framebuffer into 64 GB of VRAM). Normalize everything
+        // to MB first, then convert once to GB.
+        //
+        // 1e6 cleanly separates the two units: the largest real VRAM in MB is well
+        // under 1,000,000 (a 192 GB card is ~196,608 MB), while the same card in
+        // bytes is far above it. The previous >100000 byte threshold mis-handled
+        // any card above ~97 GB reported in MB.
+        const mb = raw > 1_000_000 ? raw / (1024 * 1024) : raw;
+
+        return Math.max(0, Math.round(mb / 1024)); // MB -> GB
     }
     
     /**

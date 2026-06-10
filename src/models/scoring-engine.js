@@ -25,6 +25,7 @@ class ScoringEngine {
         // Model family quality rankings (0-100 base score)
         this.familyQuality = {
             // Frontier models
+            'qwen3': 95,
             'qwen2.5': 95,
             'qwen2': 90,
             'llama3.3': 95,
@@ -35,12 +36,15 @@ class ScoringEngine {
             'deepseek-v2.5': 94,
             'deepseek-coder-v2': 92,
             'deepseek-r1': 96,
+            'gemma3': 90,
             'gemma2': 90,
             'gemma': 82,
+            'phi4': 92,
             'phi-4': 92,
             'phi-3.5': 88,
             'phi-3': 85,
             'phi-2': 75,
+            'granite3': 80,
             'mistral-large': 94,
             'mistral': 85,
             'mixtral': 88,
@@ -443,8 +447,11 @@ class ScoringEngine {
             // Tight fit
             return 70 + (1.0 - usage) / 0.15 * 20;
         } else if (usage <= 1.2) {
-            // May work with swapping (especially on Mac)
-            return 50 - (usage - 1.0) * 100;
+            // May work with swapping (especially on Mac). Decay continuously from
+            // 70 at usage=1.0 down to 0 at usage=1.2 — the old `50 - (usage-1)*100`
+            // dropped to ~50 the instant usage crossed 1.0, a 20-point cliff that
+            // could flip the ranking of two near-identical-size variants.
+            return 70 - (usage - 1.0) / 0.2 * 70;
         } else {
             // Won't fit
             return 0;

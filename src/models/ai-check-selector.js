@@ -62,6 +62,25 @@ Respond with JSON only, no additional text.`;
     /**
      * Main AI-Check function
      */
+    /** Normalize the --models option (array, or comma/space-separated string) to a list. */
+    parseModelFilter(models) {
+        if (!models) return [];
+        const list = Array.isArray(models) ? models : String(models).split(/[,\s]+/);
+        return list.map((m) => String(m).trim().toLowerCase()).filter(Boolean);
+    }
+
+    /** True when an Ollama DB model matches a user-supplied name fragment. */
+    modelMatchesFilter(model, needle) {
+        const identifier = String(model?.model_identifier || '').toLowerCase();
+        const name = String(model?.model_name || '').toLowerCase();
+        return (
+            identifier === needle ||
+            name === needle ||
+            identifier.includes(needle) ||
+            name.includes(needle)
+        );
+    }
+
     async aiCheck(options = {}) {
         const {
             category = 'general',
@@ -90,11 +109,23 @@ Respond with JSON only, no additional text.`;
         const budget = hardware.gpu.unified ? hardware.usableMemGB : 
                      (hardware.gpu.vramGB || hardware.usableMemGB);
         
-        // Filter models by category first
-        const categoryModels = this.filterOllamaModelsByCategory(allOllamaModels, category);
-        
-        if (!silent) {
-            console.log(chalk.cyan('│') + ` ${categoryModels.length} models match ${category} category`);
+        // Optional explicit model filter (--models qwen2.5,llama3.1). When present
+        // it overrides the category filter: the user asked for specific models.
+        const modelFilter = this.parseModelFilter(options.models);
+        let categoryModels;
+        if (modelFilter.length > 0) {
+            categoryModels = allOllamaModels.filter((model) =>
+                modelFilter.some((needle) => this.modelMatchesFilter(model, needle))
+            );
+            if (!silent) {
+                console.log(chalk.cyan('│') + ` Restricted to ${categoryModels.length} model(s) matching --models`);
+            }
+        } else {
+            // Filter models by category first
+            categoryModels = this.filterOllamaModelsByCategory(allOllamaModels, category);
+            if (!silent) {
+                console.log(chalk.cyan('│') + ` ${categoryModels.length} models match ${category} category`);
+            }
         }
         
         // Evaluate each model using deterministic scoring

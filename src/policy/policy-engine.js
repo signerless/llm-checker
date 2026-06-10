@@ -494,7 +494,8 @@ class PolicyEngine {
 
         const escaped = pattern
             .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*/g, '.*');
+            .replace(/\*/g, '.*')
+            .replace(/\?/g, '.'); // glob '?' = exactly one character (not a regex quantifier)
 
         const regex = new RegExp(`^${escaped}$`, 'i');
         this.patternCache.set(pattern, regex);

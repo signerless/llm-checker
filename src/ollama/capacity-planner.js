@@ -307,9 +307,20 @@ class OllamaCapacityPlanner {
         const fallbackState = this.computeLoadState(modelPool, fallbackCtx, 1, budgetGB);
         const fallbackTotalGB = fallbackState.baseTotalGB + fallbackState.kvAtContextGB;
 
+        // Even the reduced "recommended" / "fallback" settings can exceed the budget
+        // when a single model's base memory alone is larger than the budget. Surface
+        // that explicitly so callers don't blindly apply env vars that will OOM.
+        const recommendedFits = recommendedTotalGB <= budgetGB;
+        const fallbackFits = fallbackTotalGB <= budgetGB;
+
         const notes = [];
         if (!requestedFits) {
             notes.push('Requested settings exceed available memory budget; reduced settings are recommended.');
+        }
+        if (!fallbackFits) {
+            notes.push('No safe configuration fits the memory budget for this model selection; choose a smaller or more-quantized model.');
+        } else if (!recommendedFits) {
+            notes.push('Recommended settings still exceed the budget; apply the fallback settings instead.');
         }
         if (recommendedCtx < requestedCtx) {
             notes.push(`Context reduced from ${requestedCtx} to ${recommendedCtx} to avoid memory pressure.`);
@@ -366,7 +377,8 @@ class OllamaCapacityPlanner {
                 max_loaded_models: recommendedLoaded,
                 max_queue: maxQueue,
                 keep_alive: profile.keepAlive,
-                flash_attention: flashAttention
+                flash_attention: flashAttention,
+                fits: recommendedFits
             },
             memory: {
                 budgetGB: Math.round(budgetGB * 100) / 100,
@@ -379,7 +391,8 @@ class OllamaCapacityPlanner {
                 num_ctx: fallbackCtx,
                 num_parallel: 1,
                 max_loaded_models: 1,
-                estimated_memory_gb: Math.round(fallbackTotalGB * 100) / 100
+                estimated_memory_gb: Math.round(fallbackTotalGB * 100) / 100,
+                fits: fallbackFits
             },
             shell: {
                 env: {

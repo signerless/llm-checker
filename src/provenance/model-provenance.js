@@ -83,7 +83,10 @@ function extractVersionFromIdentifier(identifier) {
     if (!text) return UNKNOWN_VALUE;
 
     if (text.includes(':')) {
-        const [, tag] = text.split(':');
+        // The tag is the segment after the LAST colon. Splitting on every colon and
+        // taking the second segment mis-parsed registry-prefixed refs like
+        // 'registry.local:5000/llama3:8b' (it returned '5000/llama3' instead of '8b').
+        const tag = text.slice(text.lastIndexOf(':') + 1);
         return sanitizeValue(tag);
     }
 

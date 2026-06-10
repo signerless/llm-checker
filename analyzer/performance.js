@@ -363,12 +363,13 @@ class PerformanceAnalyzer {
     }
 
     estimateLoadTime(model, hardware) {
+        // ~2 GB per 1B params (fp16-ish) on-disk approximation.
         const modelSizeGB = this.parseModelSize(model.size) * 2;
 
-        let loadTimeSeconds = modelSizeGB * 2;
-
-
-        loadTimeSeconds *= 0.7;
+        // Fold the previous `* 2` then `* 0.7` two-step (a leftover from an
+        // incomplete edit, with a dead blank line) into one documented factor:
+        // ~1.4 s of load time per GB before hardware adjustments.
+        let loadTimeSeconds = modelSizeGB * 1.4;
 
         const cpuSpeedFactor = Math.max(0.5, Math.min(1.5, (hardware.cpu.speed || 2.5) / 2.5));
         loadTimeSeconds /= cpuSpeedFactor;

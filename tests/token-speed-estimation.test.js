@@ -1,5 +1,4 @@
 const assert = require('assert');
-const HardwareDetector = require('../src/hardware/detector');
 const PerformanceAnalyzer = require('../analyzer/performance');
 const ExpandedModelsDatabase = require('../src/models/expanded_database');
 const { estimateTokenSpeedFromHardware } = require('../src/utils/token-speed-estimator');
@@ -15,8 +14,24 @@ function isM4ProMac(hardware) {
 }
 
 async function run() {
-    const detector = new HardwareDetector();
-    const hardware = await detector.getSystemInfo(true);
+    // Hermetic reference fixture: an Apple M4 Pro Mac. Driving the estimators from
+    // a fixed hardware profile (rather than the live host) keeps this test
+    // deterministic and host-independent — it validates the estimation math, not
+    // the machine the suite happens to run on.
+    const hardware = {
+        os: { platform: 'darwin' },
+        cpu: {
+            brand: 'Apple M4 Pro',
+            model: 'Apple M4 Pro',
+            architecture: 'Apple Silicon (ARM64)',
+            physicalCores: 12,
+            cores: 12,
+            speed: 4.5
+        },
+        gpu: { model: 'Apple M4 Pro', vram: 0 },
+        memory: { total: 24 },
+        summary: { hasIntegratedGPU: false, hasDedicatedGPU: false }
+    };
 
     assert.strictEqual(
         String(hardware.os?.platform || '').toLowerCase(),

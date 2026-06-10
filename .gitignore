@@ -64,13 +64,18 @@ Thumbs.db
 ehthumbs.db
 desktop.ini
 
-# Output reports
+# Output reports (scope to generated report artifacts, NOT all JSON — a bare
+# `*.json` silently untracked src/models/catalog.json and any new data file).
 *.md.html
 *.report.txt
+*.report.json
 performance-report.md
-*.csv
-*.json
+/reports/
 debug.log
 
 # LLM Checker analysis cache
 /.llm-checker-cache/
+
+# Transient feature-probe artifacts (never commit)
+.tmp-feature-check/
+.tmp-*/
