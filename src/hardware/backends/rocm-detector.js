@@ -942,8 +942,12 @@ class ROCmDetector {
                 // Try to match device ID to specific variant
                 const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[deviceId];
                 if (deviceInfo) return deviceInfo.name;
-                // Default to first variant with "AMD Radeon" prefix
-                return `AMD Radeon ${variants[0]}`;
+                // Unknown device ID: lspci groups several SKUs behind one string
+                // (e.g. "Radeon RX 7900 XT/7900 XTX/7900M"). Committing to variants[0]
+                // mislabels the card as the lowest-tier SKU and yields the wrong VRAM,
+                // so keep the full variant list — honestly ambiguous beats confidently
+                // wrong.
+                return `AMD Radeon ${variants.join('/')}`;
             }
             return `AMD Radeon ${bracketName}`;
         }

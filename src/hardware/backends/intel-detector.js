@@ -111,8 +111,12 @@ class IntelDetector {
                 const name = nameMatch[0].replace(/Corporation\s*/i, '').trim();
                 const isDedicated = name.toLowerCase().includes('arc');
 
-                // Get VRAM from sysfs or estimate
-                let vram = this.getVRAMFromSysfs(block) || this.estimateVRAM(name);
+                // Prefer the model-based estimate: getVRAMFromSysfs reads the PCI
+                // MMIO BAR size, which is NOT the card's VRAM (a non-Resizable-BAR
+                // Arc reports ~256M while having 8-16GB), so a wrong BAR value must
+                // not shadow the reliable per-model estimate. BAR is only a last
+                // resort when the model can't be recognized.
+                let vram = this.estimateVRAM(name) || this.getVRAMFromSysfs(block);
 
                 const gpu = {
                     index: result.gpus.length,

@@ -283,7 +283,11 @@ class AppleSiliconDetector {
         const info = this.detect();
         if (!info) return null;
 
-        return `apple-${info.chip.toLowerCase().replace(/\s+/g, '-')}-${info.memory.unified}gb`;
+        // info.chip stays null when the sysctl brand-string read fails (sandboxed
+        // env, missing binary); fall back so this can't throw on null.toLowerCase().
+        const chip = info.chip || 'apple-silicon';
+        const unified = info.memory?.unified || 0;
+        return `apple-${chip.toLowerCase().replace(/\s+/g, '-')}-${unified}gb`;
     }
 
     /**
