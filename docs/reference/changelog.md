@@ -1,6 +1,45 @@
 Changelog
 =========
 
+3.6.0 — Bug Fixes, Logic Improvements & Test Hardening (2026-06-10)
+------------------------------------------------------------------
+
+Audited the codebase and fixed a large batch of verified issues across hardware
+detection, scoring, the Ollama client, the CLI, data persistence, policy, and the
+test suite.
+
+- Hardware:
+  - `normalizeVRAM` no longer reads a small megabyte framebuffer as gigabytes (a
+    64 MB controller had been reported as 64 GB), and very large cards (128 GB+)
+    are converted correctly.
+  - GPU inventory is de-duplicated across detection sources: a recent card whose
+    PCI id is not yet in the distro database (e.g. a Blackwell RTX 5070) is now
+    reported once, with a real name and correct integrated/dedicated class,
+    instead of appearing 3–5 times as separate "dedicated GPUs".
+  - Apple Silicon fingerprinting no longer crashes when the chip name can't be read.
+- Scoring / recommendations:
+  - Realistic KV-cache estimate (a 70B model is no longer assigned a phantom
+    ~299 GB and silently excluded); crash-free probe re-scoring; modern family
+    quality tiers (phi4 / qwen3 / gemma3 / granite3); continuous memory-fit score.
+  - Unit-aware model-size parsing across estimators (millions vs billions).
+- Ollama:
+  - NDJSON streaming is buffered across chunks and tolerates partial/non-JSON
+    lines; graceful fallbacks instead of masking errors; capacity planner now flags
+    when no configuration fits the budget; `autoCleanup: false` is honored.
+- CLI:
+  - `--json` always emits parseable JSON (including error / empty-result paths);
+    `ai-check` validates numeric options; `ai-check --models` actually filters now;
+    removed unimplemented `ollama` flags.
+- Data / policy / calibration:
+  - Database writes are batched and atomic (full sync was O(n^2) and could corrupt
+    `models.db`); scoped the over-broad `*.json` gitignore; removed committed
+    scratch artifacts. Closed an exception-expiry enforcement bypass; fixed glob
+    `?` handling, registry-prefixed version parsing, and sub-millisecond latency
+    truncation.
+- Tests: previously failing/flaky hardware, performance, CPU, and Ollama tests are
+  hermetic and deterministic; CLI spawn tests isolate `HOME`; hardware-simulation
+  reporting is accurate with real large-model coverage. Full suite green (35/35).
+
 3.5.11 — Windows Ollama Host Normalization Follow-up (2026-03-27)
 -----------------------------------------------------------------
 
