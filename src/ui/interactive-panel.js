@@ -9,9 +9,38 @@ const {
     renderPersistentBanner,
     __private: {
         clearTerminal,
-        getSafeTerminalWidth
+        getSafeTerminalWidth,
+        getTextBannerLineCount
     }
 } = require('./cli-theme');
+
+// Fixed (non-banner, non-command) chrome lines emitted by the full-layout panel:
+// blank-after-banner, top separator, input line, separator, title, blank,
+// blank-before-footer, separator, footer hint = 9 lines. Keep this in sync with
+// renderPanel(); the integration test asserts the rendered budget never overflows.
+const FIXED_CHROME_LINES = 9;
+// Fixed chrome for the compact header layout (single-line header replaces the
+// 37-line banner): header, separator, input, separator, title, blank,
+// blank-before-footer, separator, footer = 9 lines as well.
+const COMPACT_CHROME_LINES = 9;
+// Smallest command list we are willing to show in either layout.
+const MIN_FULL_COMMAND_ROWS = 3;
+const MIN_COMPACT_COMMAND_ROWS = 4;
+const MAX_COMMAND_ROWS = 16;
+
+// Derive the full-layout banner height from the real banner asset so layout
+// budgeting tracks the banner automatically instead of drifting from a literal.
+function getBannerLineCount() {
+    const count = typeof getTextBannerLineCount === 'function' ? getTextBannerLineCount() : 0;
+    return Number.isFinite(count) && count > 0 ? count : 37;
+}
+
+// Total fixed (always-present) lines for a layout, excluding the command list.
+function getReservedRows(compact = false) {
+    return compact
+        ? COMPACT_CHROME_LINES
+        : getBannerLineCount() + FIXED_CHROME_LINES;
+}
 
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
@@ -59,6 +88,15 @@ function getTerminalRows(rows = process.stdout.rows) {
     return Math.floor(value);
 }
 
+// Minimum terminal height at which the full-banner layout fits without scrolling.
+// The full layout always emits getReservedRows(false) fixed lines plus at least
+// MIN_FULL_COMMAND_ROWS command rows, so anything shorter must use the compact
+// header instead (otherwise the panel overflows the viewport and flickers, the
+// #86 artifact on Windows Terminal / PowerShell / CMD).
+function getFullLayoutMinRows() {
+    return getReservedRows(false) + MIN_FULL_COMMAND_ROWS;
+}
+
 function shouldUseCompactPanelLayout({
     rows = process.stdout.rows,
     platform = process.platform,
@@ -69,8 +107,13 @@ function shouldUseCompactPanelLayout({
     const terminalRows = getTerminalRows(rows);
     if (!terminalRows) return false;
 
-    if (platform === 'win32' && terminalRows < 64) return true;
-    return terminalRows < 46;
+    // Windows consoles keep a larger compact band: their scrollback/redraw is the
+    // worst offender, so favor the single-line header well past the strict fit.
+    const fullLayoutMinRows = getFullLayoutMinRows();
+    if (platform === 'win32') {
+        return terminalRows < Math.max(64, fullLayoutMinRows);
+    }
+    return terminalRows < fullLayoutMinRows;
 }
 
 function getMaxCommandRows({
@@ -78,9 +121,9 @@ function getMaxCommandRows({
     compact = false
 } = {}) {
     const terminalRows = getTerminalRows(rows) || 40;
-    const reservedRows = compact ? 9 : 47;
-    const minimumRows = compact ? 4 : 3;
-    return Math.max(minimumRows, Math.min(16, terminalRows - reservedRows));
+    const reservedRows = getReservedRows(compact);
+    const minimumRows = compact ? MIN_COMPACT_COMMAND_ROWS : MIN_FULL_COMMAND_ROWS;
+    return Math.max(minimumRows, Math.min(MAX_COMMAND_ROWS, terminalRows - reservedRows));
 }
 
 function tokenizeArgString(rawInput = '') {
@@ -476,10 +519,17 @@ async function launchInteractivePanel(options) {
         colorPhase: 0
     };
 
+    let lastRenderedColorPhase = null;
     const renderNow = () => {
+        lastRenderedColorPhase = state.colorPhase;
         renderPanel(state, catalog, primaryCommands, { colorPhase: state.colorPhase });
     };
 
+    // Fix #5: the startup reveal animation (animateBanner) already commits its
+    // final banner frame to the screen. Previously renderNow() then immediately
+    // cleared and redrew the whole screen a second time, producing a visible
+    // double-clear flash. Run the reveal once, then commit the panel chrome a
+    // single time on top of the same screen state.
     if (!shouldUseCompactPanelLayout()) {
         await animateBanner({ text: appName });
     }
@@ -490,6 +540,7 @@ async function launchInteractivePanel(options) {
     return new Promise((resolve) => {
         const shouldPulseBanner = shouldEnableBannerPulse();
         let pulseTimer = null;
+        let resizeTimer = null;
 
         const stopBannerPulse = () => {
             if (pulseTimer) {
@@ -500,15 +551,42 @@ async function launchInteractivePanel(options) {
 
         const startBannerPulse = () => {
             if (!shouldPulseBanner || pulseTimer) return;
+            // Fix #4: animating color no longer drives a full-screen clear+redraw
+            // 8x/second. Slow the cadence and only repaint when the visible color
+            // phase actually advanced, so an idle panel stops thrashing the
+            // terminal (the flicker amplifier behind issue #86).
             pulseTimer = setInterval(() => {
                 if (state.busy) return;
                 state.colorPhase = (state.colorPhase + 1) % 1024;
+                if (state.colorPhase === lastRenderedColorPhase) return;
                 renderNow();
-            }, 120);
+            }, 220);
+        };
+
+        // Fix #3: react to terminal resizes. The pulse timer is disabled on
+        // Windows, so without this the panel keeps drawing at the old width until
+        // the next keypress, tearing the borders (the #86 artifact). Debounce so a
+        // drag-resize coalesces into a single repaint at the final size.
+        const onResize = () => {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                resizeTimer = null;
+                if (state.busy) return;
+                renderNow();
+            }, 100);
+        };
+
+        const stopResizeWatcher = () => {
+            if (resizeTimer) {
+                clearTimeout(resizeTimer);
+                resizeTimer = null;
+            }
+            process.stdout.off('resize', onResize);
         };
 
         const stopInteractiveMode = () => {
             stopBannerPulse();
+            stopResizeWatcher();
             process.stdin.off('keypress', onKeypress);
             if (process.stdin.isTTY) process.stdin.setRawMode(false);
             process.stdin.pause();
@@ -519,6 +597,7 @@ async function launchInteractivePanel(options) {
             if (process.stdin.isTTY) process.stdin.setRawMode(true);
             process.stdin.resume();
             startBannerPulse();
+            process.stdout.on('resize', onResize);
             renderNow();
         };
 
@@ -647,6 +726,14 @@ module.exports = {
         shouldEnableBannerPulse,
         getPanelWidth,
         getMaxCommandRows,
-        shouldUseCompactPanelLayout
+        shouldUseCompactPanelLayout,
+        getBannerLineCount,
+        getReservedRows,
+        getFullLayoutMinRows,
+        FIXED_CHROME_LINES,
+        COMPACT_CHROME_LINES,
+        MIN_FULL_COMMAND_ROWS,
+        MIN_COMPACT_COMMAND_ROWS,
+        MAX_COMMAND_ROWS
     }
 };

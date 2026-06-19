@@ -175,8 +175,8 @@ function run() {
     );
     assert.strictEqual(
         getSafeTerminalWidth(207, 'linux'),
-        207,
-        'Non-Windows rendering can use the reported terminal width'
+        206,
+        'All platforms reserve one trailing cell so auto-wrap terminals do not tear the panel border'
     );
     assert.strictEqual(
         getTerminalClearSequence('win32'),
@@ -210,8 +210,8 @@ function run() {
     );
     assert.strictEqual(
         getMaxCommandRows({ rows: 50, compact: false }),
-        3,
-        'full banner layout should not overflow a 50-row terminal'
+        4,
+        'full banner layout reserves the real banner+chrome height and must not overflow a 50-row terminal'
     );
 
     const bannerLogs = captureConsoleLogs(() => {
