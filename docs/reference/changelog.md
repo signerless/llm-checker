@@ -1,12 +1,13 @@
 Changelog
 =========
 
-Unreleased — Issue #88 / #86 Fixes & MCP Hardening
---------------------------------------------------
+3.6.1 — Issue #88 / #86 Fixes & MCP Hardening (2026-06-19)
+---------------------------------------------------------
 
-Four focused, independently-tested fixes (one PR each). Every item ships with an
-integration test registered in `tests/run-all-tests.js`; the full suite is green
-at 39/39 (35 prior + 4 new).
+First npm release since 3.5.15 — it also carries the previously-unpublished
+3.6.0 batch below. Four focused, independently-tested fixes (one PR each). Every
+item ships with an integration test registered in `tests/run-all-tests.js`; the
+full suite is green at 39/39 (35 prior + 4 new).
 
 - Hardware — GPU-VRAM detection for high-end / multi-GPU machines (PR #95, part of #88):
   - Added accurate workstation/datacenter VRAM entries (RTX PRO 6000, RTX 6000 Ada,
