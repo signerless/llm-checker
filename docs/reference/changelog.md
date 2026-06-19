@@ -1,6 +1,46 @@
 Changelog
 =========
 
+Unreleased — Issue #88 / #86 Fixes & MCP Hardening
+--------------------------------------------------
+
+Four focused, independently-tested fixes (one PR each). Every item ships with an
+integration test registered in `tests/run-all-tests.js`; the full suite is green
+at 39/39 (35 prior + 4 new).
+
+- Hardware — GPU-VRAM detection for high-end / multi-GPU machines (PR #95, part of #88):
+  - Added accurate workstation/datacenter VRAM entries (RTX PRO 6000, RTX 6000 Ada,
+    A6000/A5000, A100 80/40, H100/H200, L40/L40S, A40) to both `estimateVRAMFromModel`
+    and `estimateFallbackVRAM`, so unknown high-VRAM cards no longer collapse to a
+    generic 8 GB. A dual RTX PRO 6000 box that resolved to ~16 GB now resolves to ~192 GB.
+  - Removed the GB "dead zone" in VRAM normalization (`normalizeVRAM(96)` and
+    `normalizeFallbackVRAM(192)` previously returned 0).
+  - Guarded `willModelFit` against the `totalVRAM / gpuCount` divide-by-zero that made
+    every model report as fitting when `gpuCount === 0`.
+  - Hardened `nvidia-smi` CSV parsing and guarded `processMemoryInfo` against NaN.
+  - Test: `tests/hardware-vram-highend.test.js`.
+- Scoring / recommendations — unified scoring core (PR #96, fixes #88):
+  - `check`, `recommend`, and `smart-recommend` now rank through one canonical core
+    (`DeterministicModelSelector` via `src/models/scoring-core.js`), so identical
+    (model, hardware) inputs score identically and the high-capacity right-sizing floor
+    applies on all three paths. Tiny 2B–8B models no longer out-rank large models on
+    high-end hardware in `check`/`smart-recommend`. Each command keeps its own model
+    source and display shape; only the ranking is unified.
+  - Test: `tests/scoring-unification.test.js`.
+- MCP server hardening (PR #97):
+  - `ollama_optimize` and `cleanup_models` read hardware facts from `hw-detect --json`
+    instead of regex-scraping human output; fixed divide-by-1-nanosecond tokens/sec in
+    `benchmark`/`compare_models`; `compare_models` runs sequentially; version is read
+    from `package.json`; `.github` framework detection fires; CLI failures surface as
+    `isError`; the module is importable without starting the stdio server.
+  - Test: `tests/mcp-server.test.mjs`.
+- UI — Windows interactive-panel flicker (PR #98, part of #86):
+  - Fixed full-panel height overflow on 46–49 row terminals (compact threshold derived
+    from the real banner + chrome line count, not a magic 47); added debounced terminal
+    `resize` handling; the banner pulse no longer full-clears 8×/second; removed a double
+    startup render; the safe-width margin now applies on all platforms.
+  - Test: `tests/windows-panel-overflow.test.js`.
+
 3.6.0 — Bug Fixes, Logic Improvements & Test Hardening (2026-06-10)
 ------------------------------------------------------------------
 

@@ -573,14 +573,18 @@ This makes integrated GPUs visible even when the selected runtime backend is sti
 llm-checker recommend
 ```
 
-Use `recommend` as the canonical model-picking command. Other recommendation-like
-commands have narrower roles:
+As of the scoring unification (#96), `check`, `recommend`, and `smart-recommend`
+all derive their ranking from **one canonical scoring core**
+(`DeterministicModelSelector` via `src/models/scoring-core.js`), so identical
+`(model, hardware)` inputs score identically across all three and the
+high-capacity right-sizing floor applies everywhere. They differ only in their
+model **source** and **presentation**, not in how a given model is ranked:
 
-| Command | Role | Expected to match `recommend`? |
-|---------|------|--------------------------------|
-| `recommend` | Canonical deterministic model recommendations by category | Yes, this is the reference output |
-| `check` | Hardware compatibility report with a compatibility-oriented recommendation card | Not exactly; it prioritizes fit/reporting context |
-| `smart-recommend` | Experimental alternate scoring engine used while scoring ideas are evaluated | No; it may differ until it is unified or retired |
+| Command | Role | Ranking core |
+|---------|------|--------------|
+| `recommend` | Canonical model recommendations by category | Shared core (reference output) |
+| `check` | Full hardware-compatibility report with a recommendation card | Shared core (consistent ranking, fit-oriented report) |
+| `smart-recommend` | Catalog/DB-backed recommendations with a detailed score breakdown | Shared core (same ordering + scores) |
 
 Use optimization profiles to steer ranking by intent:
 
@@ -704,7 +708,7 @@ Three scoring systems are available, each optimized for different workflows:
 | `reasoning` | 60% | 10% | 20% | 10% |
 | `multimodal` | 50% | 15% | 20% | 15% |
 
-**Scoring Engine** (experimental &mdash; used by `smart-recommend` and `search`):
+**Scoring Engine** (used by `search` for catalog scoring; `smart-recommend`'s final ranking is produced by the shared scoring core &mdash; see #96):
 
 | Use Case | Quality | Speed | Fit | Context |
 |----------|:-------:|:-----:|:---:|:-------:|
