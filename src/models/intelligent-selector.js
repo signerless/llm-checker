@@ -10,6 +10,7 @@ const ScoringEngine = require('./scoring-engine');
 const UnifiedDetector = require('../hardware/unified-detector');
 const PolicyManager = require('../policy/policy-manager');
 const PolicyEngine = require('../policy/policy-engine');
+const { rankModels } = require('./scoring-core');
 
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -66,7 +67,9 @@ class IntelligentSelector {
         // Apply filters
         const filtered = this.applyFilters(variants, opts, hardware);
 
-        // Score all filtered variants
+        // Score all filtered variants. ScoringEngine still produces the
+        // per-variant `score` objects (final/components/meta) consumed by the
+        // smart-recommend display, but the RANKING is unified below.
         const scored = this.scoring.filterAndScore(filtered, hardware, {
             useCase: opts.useCase,
             targetContext: opts.targetContext,
@@ -74,6 +77,12 @@ class IntelligentSelector {
             runtime: opts.runtime,
             headroom: opts.headroom || 2
         });
+
+        // Unify ranking with the canonical scoring core (issue #88): re-order
+        // the scored list and rewrite each item's final score using the shared
+        // DeterministicModelSelector so smart-recommend agrees with
+        // `check`/`recommend` and inherits the PR #89 high-capacity floor.
+        await this.applyUnifiedRanking(scored, hardware, opts);
 
         const policyEngine = this.resolvePolicyEngine(opts);
         const scoredWithPolicy = policyEngine.evaluateScoredVariants(
@@ -112,6 +121,83 @@ class IntelligentSelector {
                 useCase: opts.useCase
             }
         };
+    }
+
+    /**
+     * Re-rank the ScoringEngine-scored variants using the canonical scoring
+     * core so smart-recommend's ordering and headline scores match
+     * `check`/`recommend` and inherit the high-capacity right-sizing floor.
+     *
+     * Mutates `scored` in place: it is sorted by the unified score and each
+     * item's `score.final` is overwritten with the canonical 0-100 score.
+     * Component/meta sub-scores are left intact so the existing display (which
+     * shows Q/S/F and estimated TPS) keeps working. If the core cannot rank a
+     * variant (or throws), that item keeps its original ScoringEngine score and
+     * sorts after the unified ones, preserving a sensible fallback ordering.
+     */
+    async applyUnifiedRanking(scored, hardware, opts = {}) {
+        if (!Array.isArray(scored) || scored.length === 0) return scored;
+
+        let ranking;
+        try {
+            ranking = await rankModels(
+                scored.map((item) => item.variant),
+                hardware,
+                {
+                    category: opts.useCase || 'general',
+                    optimizeFor: opts.optimizeFor || opts.optimize || 'balanced',
+                    runtime: opts.runtime || 'ollama',
+                    topN: scored.length
+                }
+            );
+        } catch (error) {
+            return scored; // Defensive: keep original ScoringEngine ordering.
+        }
+
+        if (!ranking || !Array.isArray(ranking.candidates)) return scored;
+
+        // Map each source variant -> its unified score + ordering index.
+        const unifiedByVariant = new Map();
+        ranking.candidates.forEach((candidate, index) => {
+            const source = candidate?.meta?.__source;
+            if (!source) return;
+            unifiedByVariant.set(source, {
+                unifiedScore: Math.round(candidate.score * 10) / 10,
+                rank: index,
+                quant: candidate.quant,
+                estimatedTPS: candidate.estTPS
+            });
+        });
+
+        for (const item of scored) {
+            const unified = unifiedByVariant.get(item.variant);
+            if (!unified) {
+                // Not ranked by the core (e.g. filtered out): sort last and tag
+                // so any downstream tie-breaks are deterministic.
+                item.__unifiedRank = Number.MAX_SAFE_INTEGER;
+                continue;
+            }
+            item.__unifiedRank = unified.rank;
+            if (item.score) {
+                item.score.final = Math.min(100, Math.max(0, Math.round(unified.unifiedScore)));
+                if (item.score.meta) {
+                    item.score.meta.unifiedScore = unified.unifiedScore;
+                }
+            }
+        }
+
+        scored.sort((a, b) => {
+            const ra = Number.isFinite(a.__unifiedRank) ? a.__unifiedRank : Number.MAX_SAFE_INTEGER;
+            const rb = Number.isFinite(b.__unifiedRank) ? b.__unifiedRank : Number.MAX_SAFE_INTEGER;
+            if (ra !== rb) return ra - rb;
+            return (b.score?.final || 0) - (a.score?.final || 0);
+        });
+
+        for (const item of scored) {
+            delete item.__unifiedRank;
+        }
+
+        return scored;
     }
 
     /**

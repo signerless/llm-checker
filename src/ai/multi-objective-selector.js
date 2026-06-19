@@ -10,6 +10,7 @@
 
 const { MULTI_OBJECTIVE_WEIGHTS } = require('../models/scoring-config');
 const { normalizePlatform } = require('../utils/platform');
+const { rankModels } = require('../models/scoring-core');
 
 class MultiObjectiveSelector {
     constructor() {
@@ -40,23 +41,124 @@ class MultiObjectiveSelector {
     }
 
     /**
-     * Select best models using multi-objective ranking
+     * Select best models using the UNIFIED canonical scoring core (issue #88).
+     *
+     * `check` used to rank through this selector's own multi-objective math,
+     * which diverged from `recommend`/`smart-recommend` and never received the
+     * PR #89 high-capacity right-sizing fix. It now routes the ranking through
+     * the shared DeterministicModelSelector core (via scoring-core.rankModels)
+     * so identical (model, hardware) inputs score identically across all three
+     * commands and the high-capacity floor applies here too.
+     *
+     * The output shape is preserved exactly: `{ compatible, marginal,
+     * incompatible }`, each entry being the ORIGINAL model object spread with
+     * `totalScore`, `components { quality, speed, ttfb, context, hardwareMatch }`
+     * and `reasoning`, so downstream `check` rendering and the regression test
+     * (which calls `estimateModelParams` on the returned object) keep working.
      */
     async selectBestModels(hardware, models, category = 'general', topK = 10) {
-        // Step 1: Hard filters - remove incompatible models
+        const inputModels = Array.isArray(models) ? models.filter(Boolean) : [];
+        if (inputModels.length === 0) {
+            return { compatible: [], marginal: [], incompatible: [] };
+        }
+
+        let ranking;
+        try {
+            ranking = await rankModels(inputModels, hardware, { category, topN: inputModels.length });
+        } catch (error) {
+            ranking = null;
+        }
+
+        // Defensive fallback: if the unified core is unavailable for any reason,
+        // fall back to the legacy multi-objective ranking so `check` still works.
+        if (!ranking || !Array.isArray(ranking.candidates)) {
+            return this.selectBestModelsLegacy(hardware, inputModels, category, topK);
+        }
+
+        const scoredModels = [];
+        const rankedSources = new Set();
+        for (const candidate of ranking.candidates) {
+            const source = candidate?.meta?.__source;
+            if (!source) continue;
+            rankedSources.add(source);
+            scoredModels.push(this.mapCoreCandidateToMultiObjective(candidate, source, hardware, category));
+        }
+
+        // Models the canonical core dropped (category filter / budget) are not
+        // viable on this hardware for this use case -> treat as incompatible,
+        // mirroring the previous hard-filter semantics.
+        const incompatibleExtras = inputModels
+            .filter((model) => !rankedSources.has(model))
+            .map((model) => ({
+                ...model,
+                totalScore: 0,
+                components: { quality: 0, speed: 0, ttfb: 0, context: 0, hardwareMatch: 0 },
+                reasoning: 'Filtered out by unified scoring core (does not fit hardware/use-case)'
+            }));
+
+        scoredModels.sort((a, b) => b.totalScore - a.totalScore);
+
+        const classified = this.classifyResults(scoredModels, topK);
+        classified.incompatible = [...classified.incompatible, ...incompatibleExtras].slice(0, 5);
+        return classified;
+    }
+
+    /**
+     * Map a unified-core candidate back into this selector's multi-objective
+     * output shape. The 0-100 `score` from the deterministic core becomes
+     * `totalScore`; component sub-scores are normalized to 0-1 to match the
+     * historical `components` contract consumed by `check` rendering.
+     */
+    mapCoreCandidateToMultiObjective(candidate, source, hardware, category) {
+        const components = candidate.components || {};
+        const to01 = (value) => {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return 0;
+            return Math.max(0, Math.min(1, num / 100));
+        };
+
+        const quality = to01(components.Q);
+        const speed = to01(components.S);
+        const context = to01(components.C);
+        // The deterministic core folds hardware fitness into the `F` (fit) plus
+        // `H` (high-capacity right-sizing) components; surface that as the
+        // historical `hardwareMatch` signal so `check` insights stay meaningful.
+        const hardwareMatch = to01((Number(components.F) || 0) + (Number(components.H) || 0));
+
+        return {
+            ...source,
+            totalScore: Math.round(candidate.score * 100) / 100,
+            score: Math.round(candidate.score * 100) / 100,
+            components: {
+                quality,
+                speed,
+                ttfb: speed, // ttfb tracks speed; legacy field retained for shape
+                context,
+                hardwareMatch
+            },
+            quant: candidate.quant || source.quant,
+            estimatedRAM: candidate.requiredGB,
+            estimatedTPS: candidate.estTPS,
+            reasoning: candidate.rationale ||
+                this.generateReasoning(source, hardware, quality, hardwareMatch)
+        };
+    }
+
+    /**
+     * Legacy multi-objective ranking, retained ONLY as a defensive fallback if
+     * the unified core throws. Not used on the normal path.
+     */
+    selectBestModelsLegacy(hardware, models, category = 'general', topK = 10) {
         const compatibleModels = this.applyHardFilters(hardware, models);
-        
+
         if (compatibleModels.length === 0) {
             return { compatible: [], marginal: [], incompatible: models };
         }
 
-        // Step 2: Multi-objective scoring
-        const scoredModels = compatibleModels.map(model => 
+        const scoredModels = compatibleModels.map(model =>
             this.calculateMultiObjectiveScore(hardware, model, category)
         ).filter(Boolean);
-        
 
-        // Step 3: Sort and classify
         scoredModels.sort((a, b) => b.totalScore - a.totalScore);
 
         return this.classifyResults(scoredModels, topK);
