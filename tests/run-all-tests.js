@@ -13,6 +13,7 @@ const TESTS = [
     { name: 'Hardware detector regression', file: 'hardware-detector-regression.js', category: 'Hardware' },
     { name: 'Hardware tier consistency', file: 'hardware-tier-consistency.test.js', category: 'Hardware' },
     { name: 'ROCm VRAM parsing regression', file: 'rocm-vram-parsing.test.js', category: 'Hardware' },
+    { name: 'High-end / multi-GPU VRAM detection', file: 'hardware-vram-highend.test.js', category: 'Hardware' },
     { name: 'CPU detector Windows fallback', file: 'cpu-detector-windows-fallback.test.js', category: 'Hardware' },
     { name: 'Termux platform support', file: 'termux-platform-support.test.js', category: 'Hardware' },
     { name: 'Token speed estimation', file: 'token-speed-estimation.test.js', category: 'Performance' },

@@ -249,40 +249,65 @@ class CUDADetector {
 
             const lines = gpuData.split('\n');
 
-            for (const line of lines) {
-                const parts = line.split(', ').map(p => p.trim());
+            // Older drivers emit fewer columns (e.g. no power/clocks), and the CSV
+            // separator can be either ", " or "," depending on driver/locale. Split
+            // tolerantly and only require the leading identity + memory columns so a
+            // GPU is never dropped just because optional trailing fields are absent.
+            const toMB = (value) => {
+                const n = parseInt(value, 10);
+                return Number.isFinite(n) ? n : 0;
+            };
+            const toGB = (value) => {
+                const mb = toMB(value);
+                return mb > 0 ? Math.round(mb / 1024) : 0;
+            };
+            const toInt = (value) => {
+                const n = parseInt(value, 10);
+                return Number.isFinite(n) ? n : 0;
+            };
+            const toFloat = (value) => {
+                const n = parseFloat(value);
+                return Number.isFinite(n) ? n : 0;
+            };
 
-                if (parts.length < 10) continue;
+            for (const line of lines) {
+                if (!line || !line.trim()) continue;
+                const parts = line.split(/\s*,\s*/).map(p => p.trim());
+
+                // Need at least index, name, uuid, memory.total to describe a GPU.
+                if (parts.length < 4) continue;
+
+                const memTotalMB = toMB(parts[3]);
 
                 const gpu = {
-                    index: parseInt(parts[0]) || 0,
+                    index: toInt(parts[0]),
                     name: parts[1] || 'Unknown NVIDIA GPU',
                     uuid: parts[2] || null,
                     memory: {
-                        total: Math.round(parseInt(parts[3]) / 1024) || 0,  // Convert MB to GB
-                        free: Math.round(parseInt(parts[4]) / 1024) || 0,
-                        used: Math.round(parseInt(parts[5]) / 1024) || 0
+                        total: toGB(parts[3]),  // Convert MB to GB
+                        free: toGB(parts[4]),
+                        used: toGB(parts[5])
                     },
                     computeMode: parts[6] || 'Default',
                     pcie: {
-                        generation: parseInt(parts[7]) || 0,
-                        width: parseInt(parts[8]) || 0
+                        generation: toInt(parts[7]),
+                        width: toInt(parts[8])
                     },
                     power: {
-                        draw: parseFloat(parts[9]) || 0,
-                        limit: parseFloat(parts[10]) || 0
+                        draw: toFloat(parts[9]),
+                        limit: toFloat(parts[10])
                     },
-                    temperature: parseInt(parts[11]) || 0,
+                    temperature: toInt(parts[11]),
                     utilization: {
-                        gpu: parseInt(parts[12]) || 0,
-                        memory: parseInt(parts[13]) || 0
+                        gpu: toInt(parts[12]),
+                        memory: toInt(parts[13])
                     },
                     clocks: {
-                        current: parseInt(parts[14]) || 0,
-                        max: parseInt(parts[15]) || 0
+                        current: toInt(parts[14]),
+                        max: toInt(parts[15])
                     },
                     capabilities: this.getGPUCapabilities(parts[1]),
-                    speedCoefficient: this.calculateSpeedCoefficient(parts[1], parseInt(parts[3]))
+                    speedCoefficient: this.calculateSpeedCoefficient(parts[1], memTotalMB)
                 };
 
                 result.gpus.push(gpu);
@@ -298,15 +323,18 @@ class CUDADetector {
 
                 const lines = simpleQuery.split('\n');
                 for (let i = 0; i < lines.length; i++) {
-                    const [name, memMB] = lines[i].split(', ').map(p => p.trim());
-                    const memGB = Math.round(parseInt(memMB) / 1024) || 0;
+                    if (!lines[i] || !lines[i].trim()) continue;
+                    const [name, memMB] = lines[i].split(/\s*,\s*/).map(p => p.trim());
+                    const parsedMB = parseInt(memMB, 10);
+                    const memMBSafe = Number.isFinite(parsedMB) ? parsedMB : 0;
+                    const memGB = memMBSafe > 0 ? Math.round(memMBSafe / 1024) : 0;
 
                     result.gpus.push({
                         index: i,
                         name: name || 'NVIDIA GPU',
                         memory: { total: memGB, free: memGB, used: 0 },
                         capabilities: this.getGPUCapabilities(name),
-                        speedCoefficient: this.calculateSpeedCoefficient(name, parseInt(memMB))
+                        speedCoefficient: this.calculateSpeedCoefficient(name, memMBSafe)
                     });
                     result.totalVRAM += memGB;
                 }
