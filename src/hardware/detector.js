@@ -85,12 +85,16 @@ class HardwareDetector {
         const freeGB = Math.round(memory.free / (1024 ** 3));
         const usedGB = totalGB - freeGB;
 
+        // Guard against a zero/unknown total (some virtualized or sandboxed hosts
+        // report memory.total === 0), which would otherwise make usagePercent NaN.
+        const usagePercent = totalGB > 0 ? Math.round((usedGB / totalGB) * 100) : 0;
+
         return {
             total: totalGB,
             free: freeGB,
             used: usedGB,
             available: Math.round(memory.available / (1024 ** 3)),
-            usagePercent: Math.round((usedGB / totalGB) * 100),
+            usagePercent,
             swapTotal: Math.round(memory.swaptotal / (1024 ** 3)),
             swapUsed: Math.round(memory.swapused / (1024 ** 3)),
             score: this.calculateMemoryScore(totalGB, freeGB)
@@ -558,8 +562,23 @@ class HardwareDetector {
 
         // NVIDIA data-center / workstation
         if (modelLower.includes('gb10') || modelLower.includes('grace blackwell') || modelLower.includes('dgx spark')) return 96;
+
+        // NVIDIA Blackwell / Ada / Hopper workstation & datacenter cards. These are
+        // matched BEFORE the generic "rtx -> 8" fallback so high-VRAM professional
+        // GPUs (e.g. "RTX PRO 6000") are not collapsed to 8GB (issue #88).
+        if (modelLower.includes('rtx pro 6000') || modelLower.includes('rtx 6000 blackwell')) return 96;
+        if (modelLower.includes('rtx 6000 ada') || modelLower.includes('rtx 5000 ada')) return 48;
+        if (modelLower.includes('rtx a6000') || modelLower.includes('a6000')) return 48;
+        if (modelLower.includes('rtx a5000') || modelLower.includes('a5000')) return 24;
+        if (modelLower.includes('l40s') || modelLower.includes('l40')) return 48;
+        if (modelLower.includes('h200')) return 141;
+        if (modelLower.includes('h100')) return 80;
+        if (modelLower.includes('a100') && (modelLower.includes('40gb') || /a100[\s-]?(?:pcie[\s-]?)?40\b/.test(modelLower))) return 40;
+        if (modelLower.includes('a100')) return 80; // A100 defaults to the 80GB SKU
+        if (modelLower.includes('a40')) return 48;
+
         if (modelLower.includes('tesla p100') || modelLower.includes('p100')) return 16;
-        
+
         // NVIDIA RTX 50 series
         if (modelLower.includes('rtx 5090')) return 32;
         if (modelLower.includes('rtx 5080')) return 16;
@@ -640,7 +659,7 @@ class HardwareDetector {
         else score += totalGB * 2;
 
         // Score basado en RAM disponible
-        const freePercent = (freeGB / totalGB) * 100;
+        const freePercent = totalGB > 0 ? (freeGB / totalGB) * 100 : 0;
         if (freePercent > 50) score += 20;
         else if (freePercent > 30) score += 15;
         else if (freePercent > 20) score += 10;
@@ -746,20 +765,34 @@ class HardwareDetector {
         const raw = Number(vram);
         if (!Number.isFinite(raw) || raw <= 0) return 0;
 
-        // Inputs reaching this function are reported by systeminformation / lspci,
-        // which express controller VRAM in megabytes — except very large values,
-        // which are raw bytes on the systems that report that way. No source ever
-        // supplies gigabytes here, so the old "1-80 means GB" heuristic was wrong
-        // (it turned a 64 MB framebuffer into 64 GB of VRAM). Normalize everything
-        // to MB first, then convert once to GB.
+        // Inputs reaching this function come from systeminformation / lspci (which
+        // express controller VRAM in megabytes), from raw byte counts on systems
+        // that report that way, and increasingly from our own curated GB tables
+        // (estimateVRAMFromModel, device-id maps) fed back through here. The unit
+        // is inferred from magnitude:
         //
-        // 1e6 cleanly separates the two units: the largest real VRAM in MB is well
-        // under 1,000,000 (a 192 GB card is ~196,608 MB), while the same card in
-        // bytes is far above it. The previous >100000 byte threshold mis-handled
-        // any card above ~97 GB reported in MB.
-        const mb = raw > 1_000_000 ? raw / (1024 * 1024) : raw;
-
-        return Math.max(0, Math.round(mb / 1024)); // MB -> GB
+        //   > 1e6            -> raw bytes (a 192 GB card is ~2.06e11 bytes, while
+        //                       the same card in MB is ~196,608, well under 1e6).
+        //   >= 1024          -> megabytes (the smallest dedicated framebuffer that
+        //                       still rounds to >=1 GB; this is the systeminformation
+        //                       reporting range, e.g. 8192, 16384, 16368).
+        //   1 <= v <= 256    -> already gigabytes. Real single-GPU VRAM tops out
+        //                       around 192 GB (H200 ~141, B200/MI ~192), so any
+        //                       small integer in this band is a GB value. This is
+        //                       the dead-zone fix for issue #88: normalizeVRAM(96)
+        //                       used to return 0 (treated 96 as 96 MB -> 0 GB).
+        //   257 <= v < 1024  -> sub-gigabyte framebuffer in MB (e.g. a 512 MB
+        //                       aperture) -> rounds to 0/1 GB as before.
+        if (raw > 1_000_000) {
+            return Math.max(0, Math.round(raw / (1024 * 1024 * 1024))); // bytes -> GB
+        }
+        if (raw >= 1024) {
+            return Math.max(0, Math.round(raw / 1024)); // MB -> GB
+        }
+        if (raw <= 256) {
+            return Math.round(raw); // already GB (plausible single-GPU range)
+        }
+        return Math.max(0, Math.round(raw / 1024)); // 257..1023 MB -> GB
     }
     
     /**

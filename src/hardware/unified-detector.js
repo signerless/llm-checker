@@ -791,22 +791,27 @@ class UnifiedDetector {
         const num = Number(value);
         if (!Number.isFinite(num) || num <= 0) return 0;
 
-        // Bytes -> GB
-        if (num > 1024 * 1024) {
-            return Math.round(num / (1024 * 1024 * 1024));
+        // Unit inference by magnitude, kept consistent with
+        // HardwareDetector.normalizeVRAM so both detection paths agree:
+        //
+        //   > 1e6            -> raw bytes.
+        //   >= 1024          -> megabytes (systeminformation reporting range).
+        //   1 <= v <= 256    -> already gigabytes. The previous "1..80 means GB"
+        //                       band silently returned 0 for legitimate large GB
+        //                       values, so normalizeFallbackVRAM(192) was 0 — the
+        //                       192 GB box in issue #88 collapsed to nothing. A
+        //                       single GPU realistically tops out around 192 GB.
+        //   257 <= v < 1024  -> sub-gigabyte framebuffer in MB -> rounds to 0/1 GB.
+        if (num > 1_000_000) {
+            return Math.max(0, Math.round(num / (1024 * 1024 * 1024))); // bytes -> GB
         }
-
-        // MB -> GB
         if (num >= 1024) {
-            return Math.round(num / 1024);
+            return Math.max(0, Math.round(num / 1024)); // MB -> GB
         }
-
-        // Likely already GB
-        if (num >= 1 && num <= 80) {
-            return Math.round(num);
+        if (num <= 256) {
+            return Math.round(num); // already GB (plausible single-GPU range)
         }
-
-        return 0;
+        return Math.max(0, Math.round(num / 1024)); // 257..1023 MB -> GB
     }
 
     isIntegratedGPUModel(model) {
@@ -843,6 +848,21 @@ class UnifiedDetector {
         if (lower.includes('rx 7600')) return 8;
         if (lower.includes('rx 6900') || lower.includes('rx 6800')) return 16;
         if (lower.includes('rx 6700')) return 12;
+
+        // NVIDIA workstation / datacenter (Blackwell / Ada / Hopper / Ampere).
+        // Matched BEFORE the consumer RTX entries and the generic fallbacks so a
+        // high-VRAM professional card is not collapsed to a consumer-tier value or
+        // 0 (issue #88: dual "RTX PRO 6000" must reach ~192GB total, not ~16GB).
+        if (lower.includes('rtx pro 6000') || lower.includes('rtx 6000 blackwell')) return 96;
+        if (lower.includes('rtx 6000 ada') || lower.includes('rtx 5000 ada')) return 48;
+        if (lower.includes('rtx a6000') || lower.includes('a6000')) return 48;
+        if (lower.includes('rtx a5000') || lower.includes('a5000')) return 24;
+        if (lower.includes('l40s') || lower.includes('l40')) return 48;
+        if (lower.includes('h200')) return 141;
+        if (lower.includes('h100')) return 80;
+        if (lower.includes('a100') && (lower.includes('40gb') || /a100[\s-]?(?:pcie[\s-]?)?40\b/.test(lower))) return 40;
+        if (lower.includes('a100')) return 80; // A100 defaults to the 80GB SKU
+        if (lower.includes('a40')) return 48;
 
         if (lower.includes('rtx 5090')) return 32;
         if (lower.includes('rtx 4090') || lower.includes('rtx 3090')) return 24;
@@ -953,9 +973,19 @@ class UnifiedDetector {
             summary.bestBackend === 'metal' ||
             (summary.hasIntegratedGPU && !summary.hasDedicatedGPU && summary.integratedSharedMemory > 0)
         ) {
-            return sizeGB <= (summary.effectiveMemory - 2);
+            const effectiveMemory = Number(summary.effectiveMemory);
+            if (!Number.isFinite(effectiveMemory) || effectiveMemory <= 0) return false;
+            return sizeGB <= (effectiveMemory - 2);
         } else {
-            const availableVRAM = useMultiGPU ? summary.totalVRAM : (summary.totalVRAM / summary.gpuCount);
+            const totalVRAM = Number(summary.totalVRAM);
+            if (!Number.isFinite(totalVRAM) || totalVRAM <= 0) return false;
+
+            // Guard the per-GPU divisor: gpuCount can be 0 when the summary was
+            // built without resolved GPU memory, which previously produced
+            // Infinity (totalVRAM / 0) and made any model "fit".
+            const gpuCount = Math.max(1, Number(summary.gpuCount) || 0);
+            const availableVRAM = useMultiGPU ? totalVRAM : (totalVRAM / gpuCount);
+            if (!Number.isFinite(availableVRAM) || availableVRAM <= 0) return false;
             return sizeGB <= (availableVRAM - 2);
         }
     }
