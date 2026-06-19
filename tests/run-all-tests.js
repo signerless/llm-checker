@@ -41,7 +41,8 @@ const TESTS = [
     { name: 'Policy CLI enforcement', file: 'policy-cli-enforcement.js', category: 'Policy' },
     { name: 'Policy engine', file: 'policy-engine.test.js', category: 'Policy' },
     { name: 'Policy audit reporter', file: 'policy-audit-reporter.test.js', category: 'Policy' },
-    { name: 'Policy end-to-end', file: 'policy-e2e-integration.test.js', category: 'Policy' }
+    { name: 'Policy end-to-end', file: 'policy-e2e-integration.test.js', category: 'Policy' },
+    { name: 'MCP server robustness', file: 'mcp-server.test.mjs', category: 'MCP' }
 ];
 
 function runSingleTest(test) {
