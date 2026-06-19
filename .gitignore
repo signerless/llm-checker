@@ -40,6 +40,8 @@ jest.config.js
 coverage/
 !tests/**/*.test.js
 !tests/**/*.spec.js
+!tests/**/*.test.mjs
+!tests/**/*.spec.mjs
 
 # System
 .DS_Store

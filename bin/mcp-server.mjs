@@ -20,6 +20,7 @@ import { promisify } from "util";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readdir, stat } from "fs/promises";
+import { readFileSync } from "fs";
 import http from "http";
 import os from "os";
 
@@ -28,7 +29,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const CLI_PATH = join(__dirname, "enhanced_cli.js");
+const PACKAGE_JSON_PATH = join(__dirname, "..", "package.json");
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
+
+// Read the package version dynamically so the advertised MCP server version
+// never drifts from package.json. Falls back to "0.0.0" if unreadable.
+function readPackageVersion(packagePath = PACKAGE_JSON_PATH) {
+  try {
+    const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
+    return typeof pkg.version === "string" && pkg.version ? pkg.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 // ============================================================================
 // HELPERS
@@ -50,8 +63,13 @@ async function run(args, timeout = 120000) {
     });
     return clean(stdout || stderr);
   } catch (err) {
-    if (err.stdout) return clean(err.stdout);
-    throw new Error(`llm-checker failed: ${err.message}`);
+    // M8: the CLI exited non-zero. Do NOT silently return captured stdout as if
+    // it succeeded — that masks failures from the caller (no error signal).
+    // Throw so the tool handler's catch surfaces isError, while preserving the
+    // captured output in the error message for diagnostics.
+    const captured = clean(err.stdout || err.stderr || "");
+    const detail = captured ? `${err.message}\n${captured}` : err.message;
+    throw new Error(`llm-checker failed: ${detail}`);
   }
 }
 
@@ -107,6 +125,100 @@ function tryParseJSON(text) {
   } catch {
     return null;
   }
+}
+
+// ----------------------------------------------------------------------------
+// Pure helpers (exported for unit testing)
+// ----------------------------------------------------------------------------
+
+// M2: Compute generation speed in tokens/sec from an Ollama /api/generate
+// response. Ollama reports durations in nanoseconds. Only compute a finite
+// value when BOTH eval_count and eval_duration are positive; otherwise return
+// null so callers can render "n/a" instead of dividing by a bogus 1ns fallback
+// (which produced absurd numbers like billions of tok/s).
+function tokensPerSecond(evalCount, evalDurationNs) {
+  const count = Number(evalCount);
+  const durNs = Number(evalDurationNs);
+  if (!Number.isFinite(count) || !Number.isFinite(durNs)) return null;
+  if (count <= 0 || durNs <= 0) return null;
+  return (count / durNs) * 1e9;
+}
+
+// Format a tokens/sec value (possibly null) for display. Renders "n/a" when
+// the value is unavailable, otherwise a fixed-precision number.
+function formatTokPerSec(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return value.toFixed(1);
+}
+
+// M1: Map the structured `hw-detect --json` object to the small set of facts
+// the optimizer/cleanup tools need, sourced from typed fields instead of
+// regex-scraping human-readable CLI text.
+//   - tier:  summary.hardwareTier, upper-cased (e.g. "MEDIUM_HIGH"); "UNKNOWN" if absent.
+//   - vramGB: summary.totalVRAM (unified/dedicated GPU memory budget).
+//   - maxGB: largest model size that fits. Mirrors the detector's
+//            getMaxModelSize(): effectiveMemory - 2GB headroom. Falls back to
+//            totalVRAM/systemRAM derivations, then a sane 15GB default.
+function mapHardwareJson(json) {
+  const summary = (json && typeof json === "object" && json.summary) || {};
+
+  const rawTier = summary.hardwareTier;
+  const tier = typeof rawTier === "string" && rawTier.trim()
+    ? rawTier.trim().toUpperCase()
+    : "UNKNOWN";
+
+  const vramGB = Number.isFinite(Number(summary.totalVRAM)) ? Number(summary.totalVRAM) : null;
+
+  let maxGB;
+  if (Number.isFinite(Number(summary.effectiveMemory))) {
+    maxGB = Math.max(0, Math.round(Number(summary.effectiveMemory) - 2));
+  } else if (Number.isFinite(Number(summary.totalVRAM)) && Number(summary.totalVRAM) > 0) {
+    maxGB = Math.max(0, Math.round(Number(summary.totalVRAM) - 2));
+  } else if (Number.isFinite(Number(summary.systemRAM)) && Number(summary.systemRAM) > 0) {
+    maxGB = Math.max(0, Math.round(Number(summary.systemRAM) - 2));
+  } else {
+    maxGB = 15; // sane fallback when JSON lacks memory fields
+  }
+
+  return { tier, vramGB, maxGB };
+}
+
+// M7: Map of framework/marker filenames AND directories to their labels.
+// Some markers are directories (e.g. ".github" -> "GitHub Actions") whose
+// names start with a dot; the directory scan skips dotfiles, so these must be
+// detected explicitly before the dotfile skip.
+const FRAMEWORK_MARKERS = {
+  "package.json": "Node.js",
+  "Cargo.toml": "Rust/Cargo",
+  "go.mod": "Go Modules",
+  "requirements.txt": "Python/pip",
+  "pyproject.toml": "Python",
+  "Gemfile": "Ruby/Bundler",
+  "pom.xml": "Java/Maven",
+  "build.gradle": "Java/Gradle",
+  "composer.json": "PHP/Composer",
+  "Anchor.toml": "Solana/Anchor",
+  "hardhat.config.js": "Ethereum/Hardhat",
+  "foundry.toml": "Ethereum/Foundry",
+  "CMakeLists.txt": "CMake",
+  "Makefile": "Make",
+  "Dockerfile": "Docker",
+  "docker-compose.yml": "Docker Compose",
+  ".github": "GitHub Actions",
+  "next.config.js": "Next.js",
+  "next.config.mjs": "Next.js",
+  "vite.config.ts": "Vite",
+  "tailwind.config.js": "Tailwind CSS",
+  "tsconfig.json": "TypeScript",
+};
+
+// Returns the framework label for a given directory/file entry name, or null
+// if the name is not a recognized marker. Pure + synchronous so it is unit
+// testable (regression for M7: ".github" must resolve to "GitHub Actions").
+function detectFrameworkMarker(name) {
+  return Object.prototype.hasOwnProperty.call(FRAMEWORK_MARKERS, name)
+    ? FRAMEWORK_MARKERS[name]
+    : null;
 }
 
 function formatExportBlock(envObject) {
@@ -185,9 +297,11 @@ const ALLOWED_CLI_COMMANDS = new Set([
 // MCP SERVER
 // ============================================================================
 
+const SERVER_VERSION = readPackageVersion();
+
 const server = new McpServer({
   name: "llm-checker",
-  version: "3.5.11",
+  version: SERVER_VERSION,
 });
 
 // ============================================================================
@@ -733,9 +847,7 @@ server.tool(
   async ({ model, prompt }) => {
     try {
       const data = await ollamaAPI("/api/generate", { model, prompt, stream: false }, 300000);
-      const tokPerSec = data.eval_count && data.eval_duration
-        ? ((data.eval_count / data.eval_duration) * 1e9).toFixed(1)
-        : "?";
+      const tokPerSec = formatTokPerSec(tokensPerSecond(data.eval_count, data.eval_duration));
       const result = [
         `MODEL: ${model}`,
         `RESPONSE: ${data.response}`,
@@ -776,17 +888,18 @@ server.tool(
   {},
   async () => {
     try {
-      const hwResult = await run(["hw-detect"]);
+      // M1: source hardware facts from structured `hw-detect --json` instead of
+      // regex-scraping human-readable CLI text.
+      const hwJsonText = await run(["hw-detect", "--json"]);
+      const hwJson = tryParseJSON(hwJsonText);
+      const { tier, vramGB } = mapHardwareJson(hwJson || {});
+
       const totalMem = os.totalmem();
       const freeMem = os.freemem();
       const cpuCount = os.cpus().length;
       const totalGB = Math.round(totalMem / 1e9);
       const freeGB = Math.round(freeMem / 1e9);
       const platform = os.platform();
-
-      // Parse tier from hw-detect output
-      const tierMatch = hwResult.match(/Tier:\s*(\w[\w\s]*)/i);
-      const tier = tierMatch ? tierMatch[1].trim().toUpperCase() : "UNKNOWN";
 
       // Determine GPU layers
       const isApple = platform === "darwin";
@@ -845,7 +958,7 @@ server.tool(
         `OLLAMA OPTIMIZATION FOR YOUR SYSTEM`,
         `====================================`,
         `Hardware: ${cpuCount} cores, ${totalGB}GB total RAM, ${freeGB}GB free`,
-        `Platform: ${platform} | Tier: ${tier}`,
+        `Platform: ${platform} | Tier: ${tier}${vramGB !== null ? ` | VRAM: ${vramGB}GB` : ""}`,
         ``,
         `RECOMMENDED ENVIRONMENT VARIABLES:`,
         `----------------------------------`,
@@ -883,42 +996,43 @@ server.tool(
 
 server.tool(
   "benchmark",
-  "Benchmark a local Ollama model: measure tokens/sec, load time, and generation speed with a standardized prompt or custom prompt. Runs 3 iterations for reliable averages.",
+  "Benchmark a local Ollama model: measure tokens/sec, load time, and generation speed. With no custom prompt it runs the SAME standardized prompt 3 times (true warm-up iterations); the first (cold) run is excluded from the tok/s average and load time is reported from that first run. A custom prompt is run once.",
   {
     model: z.string().describe("Model name to benchmark (e.g. 'qwen2.5-coder:7b')"),
     prompt: z
       .string()
       .optional()
-      .describe("Custom benchmark prompt (default: standardized coding + reasoning prompt)"),
+      .describe("Custom benchmark prompt (default: standardized coding prompt run 3x)"),
   },
   async ({ model, prompt }) => {
-    const benchPrompts = prompt
-      ? [prompt]
-      : [
-          "Write a Python function to find the nth Fibonacci number using memoization. Include type hints.",
-          "Explain the difference between a mutex and a semaphore in 3 sentences.",
-          "What is the time complexity of quicksort in the average and worst case? Answer briefly.",
-        ];
+    // M4: when no custom prompt is given, run the SAME prompt N times so these
+    // are real iterations of one workload (warm-up effects, not different
+    // tasks). The first run is cold (includes model load) and is excluded from
+    // the tok/s average; its load time is reported separately.
+    const STANDARD_PROMPT =
+      "Write a Python function to find the nth Fibonacci number using memoization. Include type hints.";
+    const usingCustom = Boolean(prompt);
+    const benchPrompt = usingCustom ? prompt : STANDARD_PROMPT;
+    const iterations = usingCustom ? 1 : 3;
 
     try {
       const results = [];
-      for (let i = 0; i < benchPrompts.length; i++) {
+      for (let i = 0; i < iterations; i++) {
         const data = await ollamaAPI(
           "/api/generate",
-          { model, prompt: benchPrompts[i], stream: false },
+          { model, prompt: benchPrompt, stream: false },
           300000
         );
 
         const evalTokens = data.eval_count || 0;
-        const evalDur = data.eval_duration || 1;
-        const tokPerSec = (evalTokens / evalDur) * 1e9;
+        // M2: only a finite value when both eval_count and eval_duration are > 0.
+        const tokPerSec = tokensPerSecond(data.eval_count, data.eval_duration);
         const totalSec = data.total_duration ? data.total_duration / 1e9 : 0;
         const loadMs = data.load_duration ? data.load_duration / 1e6 : 0;
         const promptTokens = data.prompt_eval_count || 0;
         const promptMs = data.prompt_eval_duration ? data.prompt_eval_duration / 1e6 : 0;
 
         results.push({
-          prompt: benchPrompts[i].slice(0, 60) + (benchPrompts[i].length > 60 ? "..." : ""),
           evalTokens,
           tokPerSec,
           totalSec,
@@ -929,30 +1043,40 @@ server.tool(
         });
       }
 
-      // Compute averages
-      const avgTokPerSec = results.reduce((s, r) => s + r.tokPerSec, 0) / results.length;
-      const avgTotalSec = results.reduce((s, r) => s + r.totalSec, 0) / results.length;
-      const avgLoadMs = results.reduce((s, r) => s + r.loadMs, 0) / results.length;
+      // tok/s average over WARM runs only (exclude the cold first run when we
+      // have more than one iteration). Drop unavailable (null) measurements.
+      const warmRuns = iterations > 1 ? results.slice(1) : results;
+      const warmTokRates = warmRuns.map((r) => r.tokPerSec).filter((v) => v !== null);
+      const avgTokPerSec = warmTokRates.length > 0
+        ? warmTokRates.reduce((s, v) => s + v, 0) / warmTokRates.length
+        : null;
+
+      const warmTotals = warmRuns.map((r) => r.totalSec);
+      const avgTotalSec = warmTotals.reduce((s, v) => s + v, 0) / warmTotals.length;
+      // Load time is a cold-start cost: report it from the first run only.
+      const coldLoadMs = results[0]?.loadMs ?? 0;
       const totalTokens = results.reduce((s, r) => s + r.evalTokens, 0);
+
+      const promptPreview = benchPrompt.slice(0, 60) + (benchPrompt.length > 60 ? "..." : "");
 
       const output = [
         `BENCHMARK: ${model}`,
         `${"=".repeat(60)}`,
-        `Iterations: ${results.length}`,
+        `Prompt: "${promptPreview}"`,
+        `Iterations: ${results.length}${iterations > 1 ? " (run 1 = cold, excluded from speed average)" : ""}`,
         ``,
         ...results.map((r, i) => [
-          `--- Run ${i + 1} ---`,
-          `Prompt: "${r.prompt}"`,
-          `Generated: ${r.evalTokens} tokens at ${r.tokPerSec.toFixed(1)} tok/s`,
+          `--- Run ${i + 1}${iterations > 1 && i === 0 ? " (cold)" : ""} ---`,
+          `Generated: ${r.evalTokens} tokens at ${formatTokPerSec(r.tokPerSec)} tok/s`,
           `Total: ${r.totalSec.toFixed(2)}s | Load: ${r.loadMs.toFixed(0)}ms | Prompt eval: ${r.promptMs.toFixed(0)}ms (${r.promptTokens} tokens)`,
           `Response: "${r.responsePreview}..."`,
           ``,
         ]).flat(),
         `${"=".repeat(60)}`,
-        `AVERAGES:`,
-        `  Generation speed: ${avgTokPerSec.toFixed(1)} tok/s`,
+        iterations > 1 ? `WARM AVERAGES (excludes cold run 1):` : `RESULTS:`,
+        `  Generation speed: ${formatTokPerSec(avgTokPerSec)} tok/s`,
         `  Total time: ${avgTotalSec.toFixed(2)}s`,
-        `  Load time: ${avgLoadMs.toFixed(0)}ms`,
+        `  Cold load time: ${coldLoadMs.toFixed(0)}ms`,
         `  Total tokens generated: ${totalTokens}`,
       ].join("\n");
 
@@ -969,7 +1093,7 @@ server.tool(
 
 server.tool(
   "compare_models",
-  "Compare two local Ollama models head-to-head: same prompt, measured speed, token count, and response quality side by side",
+  "Compare two local Ollama models head-to-head on the same prompt. Models are run SEQUENTIALLY (model A fully, then model B) so each tok/s measurement is uncontended — running them in parallel would make them fight over GPU/RAM and invalidate the speed comparison.",
   {
     model_a: z.string().describe("First model (e.g. 'qwen2.5-coder:7b')"),
     model_b: z.string().describe("Second model (e.g. 'codellama:7b')"),
@@ -982,16 +1106,15 @@ server.tool(
     const testPrompt = prompt || "Write a Python function that checks if a string is a valid IPv4 address. Include edge cases.";
 
     try {
-      // Run both models
-      const [resultA, resultB] = await Promise.all([
-        ollamaAPI("/api/generate", { model: model_a, prompt: testPrompt, stream: false }, 300000),
-        ollamaAPI("/api/generate", { model: model_b, prompt: testPrompt, stream: false }, 300000),
-      ]);
+      // M3: run sequentially so the two models do not contend for GPU/RAM.
+      // Each measurement is taken while the other model is not executing.
+      const resultA = await ollamaAPI("/api/generate", { model: model_a, prompt: testPrompt, stream: false }, 300000);
+      const resultB = await ollamaAPI("/api/generate", { model: model_b, prompt: testPrompt, stream: false }, 300000);
 
       function metrics(data) {
         const evalTokens = data.eval_count || 0;
-        const evalDur = data.eval_duration || 1;
-        const tokPerSec = (evalTokens / evalDur) * 1e9;
+        // M2: null when eval_count/eval_duration are not both positive.
+        const tokPerSec = tokensPerSecond(data.eval_count, data.eval_duration);
         const totalSec = data.total_duration ? data.total_duration / 1e9 : 0;
         const loadSec = data.load_duration ? data.load_duration / 1e9 : 0;
         return { evalTokens, tokPerSec, totalSec, loadSec, response: data.response || "" };
@@ -1000,17 +1123,23 @@ server.tool(
       const a = metrics(resultA);
       const b = metrics(resultB);
 
-      const speedWinner = a.tokPerSec > b.tokPerSec ? model_a : model_b;
-      const verbosityWinner = a.evalTokens > b.evalTokens ? model_a : model_b;
+      // Only declare a speed winner when both rates are known.
+      let speedWinner;
+      if (a.tokPerSec === null && b.tokPerSec === null) speedWinner = "n/a (no timing data)";
+      else if (a.tokPerSec === null) speedWinner = model_b;
+      else if (b.tokPerSec === null) speedWinner = model_a;
+      else speedWinner = a.tokPerSec >= b.tokPerSec ? model_a : model_b;
+
+      const verbosityWinner = a.evalTokens >= b.evalTokens ? model_a : model_b;
 
       const output = [
-        `HEAD-TO-HEAD COMPARISON`,
+        `HEAD-TO-HEAD COMPARISON (sequential runs, uncontended)`,
         `${"=".repeat(70)}`,
         `Prompt: "${testPrompt.slice(0, 80)}${testPrompt.length > 80 ? "..." : ""}"`,
         ``,
         `METRIC                  ${model_a.padEnd(25)} ${model_b.padEnd(25)}`,
         `-`.repeat(70),
-        `Speed (tok/s)           ${a.tokPerSec.toFixed(1).padEnd(25)} ${b.tokPerSec.toFixed(1).padEnd(25)}`,
+        `Speed (tok/s)           ${formatTokPerSec(a.tokPerSec).padEnd(25)} ${formatTokPerSec(b.tokPerSec).padEnd(25)}`,
         `Tokens generated        ${String(a.evalTokens).padEnd(25)} ${String(b.evalTokens).padEnd(25)}`,
         `Total time              ${(a.totalSec.toFixed(2) + "s").padEnd(25)} ${(b.totalSec.toFixed(2) + "s").padEnd(25)}`,
         `Load time               ${(a.loadSec.toFixed(2) + "s").padEnd(25)} ${(b.loadSec.toFixed(2) + "s").padEnd(25)}`,
@@ -1042,9 +1171,9 @@ server.tool(
   {},
   async () => {
     try {
-      const [tagsData, hwResult] = await Promise.all([
+      const [tagsData, hwJsonText] = await Promise.all([
         ollamaAPI("/api/tags", null, 10000),
-        run(["hw-detect"]),
+        run(["hw-detect", "--json"]),
       ]);
 
       if (!tagsData.models || tagsData.models.length === 0) {
@@ -1054,11 +1183,10 @@ server.tool(
       const models = tagsData.models;
       const totalSize = models.reduce((s, m) => s + (m.size || 0), 0);
 
-      // Parse hardware tier
-      const tierMatch = hwResult.match(/Tier:\s*(\w[\w\s]*)/i);
-      const tier = tierMatch ? tierMatch[1].trim() : "UNKNOWN";
-      const maxSizeMatch = hwResult.match(/Max model size:\s*(\d+)/i);
-      const maxGB = maxSizeMatch ? parseInt(maxSizeMatch[1]) : 15;
+      // M1: source hardware tier + max model size from structured JSON instead
+      // of regex-scraping CLI text. mapHardwareJson() falls back to a sane 15GB
+      // default if the JSON could not be parsed (tryParseJSON -> null).
+      const { maxGB } = mapHardwareJson(tryParseJSON(hwJsonText) || {});
 
       // Analyze each model
       const analysis = models.map((m) => {
@@ -1172,46 +1300,23 @@ server.tool(
         ".sh": "Shell", ".bash": "Shell", ".zsh": "Shell",
       };
 
-      const frameworkFiles = {
-        "package.json": "Node.js",
-        "Cargo.toml": "Rust/Cargo",
-        "go.mod": "Go Modules",
-        "requirements.txt": "Python/pip",
-        "pyproject.toml": "Python",
-        "Gemfile": "Ruby/Bundler",
-        "pom.xml": "Java/Maven",
-        "build.gradle": "Java/Gradle",
-        "composer.json": "PHP/Composer",
-        "Anchor.toml": "Solana/Anchor",
-        "hardhat.config.js": "Ethereum/Hardhat",
-        "foundry.toml": "Ethereum/Foundry",
-        "CMakeLists.txt": "CMake",
-        "Makefile": "Make",
-        "Dockerfile": "Docker",
-        "docker-compose.yml": "Docker Compose",
-        ".github": "GitHub Actions",
-        "next.config.js": "Next.js",
-        "next.config.mjs": "Next.js",
-        "vite.config.ts": "Vite",
-        "tailwind.config.js": "Tailwind CSS",
-        "tsconfig.json": "TypeScript",
-      };
-
       async function scanDir(dir, depth = 0) {
         if (depth > 4) return; // Max depth
         try {
           const entries = await readdir(dir, { withFileTypes: true });
           for (const entry of entries) {
+            // M7: detect known framework markers (incl. dot-directories like
+            // ".github" -> "GitHub Actions") BEFORE skipping dotfiles, otherwise
+            // the dotfile skip below means ".github" can never be matched.
+            const marker = detectFrameworkMarker(entry.name);
+            if (marker) frameworks.add(marker);
+
             if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "target" || entry.name === "__pycache__" || entry.name === "dist" || entry.name === "build" || entry.name === "vendor") continue;
 
             const fullPath = join(dir, entry.name);
             if (entry.isDirectory()) {
-              if (frameworkFiles[entry.name]) frameworks.add(frameworkFiles[entry.name]);
               await scanDir(fullPath, depth + 1);
             } else {
-              // Check framework files
-              if (frameworkFiles[entry.name]) frameworks.add(frameworkFiles[entry.name]);
-
               // Count by extension
               const ext = entry.name.includes(".") ? "." + entry.name.split(".").pop().toLowerCase() : "";
               if (extMap[ext]) {
@@ -1302,8 +1407,14 @@ server.tool(
       const cpus = os.cpus();
       const loadAvg = os.loadavg();
 
-      // CPU usage from loadavg
-      const cpuPercent = ((loadAvg[0] / cpus.length) * 100).toFixed(1);
+      // M5: os.loadavg() is always [0,0,0] on Windows, so deriving CPU% from it
+      // reports a misleading 0%. Detect that case (Windows, or an all-zero
+      // loadavg) and show "n/a" instead.
+      const loadAvgUnavailable =
+        os.platform() === "win32" || (loadAvg[0] === 0 && loadAvg[1] === 0 && loadAvg[2] === 0);
+      const cpuPercentLabel = loadAvgUnavailable
+        ? "n/a (load average not reported on this platform)"
+        : `${((loadAvg[0] / cpus.length) * 100).toFixed(1)}% (load: ${loadAvg[0].toFixed(2)})`;
 
       // Installed models total size
       const installedModels = tagsData.models || [];
@@ -1317,40 +1428,55 @@ server.tool(
         `${"=".repeat(60)}`,
         ``,
         `SYSTEM RESOURCES:`,
-        `  RAM: ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memPercent}% used)`,
+        `  System RAM: ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memPercent}% used)`,
         `  Free: ${formatBytes(freeMem)}`,
-        `  CPU: ${cpuPercent}% (${cpus.length} cores, load: ${loadAvg[0].toFixed(2)})`,
+        `  CPU: ${cpuPercentLabel} (${cpus.length} cores)`,
         ``,
         `OLLAMA STATUS:`,
         `  Installed models: ${installedModels.length} (${formatBytes(totalModelSize)} on disk)`,
         `  Running models: ${runningModels.length}`,
       ];
 
+      // M5: surface each running model's VRAM residency from /api/ps.
+      let anyOnGpu = false;
       if (runningModels.length > 0) {
         lines.push(``, `  LOADED IN MEMORY:`);
         for (const m of runningModels) {
-          const vram = m.size_vram ? formatBytes(m.size_vram) : "?";
-          const ram = m.size ? formatBytes(m.size) : "?";
+          const sizeVram = Number(m.size_vram) || 0;
+          const totalLoaded = Number(m.size) || 0;
+          if (sizeVram > 0) anyOnGpu = true;
+          const vram = sizeVram > 0 ? formatBytes(sizeVram) : "0 B";
+          const total = totalLoaded > 0 ? formatBytes(totalLoaded) : "?";
+          // Portion resident in system RAM (CPU offload) = total - VRAM.
+          const ramPortion = totalLoaded > sizeVram ? formatBytes(totalLoaded - sizeVram) : "0 B";
           const expires = m.expires_at ? new Date(m.expires_at).toLocaleTimeString() : "?";
-          lines.push(`    ${m.name.padEnd(25)} VRAM: ${vram.padEnd(10)} RAM: ${ram.padEnd(10)} Expires: ${expires}`);
+          lines.push(
+            `    ${m.name.padEnd(25)} total ${total.padEnd(10)} VRAM ${vram.padEnd(10)} sysRAM ${ramPortion.padEnd(10)} Expires: ${expires}`
+          );
         }
       } else {
         lines.push(``, `  No models currently loaded in memory.`);
       }
 
-      // Memory headroom analysis
+      // M5: the system-RAM free figure is NOT the constraint on GPU boxes —
+      // model residency is bounded by VRAM there. Clarify that this headroom
+      // note reflects system RAM, and call out that VRAM is the real limit when
+      // models are running on the GPU.
       const freeGB = freeMem / 1e9;
       lines.push(
         ``,
-        `MEMORY HEADROOM:`,
-        `  Available for models: ~${freeGB.toFixed(1)}GB`,
+        `MEMORY HEADROOM (system RAM):`,
+        `  Free system RAM: ~${freeGB.toFixed(1)}GB`,
         freeGB > 12
-          ? `  Status: PLENTY — can load 14B+ models comfortably`
+          ? `  Status: PLENTY — can load 14B+ models comfortably (system-RAM view)`
           : freeGB > 6
-          ? `  Status: OK — can load 7B models, 14B might be tight`
+          ? `  Status: OK — can load 7B models, 14B might be tight (system-RAM view)`
           : freeGB > 3
-          ? `  Status: LOW — stick to 3B-7B models`
-          : `  Status: CRITICAL — close other apps before running models`
+          ? `  Status: LOW — stick to 3B-7B models (system-RAM view)`
+          : `  Status: CRITICAL — close other apps before running models (system-RAM view)`,
+        anyOnGpu
+          ? `  NOTE: models are loaded into VRAM on this box — GPU VRAM (see per-model VRAM above), not system RAM, is the real loading constraint.`
+          : `  NOTE: on dedicated-GPU systems, GPU VRAM (not system RAM) is the real constraint for loading models.`
       );
 
       return { content: [{ type: "text", text: lines.join("\n") }] };
@@ -1364,5 +1490,44 @@ server.tool(
 // START
 // ============================================================================
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// Connect the stdio transport and start serving. Guarded behind main() so that
+// importing this module (e.g. from tests) does NOT start the server — only
+// running the file directly does.
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+// Detect whether this module is the process entry point. When invoked as
+// `node bin/mcp-server.mjs`, process.argv[1] resolves to this file's path; when
+// merely imported (e.g. from a test), it points at the importer instead, so the
+// server is not started. fileURLToPath(import.meta.url) gives this file's
+// absolute path; argv[1] is the absolute path Node was launched with. We also
+// resolve argv[1] through fileURLToPath when it is a file:// URL.
+function runningAsEntry() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const thisPath = fileURLToPath(import.meta.url);
+    const entryPath = entry.startsWith("file://") ? fileURLToPath(entry) : entry;
+    return entryPath === thisPath;
+  } catch {
+    return false;
+  }
+}
+
+if (runningAsEntry()) {
+  await main();
+}
+
+// Exported for unit testing. Importing this module must NOT start the server
+// (see runningAsEntry guard above).
+export {
+  SERVER_VERSION,
+  readPackageVersion,
+  tokensPerSecond,
+  formatTokPerSec,
+  mapHardwareJson,
+  detectFrameworkMarker,
+  FRAMEWORK_MARKERS,
+};
