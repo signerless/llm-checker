@@ -31,6 +31,7 @@ const TESTS = [
     { name: 'Startup banner canonical integrity', file: 'banner-canonical.test.js', category: 'UI' },
     { name: 'CLI interface smoke', file: 'ui-cli-smoke.test.js', category: 'UI' },
     { name: 'CLI interactive panel helpers', file: 'cli-interactive-panel.test.js', category: 'UI' },
+    { name: 'Windows panel overflow + resize', file: 'windows-panel-overflow.test.js', category: 'UI' },
     { name: 'Local features end-to-end', file: 'local-features-e2e.test.js', category: 'E2E' },
     { name: 'Calibration schema', file: 'calibration-schema.test.js', category: 'Calibration' },
     { name: 'Calibration command', file: 'calibrate-command.test.js', category: 'Calibration' },

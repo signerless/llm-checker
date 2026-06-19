@@ -82,17 +82,16 @@ function sleep(ms) {
 }
 
 function getSafeTerminalWidth(columns = process.stdout.columns, platform = process.platform) {
+    void platform;
     const value = Number(columns);
     if (!Number.isFinite(value) || value <= 0) return null;
 
     const width = Math.floor(value);
-    // Windows terminals commonly wrap when output writes exactly `columns` cells.
-    // Keep the canonical banner intact while rendering one cell inside the edge.
-    if (platform === 'win32') {
-        return Math.max(20, width - 1);
-    }
-
-    return Math.max(20, width);
+    // Many terminals (Windows consoles, libvte, tmux, SSH) auto-wrap when output
+    // writes exactly `columns` cells, which tears the persistent panel border on
+    // resize/pulse. The canonical banner is centered/clipped, so reserving one
+    // trailing cell on every platform is invisible while avoiding the wrap.
+    return Math.max(20, width - 1);
 }
 
 function getTerminalClearSequence(platform = process.platform) {
@@ -359,6 +358,11 @@ function loadTextBanner(sourceFile) {
         };
         return null;
     }
+}
+
+function getTextBannerLineCount(sourceFile) {
+    const lines = loadTextBanner(sourceFile);
+    return Array.isArray(lines) ? lines.length : 0;
 }
 
 function drawTextBanner(lines, options = {}) {
@@ -774,6 +778,8 @@ module.exports = {
         getTerminalClearSequence,
         makeFrames,
         drawFrame,
-        resolveHasDarkBackground
+        resolveHasDarkBackground,
+        loadTextBanner,
+        getTextBannerLineCount
     }
 };
