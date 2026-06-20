@@ -1,6 +1,26 @@
 Changelog
 =========
 
+3.7.4 — Registry Ingestor Data Quality (2026-06-20)
+---------------------------------------------------
+
+Cleaner packaged registry (seed DB regenerated):
+
+- LoRA/PEFT adapters (`adapter_model.*`) and optimizer/training-state files are no
+  longer ingested as standalone models (they previously appeared as tiny "models"
+  inheriting the repo's full param count). Mistral-style `consolidated.*.pth`
+  weights are now kept.
+- `F16`/`FP16`/`BF16` are treated as precisions, not quantizations — a
+  full-precision Hugging Face model is no longer mislabeled as "quantized".
+- GPT4All: comma-formatted file sizes now parse (no more NULL size), and an entry
+  whose download points at a Hugging Face repo adopts that repo id as its
+  canonical model id so it lines up with the HF/Ollama copies for dedup.
+- Dropped the dead `idx_model_artifacts_runtime` index (a JSON column only queried
+  with LIKE); the schema now drops it from existing DBs on open.
+- Regenerated `src/data/seed/models.db`: 3 sources, 3,259 repos, 32,779 artifacts.
+
+New `tests/registry-ingestor-quality.test.js`. Full suite 48/48.
+
 3.7.3 — Registry CLI Validation (2026-06-20)
 --------------------------------------------
 

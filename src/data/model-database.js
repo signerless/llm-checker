@@ -227,9 +227,11 @@ class ModelDatabase {
             CREATE INDEX IF NOT EXISTS idx_model_artifacts_source ON model_artifacts(source_id);
             CREATE INDEX IF NOT EXISTS idx_model_artifacts_format ON model_artifacts(format);
             CREATE INDEX IF NOT EXISTS idx_model_artifacts_quant ON model_artifacts(quantization);
-            CREATE INDEX IF NOT EXISTS idx_model_artifacts_runtime ON model_artifacts(runtime_support);
             CREATE INDEX IF NOT EXISTS idx_model_artifacts_size ON model_artifacts(size_gb);
             CREATE INDEX IF NOT EXISTS idx_model_artifacts_downloads ON model_artifacts(downloads DESC);
+            -- Drop a dead index from older DBs: runtime_support is a JSON blob only
+            -- queried with LIKE, so a B-tree index on it is never used.
+            DROP INDEX IF EXISTS idx_model_artifacts_runtime;
         `;
 
         if (this.useBetterSqlite) {

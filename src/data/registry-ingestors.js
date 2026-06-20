@@ -146,8 +146,10 @@ function parseActiveParamsB(...values) {
 
 function inferQuantization(...values) {
     const text = values.map((value) => String(value || '')).join(' ');
-    const ggufQuant = text.match(/\b(IQ\d(?:_[A-Z0-9]+)?|Q\d(?:_[A-Z0-9]+){0,2}|F16|FP16|BF16|Q8_0)\b/i);
-    if (ggufQuant) return ggufQuant[1].toUpperCase().replace(/^F16$/, 'FP16');
+    // Note: F16/FP16/BF16 are PRECISIONS, not quantizations — they're handled by
+    // inferPrecision so a full-precision model isn't mislabeled as "quantized".
+    const ggufQuant = text.match(/\b(IQ\d(?:_[A-Z0-9]+)?|Q\d(?:_[A-Z0-9]+){0,2}|Q8_0)\b/i);
+    if (ggufQuant) return ggufQuant[1].toUpperCase();
 
     const bitQuant = text.match(/\b([234568])\s*[-_ ]?bit\b/i);
     if (bitQuant) return `${bitQuant[1]}bit`;
@@ -271,9 +273,16 @@ function getSiblingSizeBytes(sibling = {}) {
 function isModelArtifactFile(filename) {
     const lower = String(filename || '').toLowerCase();
     if (!lower) return false;
+    // Exclude non-model weight files that would otherwise be ingested as standalone
+    // "models": LoRA/PEFT adapters (a few MB but inherit the repo's param count) and
+    // optimizer/training state.
+    if (/(^|[/_-])adapter[_-]?(model|config)/.test(lower)) return false;
+    if (/(^|[/_-])(lora|optimizer|scheduler|rng_state|trainer_state|training_args)/.test(lower)) return false;
     if (lower.endsWith('.gguf')) return true;
     if (lower.endsWith('.safetensors')) return true;
-    if (/pytorch_model.*\.bin$/.test(lower)) return true;
+    if (/pytorch_model.*\.(bin)$/.test(lower)) return true;
+    // Mistral-style consolidated weights (consolidated.00.pth) were being dropped.
+    if (/(^|[/])consolidated.*\.(pt|pth|bin)$/.test(lower)) return true;
     if (/model.*\.(bin|pt|pth)$/.test(lower)) return true;
     if (/ggml.*\.bin$/.test(lower)) return true;
     return false;
@@ -398,11 +407,15 @@ function normalizeGpt4AllEntry(entry) {
 
     const repoMatch = url.match(/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/([^/]+)\/(.+)$/);
     const repoId = repoMatch ? repoMatch[1] : `gpt4all/${name}`;
+    // When the download points at a Hugging Face repo, use that repo id as the
+    // canonical model id so the same model lines up across sources for dedup.
+    const canonicalModelId = repoMatch ? repoMatch[1] : name;
     const filename = repoMatch ? decodeURIComponent(repoMatch[3]) : (filenameCandidate || url.split('/').filter(Boolean).pop());
     const repoKey = makeScopedId('gpt4all', repoId);
     const tags = ['gpt4all', entry.type, entry.quant].filter(Boolean);
     const paramsB = parseParamsB(entry.parameters, name, filename);
-    const sizeBytes = Number(entry.filesize || entry.fileSize || entry.size || 0) || null;
+    // Sizes can arrive as comma-formatted strings ("8,000,000,000"); strip non-digits.
+    const sizeBytes = Number(String(entry.filesize ?? entry.fileSize ?? entry.size ?? 0).replace(/[^0-9.]/g, '')) || null;
     const format = inferFormat(filename, tags);
 
     return {
@@ -412,7 +425,7 @@ function normalizeGpt4AllEntry(entry) {
             source_id: 'gpt4all',
             repo_id: repoId,
             namespace: repoId.includes('/') ? repoId.split('/')[0] : 'gpt4all',
-            canonical_model_id: name,
+            canonical_model_id: canonicalModelId,
             display_name: name,
             url: repoMatch ? `https://huggingface.co/${repoId}` : url,
             license: entry.license || 'unknown',
@@ -434,7 +447,7 @@ function normalizeGpt4AllEntry(entry) {
             source_id: 'gpt4all',
             repo_key: repoKey,
             repo_id: repoId,
-            canonical_model_id: name,
+            canonical_model_id: canonicalModelId,
             artifact_name: filename || name,
             filename: filename || '',
             format,
@@ -746,6 +759,7 @@ module.exports = {
     inferFormat,
     inferQuantization,
     inferRuntimeSupport,
+    isModelArtifactFile,
     parseParamsB,
     buildHuggingFaceDownloadUrl
 };

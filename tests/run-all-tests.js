@@ -23,6 +23,7 @@ const TESTS = [
     { name: 'Scoring engine unification', file: 'scoring-unification.test.js', category: 'Recommendations' },
     { name: 'Fine-tuning support helper', file: 'fine-tuning-support.test.js', category: 'Recommendations' },
     { name: 'Model registry ingestors', file: 'model-registry-ingestors.test.js', category: 'Recommendations' },
+    { name: 'Registry ingestor quality', file: 'registry-ingestor-quality.test.js', category: 'Recommendations' },
     { name: 'Model registry param parsing', file: 'model-registry-param-parsing.test.js', category: 'Recommendations' },
     { name: 'Registry recommendation diversity', file: 'registry-diversity.test.js', category: 'Recommendations' },
     { name: 'Registry CLI validation', file: 'registry-cli-validation.test.js', category: 'Recommendations' },
