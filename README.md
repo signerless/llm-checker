@@ -5,7 +5,7 @@
 **Intelligent Ollama Model Selector**
 
 AI-powered CLI that analyzes your hardware and recommends optimal LLM models.  
-Deterministic scoring across **200+ Ollama models** and **7k+ variants** with a packaged SQLite catalog, live sync, and hardware-calibrated memory estimation.
+Deterministic scoring across a packaged **multi-source registry** (Hugging Face + Ollama + GPT4All, **33k+ exact artifacts**) and the Ollama catalog, with live sync, runtime targeting, and hardware-calibrated memory estimation.
 
 [![npm version](https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
 [![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
@@ -39,6 +39,7 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 | | Feature | Description |
 |:---:|---|---|
 | **200+** | Packaged Model Catalog | Ships with a synced Ollama SQLite catalog and can refresh from Ollama on demand |
+| **33k+** | Multi-Source Registry | Exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All with per-source commands and runtime targeting |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
@@ -150,6 +151,14 @@ npm install -g llm-checker@latest
 hash -r
 llm-checker --version
 ```
+
+### v3.7.0 Highlights
+
+- New **multi-source model registry**: a packaged snapshot of ~33,700 exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All, with per-source commands (`hf download ...`, `ollama pull ...`).
+- `recommend` and `check` now draw candidates from the registry through one canonical deterministic scoring core, with `--runtime auto/ollama/vllm/mlx/llama.cpp/transformers` targeting; they fall back to the Ollama catalog when the registry is unavailable.
+- New `registry-sync`, `registry-search`, and `registry-recommend` commands.
+- Mixture-of-Experts models are sized by their **total** parameter count (all experts stay resident under Ollama/Metal/vLLM), so a large MoE can no longer falsely "fit" small hardware.
+- Carries the 3.6.1 batch: unified scoring across `check`/`recommend`/`smart-recommend` (#88), high-end/multi-GPU VRAM detection (#95), MCP server hardening (#97), and the Windows interactive-panel fixes (#86).
 
 ### v3.5.13 Highlights
 
@@ -388,6 +397,27 @@ llm-checker search "qwen coder" --json
 | `sync` | Refresh the local SQLite model catalog from Ollama |
 | `search <query>` | Search the synced catalog with filters and intelligent scoring |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
+
+### Model Registry Commands (v3.7.0+)
+
+Exact installable/downloadable artifacts from a packaged multi-source registry (Hugging Face + Ollama + GPT4All).
+
+| Command | Description |
+|---------|-------------|
+| `registry-sync` | Sync the multi-source registry (Hugging Face, Ollama, GPT4All) |
+| `registry-search [query]` | Search exact artifacts with `--source`, `--format`, `--runtime`, `--quant`, `--max-size`, `--min-params`/`--max-params` filters |
+| `registry-recommend [query]` | Recommend the best exact artifacts for your hardware, with `--runtime auto/ollama/vllm/mlx/llama.cpp/transformers` targeting and `--category`/`--optimize` |
+
+```bash
+# Best coding artifacts across all sources, auto runtime
+llm-checker registry-recommend --category coding
+
+# Only Apple-native MLX artifacts
+llm-checker registry-recommend --category coding --runtime mlx
+
+# Search Hugging Face for vLLM-ready reasoning models under 24B
+llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
+```
 
 ### Enterprise Policy Commands
 

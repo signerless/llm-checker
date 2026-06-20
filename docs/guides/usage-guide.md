@@ -173,6 +173,33 @@ Assist path: Integrated/shared-memory GPU detected, runtime remains CPU
 
 ---
 
+### **7. Exact Artifact Hunter - "Give me the precise file to download"** (v3.7.0+)
+
+The multi-source registry indexes exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All, and returns the literal command to get each one.
+
+```bash
+# Best exact artifacts for your hardware, any runtime
+llm-checker registry-recommend --category coding
+
+# Target a specific runtime (Apple-native MLX, server-side vLLM, etc.)
+llm-checker registry-recommend --category reasoning --runtime vllm
+llm-checker registry-recommend --category coding --runtime mlx
+
+# Search the registry directly with filters
+llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
+llm-checker registry-search llama --format gguf --quant Q4_K_M --max-size 8
+
+# Refresh the registry snapshot from the live sources
+llm-checker registry-sync
+```
+
+**Why it matters**:
+- Recommendations come with the exact command to install/download each artifact (`hf download org/model`, `ollama pull model:tag`).
+- `--runtime` targets Ollama / vLLM / MLX / llama.cpp / Transformers so you only see artifacts you can actually run.
+- Memory fit is computed from each model's **total** parameter count (all Mixture-of-Experts experts stay resident), so a large MoE is never falsely reported as fitting small hardware.
+
+---
+
 ## 🛠️ **Advanced Usage Patterns**
 
 ### **Command Chaining for Workflows**
