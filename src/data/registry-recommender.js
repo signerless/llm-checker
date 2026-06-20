@@ -240,6 +240,72 @@ function dedupeRecommendationPool(models) {
     return [...deduped.values()];
 }
 
+// A source may trail the top score by up to this and still earn a guaranteed slot.
+const SOURCE_DIVERSITY_MARGIN = 15;
+// Never surface a model below this score purely for source diversity.
+const SOURCE_DIVERSITY_FLOOR = 55;
+
+// Group key that ignores quantization / shard / tag so variants of the SAME
+// model collapse together (e.g. all `qwen2.5-coder:7b-*` quants, or every
+// `layers-N.safetensors` shard of one HF repo).
+function modelDiversityKey(candidate) {
+    const meta = (candidate && candidate.meta) || {};
+    const name = String(meta.name || meta.model_identifier || '')
+        .toLowerCase()
+        .replace(/:.*$/, '')   // drop an ollama :tag
+        .replace(/\s+/g, ' ')
+        .trim();
+    const params = Number(meta.paramsB) > 0 ? Math.round(Number(meta.paramsB) * 10) / 10 : 'na';
+    return `${name}|${params}`;
+}
+
+// Collapse quant/shard/tag variants of the same model to a single best-scoring
+// entry, so the top picks are DISTINCT models instead of 12 quants of one.
+function collapseToDistinctModels(candidates) {
+    const best = new Map();
+    for (const c of Array.isArray(candidates) ? candidates : []) {
+        if (!c) continue;
+        const key = modelDiversityKey(c);
+        const cur = best.get(key);
+        if (!cur || (Number(c.score) || 0) > (Number(cur.score) || 0)) best.set(key, c);
+    }
+    return [...best.values()].sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+}
+
+// Guarantee that each source with a competitive candidate appears in the top
+// `limit`, so Hugging Face / GPT4All artifacts are visible when they score close
+// to Ollama. Diversity never promotes a clearly worse model (floor + margin gates).
+function applySourceDiversity(distinctSorted, limit) {
+    const list = Array.isArray(distinctSorted) ? distinctSorted : [];
+    if (list.length === 0) return [];
+    const max = Number(limit) > 0 ? Number(limit) : 10;
+    const topScore = Number(list[0].score) || 0;
+
+    const seeds = [];
+    const seenSource = new Set();
+    for (const c of list) {
+        const src = (c.meta && c.meta.source) || 'unknown';
+        if (seenSource.has(src)) continue;
+        const score = Number(c.score) || 0;
+        if (score >= SOURCE_DIVERSITY_FLOOR && score >= topScore - SOURCE_DIVERSITY_MARGIN) {
+            seeds.push(c);
+            seenSource.add(src);
+        }
+    }
+
+    const chosen = new Set(seeds);
+    const result = [...seeds];
+    for (const c of list) {
+        if (result.length >= max) break;
+        if (chosen.has(c)) continue;
+        result.push(c);
+        chosen.add(c);
+    }
+    return result
+        .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
+        .slice(0, max);
+}
+
 function candidateToRecommendation(candidate) {
     const artifact = candidate.meta.artifact || {};
     return {
@@ -360,9 +426,12 @@ class RegistryRecommender {
 
         const selectorHardware = normalizeHardwareForSelector(options.hardware || {});
         const normalizedRuntime = runtimeFilter || 'auto';
+        // Rank a wider window than requested so we can collapse model variants and
+        // apply source diversity before trimming to the caller's limit.
+        const rankWindow = Math.max(limit * 8, 200);
         const result = runtimeFilter
             ? await this.selector.selectModels(category, {
-                topN: limit,
+                topN: rankWindow,
                 enableProbe: false,
                 silent: true,
                 optimizeFor: options.optimizeFor || 'balanced',
@@ -374,12 +443,19 @@ class RegistryRecommender {
             })
             : this.scoreAutoRuntimePool({
                 category,
-                limit,
+                limit: rankWindow,
                 targetCtx,
                 optimizeFor: options.optimizeFor || 'balanced',
                 hardware: selectorHardware,
                 modelPool
             });
+
+        // Collapse quant/shard variants to distinct models, then guarantee source
+        // diversity, and finally trim to the requested limit.
+        if (result && Array.isArray(result.candidates)) {
+            const distinct = collapseToDistinctModels(result.candidates);
+            result.candidates = applySourceDiversity(distinct, limit);
+        }
 
         return {
             category,
@@ -493,7 +569,9 @@ class RegistryRecommender {
             optimizeFor: objective,
             runtime: 'auto',
             hardware: normalizedHardware,
-            candidates: candidates.slice(0, limit),
+            // Return a wide sorted window; selectCategory collapses variants and
+            // applies source diversity before trimming to the caller's limit.
+            candidates: candidates.slice(0, Math.max(limit, 2000)),
             total_evaluated: filtered.length,
             timestamp: new Date().toISOString()
         };
@@ -506,6 +584,9 @@ class RegistryRecommender {
 
 module.exports = {
     RegistryRecommender,
+    collapseToDistinctModels,
+    applySourceDiversity,
+    modelDiversityKey,
     artifactToSelectorModel,
     candidateToRecommendation,
     normalizeHardwareForSelector,
