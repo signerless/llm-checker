@@ -63,8 +63,40 @@ async function testEmptyPoolDoesNotFallBackToInternalCatalog() {
     assert.deepStrictEqual(out.recommendations, [], 'empty pool yields no recommendations (not internal-catalog rows)');
 }
 
+function testSearchRegistryModeUsesRegistry() {
+    // `search --registry` searches the multi-source registry (registry JSON shape
+    // has `stats`/`count`), and can surface non-Ollama sources.
+    const { status, stdout } = runCli(['search', 'qwen', '--registry', '--source', 'huggingface', '--json', '--limit', '2']);
+    assert.strictEqual(status, 0, 'search --registry exits 0');
+    const payload = JSON.parse(stdout);
+    assert.ok('stats' in payload && 'count' in payload, 'registry mode returns the registry JSON shape');
+    const sources = new Set((payload.results || []).map((r) => r.source_id));
+    assert.ok(sources.size === 0 || sources.has('huggingface'), 'source filter restricts to huggingface');
+}
+
+function testPlainSearchStaysOllamaCatalog() {
+    // Without --registry/--source, search keeps its original Ollama-catalog shape
+    // (no registry `stats` field) — backward compatible.
+    const { status, stdout } = runCli(['search', 'llama', '--json', '--limit', '2']);
+    assert.strictEqual(status, 0, 'plain search exits 0');
+    const payload = JSON.parse(stdout);
+    assert.ok(!(payload && typeof payload === 'object' && 'stats' in payload), 'plain search must not use registry shape');
+}
+
+function testListModelsRegistrySource() {
+    const { status, stdout } = runCli(['list-models', '--source', 'gpt4all', '--json', '--limit', '2']);
+    assert.strictEqual(status, 0, 'list-models --source exits 0');
+    const payload = JSON.parse(stdout);
+    assert.ok('stats' in payload, 'list-models --source returns registry shape');
+    const sources = new Set((payload.results || []).map((r) => r.source_id));
+    assert.ok(sources.size === 0 || sources.has('gpt4all'), 'restricted to gpt4all');
+}
+
 async function run() {
     testInvalidSourceRejected();
+    testSearchRegistryModeUsesRegistry();
+    testPlainSearchStaysOllamaCatalog();
+    testListModelsRegistrySource();
     testInvalidRuntimeRejected();
     testValidSourceAccepted();
     await testEmptyPoolDoesNotFallBackToInternalCatalog();

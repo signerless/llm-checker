@@ -463,6 +463,92 @@ function formatRegistryList(value, maxItems = 3) {
     return items.length > maxItems ? `${shown}, +${items.length - maxItems}` : shown;
 }
 
+// Shared multi-source registry search used by `registry-search` and by
+// `search`/`list-models` when run with `--registry`/`--source`. Searches the
+// packaged registry of HF + Ollama + GPT4All artifacts (not just the Ollama
+// catalog). Renders a table or JSON. Sets process.exitCode on validation error.
+async function executeRegistrySearch(query = '', options = {}) {
+    try {
+        validateRegistryFilters(options);
+    } catch (validationError) {
+        if (options.json) {
+            console.log(JSON.stringify({ error: validationError.message }, null, 2));
+        } else {
+            console.error(chalk.red(`✗ ${validationError.message}`));
+        }
+        process.exitCode = 1;
+        return;
+    }
+    if (!options.json) showAsciiArt('registry-search');
+
+    const ModelDatabase = require('../src/data/model-database');
+    const database = new ModelDatabase();
+
+    try {
+        await database.initialize();
+
+        const filters = {
+            source: options.source,
+            format: options.format ? String(options.format).toLowerCase() : undefined,
+            runtime: options.runtime,
+            quantization: options.quant,
+            maxSizeGB: parsePositiveNumberOption(options.maxSize),
+            minParamsB: parsePositiveNumberOption(options.minParams),
+            maxParamsB: parsePositiveNumberOption(options.maxParams),
+            localOnly: Boolean(options.localOnly),
+            limit: parsePositiveNumberOption(options.limit, 20)
+        };
+        const results = database.searchModelArtifacts(query, filters);
+        const stats = database.getRegistryStats();
+
+        if (options.json) {
+            console.log(JSON.stringify({ query, filters, count: results.length, stats, results }, null, 2));
+            return;
+        }
+
+        if (results.length === 0) {
+            console.log(chalk.yellow('No registry artifacts found.'));
+            if (stats.artifacts === 0) {
+                console.log(chalk.gray('Populate the registry first with: llm-checker registry-sync'));
+            }
+            return;
+        }
+
+        console.log(chalk.blue.bold('\nRegistry Results'));
+        console.log(chalk.gray(`Stored registry: ${stats.artifacts} artifacts across ${stats.sources} sources`));
+        console.log('');
+
+        const rows = [['Source', 'Model', 'Artifact', 'Params', 'Size', 'Format', 'Runtime', 'Install']];
+        for (const item of results) {
+            rows.push([
+                item.source_id,
+                truncateMiddle(item.canonical_model_id, 34),
+                truncateMiddle(item.artifact_name || item.filename, 34),
+                formatRegistryNumber(item.parameter_count_b, 'B'),
+                formatRegistrySize(item.size_gb),
+                item.quantization ? `${item.format}/${item.quantization}` : item.format,
+                formatRegistryList(item.runtime_support, 2),
+                truncateMiddle(item.install_command || item.download_url, 46)
+            ]);
+        }
+        console.log(table(rows));
+
+        const links = results.filter((item) => item.download_url).slice(0, 5);
+        if (links.length > 0) {
+            console.log(chalk.blue.bold('Exact download links:'));
+            links.forEach((item, index) => {
+                console.log(chalk.gray(`  ${index + 1}. ${item.canonical_model_id} -> ${item.download_url}`));
+            });
+        }
+    } catch (error) {
+        console.error(chalk.red('Error:'), error.message);
+        if (process.env.DEBUG) console.error(error.stack);
+        process.exitCode = 1;
+    } finally {
+        database.close();
+    }
+}
+
 const program = new Command();
 
 program
@@ -4269,15 +4355,25 @@ Custom hardware:
 
 program
     .command('list-models')
-    .description('List all models from Ollama database')
+    .description('List models (Ollama catalog by default; --registry/--source lists HF + Ollama + GPT4All)')
     .option('-c, --category <category>', 'Filter by category (coding, talking, reading, reasoning, multimodal, creative, general)')
     .option('-s, --size <size>', 'Filter by size (small, medium, large, e.g., "7b", "13b")')
     .option('-p, --popular', 'Show only popular models (>100k pulls)')
     .option('-r, --recent', 'Show only recent models (updated in last 30 days)')
+    .option('--registry', 'List from the multi-source registry (Hugging Face + Ollama + GPT4All)')
+    .option('--source <source>', 'Registry source filter (implies --registry): ollama, huggingface, gpt4all')
+    .option('--format <format>', 'Registry artifact format: gguf, safetensors, mlx, ollama')
+    .option('--runtime <runtime>', 'Registry runtime: auto, ollama, llama.cpp, transformers, vllm, mlx')
     .option('--limit <number>', 'Limit number of results (default: 50)', '50')
     .option('--full', 'Show full details including variants and tags')
     .option('--json', 'Output in JSON format')
     .action(async (options) => {
+        // Registry mode: list the packaged multi-source registry instead of the
+        // Ollama-only catalog.
+        if (options.registry || options.source) {
+            await executeRegistrySearch('', options);
+            return;
+        }
         if (!options.json) showAsciiArt('list-models');
         const spinner = options.json ? null : ora('📋 Loading models database...').start();
 
@@ -4910,104 +5006,7 @@ program
     .option('-l, --limit <n>', 'Maximum number of results', '20')
     .option('-j, --json', 'Output as JSON')
     .action(async (query = '', options) => {
-        try {
-            validateRegistryFilters(options);
-        } catch (validationError) {
-            if (options.json) {
-                console.log(JSON.stringify({ error: validationError.message }, null, 2));
-            } else {
-                console.error(chalk.red(`✗ ${validationError.message}`));
-            }
-            process.exitCode = 1;
-            return;
-        }
-        if (!options.json) showAsciiArt('registry-search');
-
-        const ModelDatabase = require('../src/data/model-database');
-        const database = new ModelDatabase();
-
-        try {
-            await database.initialize();
-
-            const filters = {
-                source: options.source,
-                format: options.format ? String(options.format).toLowerCase() : undefined,
-                runtime: options.runtime,
-                quantization: options.quant,
-                maxSizeGB: parsePositiveNumberOption(options.maxSize),
-                minParamsB: parsePositiveNumberOption(options.minParams),
-                maxParamsB: parsePositiveNumberOption(options.maxParams),
-                localOnly: Boolean(options.localOnly),
-                limit: parsePositiveNumberOption(options.limit, 20)
-            };
-            const results = database.searchModelArtifacts(query, filters);
-            const stats = database.getRegistryStats();
-
-            if (options.json) {
-                console.log(JSON.stringify({
-                    query,
-                    filters,
-                    count: results.length,
-                    stats,
-                    results
-                }, null, 2));
-                return;
-            }
-
-            if (results.length === 0) {
-                console.log(chalk.yellow('No registry artifacts found.'));
-                if (stats.artifacts === 0) {
-                    console.log(chalk.gray('Populate the registry first with: llm-checker registry-sync'));
-                }
-                return;
-            }
-
-            console.log(chalk.blue.bold('\nRegistry Results'));
-            console.log(chalk.gray(`Stored registry: ${stats.artifacts} artifacts across ${stats.sources} sources`));
-            console.log('');
-
-            const rows = [[
-                'Source',
-                'Model',
-                'Artifact',
-                'Params',
-                'Size',
-                'Format',
-                'Runtime',
-                'Install'
-            ]];
-
-            for (const item of results) {
-                rows.push([
-                    item.source_id,
-                    truncateMiddle(item.canonical_model_id, 34),
-                    truncateMiddle(item.artifact_name || item.filename, 34),
-                    formatRegistryNumber(item.parameter_count_b, 'B'),
-                    formatRegistrySize(item.size_gb),
-                    item.quantization ? `${item.format}/${item.quantization}` : item.format,
-                    formatRegistryList(item.runtime_support, 2),
-                    truncateMiddle(item.install_command || item.download_url, 46)
-                ]);
-            }
-
-            console.log(table(rows));
-
-            const links = results
-                .filter((item) => item.download_url)
-                .slice(0, 5);
-            if (links.length > 0) {
-                console.log(chalk.blue.bold('Exact download links:'));
-                links.forEach((item, index) => {
-                    console.log(chalk.gray(`  ${index + 1}. ${item.canonical_model_id} -> ${item.download_url}`));
-                });
-            }
-        } catch (error) {
-            console.error(chalk.red('Error:'), error.message);
-            if (process.env.DEBUG) console.error(error.stack);
-            process.exitCode = 1;
-        } finally {
-            database.close();
-        }
+        await executeRegistrySearch(query, options);
     });
 
 program
@@ -5133,15 +5132,27 @@ program
 
 program
     .command('search <query>')
-    .description('Search models in the database with intelligent scoring')
+    .description('Search models (Ollama catalog by default; --registry/--source searches HF + Ollama + GPT4All)')
     .option('-u, --use-case <case>', 'Optimize for use case (general, coding, chat, reasoning, creative)', 'general')
     .option('-l, --limit <n>', 'Maximum number of results', '10')
     .option('--max-size <gb>', 'Maximum model size in GB')
     .option('--min-size <gb>', 'Minimum model size in GB')
     .option('--quant <type>', 'Filter by quantization (Q4_K_M, Q5_K_M, Q8_0, etc.)')
     .option('--family <name>', 'Filter by model family (llama, qwen, mistral, etc.)')
+    .option('--registry', 'Search the multi-source registry (Hugging Face + Ollama + GPT4All)')
+    .option('-s, --source <source>', 'Registry source filter (implies --registry): ollama, huggingface, gpt4all')
+    .option('--format <format>', 'Registry artifact format: gguf, safetensors, mlx, ollama')
+    .option('--runtime <runtime>', 'Registry runtime: auto, ollama, llama.cpp, transformers, vllm, mlx')
+    .option('--min-params <billion>', 'Minimum parameter count in billions (registry mode)')
+    .option('--max-params <billion>', 'Maximum parameter count in billions (registry mode)')
     .option('-j, --json', 'Output as JSON')
     .action(async (query, options) => {
+        // Registry mode: search the packaged multi-source registry (HF + Ollama +
+        // GPT4All) instead of the Ollama-only catalog.
+        if (options.registry || options.source) {
+            await executeRegistrySearch(query, options);
+            return;
+        }
         if (!options.json) showAsciiArt('search');
         const SyncManager = require('../src/data/sync-manager');
         const IntelligentSelector = require('../src/models/intelligent-selector');

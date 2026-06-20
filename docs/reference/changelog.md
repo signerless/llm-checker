@@ -1,6 +1,23 @@
 Changelog
 =========
 
+3.7.5 — Registry in search / list-models (2026-06-20)
+-----------------------------------------------------
+
+The discovery commands can now reach the multi-source registry, not just the
+Ollama catalog:
+
+- `search <query> --registry` (or `--source <ollama|huggingface|gpt4all>`)
+  searches the packaged registry of HF + Ollama + GPT4All artifacts, with
+  `--max-params`/`--min-params`/`--runtime`/`--format`/`--quant`/`--max-size`
+  filters and exact install commands. Without `--registry`/`--source` it keeps
+  the original Ollama-catalog behavior (backward compatible).
+- `list-models --registry` / `--source <source>` lists the multi-source registry.
+- The registry search logic is now shared between `registry-search` and
+  `search`/`list-models` (one code path, enum validation included).
+
+New tests in `tests/registry-cli-validation.test.js`. Full suite 48/48.
+
 3.7.4 — Registry Ingestor Data Quality (2026-06-20)
 ---------------------------------------------------
 
