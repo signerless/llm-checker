@@ -21,6 +21,7 @@ import {
   mapHardwareJson,
   detectFrameworkMarker,
   FRAMEWORK_MARKERS,
+  ALLOWED_CLI_COMMANDS,
 } from "../bin/mcp-server.mjs";
 
 function fail(msg) {
@@ -131,6 +132,12 @@ try {
     "detectFrameworkMarker on an unknown name must be null"
   );
   assert.strictEqual(FRAMEWORK_MARKERS[".github"], "GitHub Actions", "FRAMEWORK_MARKERS must contain .github");
+
+  // (e) The cli_exec allowlist must expose the v3.7 registry commands so they are
+  // reachable from MCP clients.
+  for (const cmd of ["registry-sync", "registry-search", "registry-recommend"]) {
+    assert.ok(ALLOWED_CLI_COMMANDS.has(cmd), `ALLOWED_CLI_COMMANDS must include ${cmd}`);
+  }
 
   console.log("mcp-server.test.mjs: OK");
   process.exit(0);

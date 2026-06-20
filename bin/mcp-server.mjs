@@ -290,8 +290,13 @@ const ALLOWED_CLI_COMMANDS = new Set([
   "sync",
   "search",
   "smart-recommend",
+  "registry-sync",
+  "registry-search",
+  "registry-recommend",
   "hw-detect",
 ]);
+
+export { ALLOWED_CLI_COMMANDS };
 
 // ============================================================================
 // MCP SERVER

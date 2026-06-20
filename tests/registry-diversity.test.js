@@ -69,11 +69,39 @@ function testDiversityDoesNotPromoteFarBehindSource() {
     assert.deepStrictEqual(out.map((c) => c.meta.name), ['a', 'b'], 'far-behind source not forced in');
 }
 
+function testDiversityKeepsGenuineTopUnderRareSourceFlood() {
+    // 3 strong ollama models + 9 distinct rare sources all within the margin.
+    // Diversity must NOT drop both runners-up to seed obscure sources.
+    const distinct = [
+        cand('o0', 'ollama', 100),
+        cand('o1', 'ollama', 99),
+        cand('o2', 'ollama', 98)
+    ];
+    for (let i = 0; i < 9; i++) distinct.push(cand('r' + i, 'src' + i, 86));
+    const out = applySourceDiversity(distinct, 3);
+    const names = out.map((c) => c.meta.name);
+    assert.strictEqual(out.length, 3, 'returns exactly the limit');
+    assert.ok(names.includes('o0') && names.includes('o1'), 'genuine top-2 ollama picks are preserved');
+    const rareCount = out.filter((c) => c.meta.source.startsWith('src')).length;
+    assert.ok(rareCount <= 1, `at most one diversity seed, got ${rareCount}`);
+}
+
+function testCollapseKeepsDistinctUnknownParamModels() {
+    // Two genuinely different models with no params must NOT collapse to one.
+    const out = collapseToDistinctModels([
+        { score: 90, meta: { name: 'some-embed', paramsB: null, source: 'ollama', model_identifier: 'some-embed:a' } },
+        { score: 85, meta: { name: 'some-embed', paramsB: 0, source: 'huggingface', model_identifier: 'org/some-embed' } }
+    ]);
+    assert.strictEqual(out.length, 2, 'distinct unknown-param models stay distinct (no "na" collision)');
+}
+
 function run() {
     testCollapseVariants();
     testDiversityKeyIgnoresTagAndQuant();
     testSourceDiversitySurfacesCloseSource();
     testDiversityDoesNotPromoteFarBehindSource();
+    testDiversityKeepsGenuineTopUnderRareSourceFlood();
+    testCollapseKeepsDistinctUnknownParamModels();
     console.log('registry-diversity.test.js: OK');
 }
 
