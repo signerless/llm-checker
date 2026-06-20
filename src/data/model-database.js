@@ -13,6 +13,7 @@ class ModelDatabase {
         this.seedDbPath = options.seedDbPath || path.join(__dirname, 'seed', 'models.db');
         this.db = null;
         this.initialized = false;
+        this.disableRegistrySeedImport = Boolean(options.disableRegistrySeedImport);
         // Batched-write state: during a bulk sync we defer the (expensive) full
         // sql.js export-and-write until the batch ends, instead of rewriting the
         // whole DB file on every single row.
@@ -65,6 +66,9 @@ class ModelDatabase {
 
         this.createSchema();
         this.initialized = true;
+        if (!this.disableRegistrySeedImport) {
+            await this.seedRegistryFromPackagedSnapshotIfNeeded();
+        }
     }
 
     /**
@@ -119,6 +123,86 @@ class ModelDatabase {
                 FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE
             );
 
+            -- Registry sources for multi-hub model discovery (Hugging Face,
+            -- Ollama, GPT4All, ModelScope, etc.).
+            CREATE TABLE IF NOT EXISTS registry_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                base_url TEXT,
+                source_type TEXT,
+                last_ingested_at TEXT,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Source repositories or registry entries. A single repo can expose
+            -- many downloadable artifacts/quantizations.
+            CREATE TABLE IF NOT EXISTS registry_repos (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                namespace TEXT,
+                canonical_model_id TEXT NOT NULL,
+                display_name TEXT,
+                url TEXT,
+                license TEXT,
+                gated INTEGER DEFAULT 0,
+                requires_auth INTEGER DEFAULT 0,
+                downloads INTEGER DEFAULT 0,
+                likes INTEGER DEFAULT 0,
+                tags TEXT DEFAULT '[]',
+                tasks TEXT DEFAULT '[]',
+                modalities TEXT DEFAULT '["text"]',
+                last_modified TEXT,
+                sha TEXT,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (source_id) REFERENCES registry_sources(id) ON DELETE CASCADE,
+                UNIQUE(source_id, repo_id)
+            );
+
+            -- Concrete downloadable/installable files or tags used by the
+            -- recommender. This is the table that lets llm-checker reason about
+            -- exact GGUF/safetensors/MLX/Ollama variants instead of only families.
+            CREATE TABLE IF NOT EXISTS model_artifacts (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                repo_key TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                canonical_model_id TEXT NOT NULL,
+                artifact_name TEXT NOT NULL,
+                filename TEXT,
+                format TEXT,
+                quantization TEXT,
+                precision TEXT,
+                parameter_count_b REAL,
+                active_parameter_count_b REAL,
+                size_bytes INTEGER,
+                size_gb REAL,
+                context_length INTEGER,
+                runtime_support TEXT DEFAULT '[]',
+                tasks TEXT DEFAULT '[]',
+                modalities TEXT DEFAULT '["text"]',
+                download_url TEXT,
+                install_command TEXT,
+                sha256 TEXT,
+                etag TEXT,
+                license TEXT,
+                gated INTEGER DEFAULT 0,
+                requires_auth INTEGER DEFAULT 0,
+                downloads INTEGER DEFAULT 0,
+                likes INTEGER DEFAULT 0,
+                updated_at TEXT,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                refreshed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (source_id) REFERENCES registry_sources(id) ON DELETE CASCADE,
+                FOREIGN KEY (repo_key) REFERENCES registry_repos(id) ON DELETE CASCADE,
+                UNIQUE(source_id, repo_key, artifact_name)
+            );
+
             -- Sync metadata table
             CREATE TABLE IF NOT EXISTS sync_meta (
                 key TEXT PRIMARY KEY,
@@ -136,6 +220,16 @@ class ModelDatabase {
             CREATE INDEX IF NOT EXISTS idx_variants_model ON variants(model_id);
             CREATE INDEX IF NOT EXISTS idx_benchmarks_hardware ON benchmarks(hardware_fingerprint);
             CREATE INDEX IF NOT EXISTS idx_benchmarks_variant ON benchmarks(variant_id);
+            CREATE INDEX IF NOT EXISTS idx_registry_repos_source ON registry_repos(source_id);
+            CREATE INDEX IF NOT EXISTS idx_registry_repos_model ON registry_repos(canonical_model_id);
+            CREATE INDEX IF NOT EXISTS idx_registry_repos_downloads ON registry_repos(downloads DESC);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_model ON model_artifacts(canonical_model_id);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_source ON model_artifacts(source_id);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_format ON model_artifacts(format);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_quant ON model_artifacts(quantization);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_runtime ON model_artifacts(runtime_support);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_size ON model_artifacts(size_gb);
+            CREATE INDEX IF NOT EXISTS idx_model_artifacts_downloads ON model_artifacts(downloads DESC);
         `;
 
         if (this.useBetterSqlite) {
@@ -363,6 +457,343 @@ class ModelDatabase {
             benchmark.memory_used_gb,
             benchmark.backend
         ]);
+    }
+
+    // ==================== MODEL REGISTRY OPERATIONS ====================
+
+    stringifyJson(value, fallback) {
+        const safeValue = value === undefined ? fallback : value;
+        try {
+            return JSON.stringify(safeValue);
+        } catch {
+            return JSON.stringify(fallback);
+        }
+    }
+
+    parseJson(value, fallback) {
+        if (!value) return fallback;
+        try {
+            const parsed = JSON.parse(value);
+            return parsed;
+        } catch {
+            return fallback;
+        }
+    }
+
+    upsertRegistrySource(source) {
+        const sql = `
+            INSERT INTO registry_sources (id, name, base_url, source_type, last_ingested_at, metadata, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                base_url = excluded.base_url,
+                source_type = excluded.source_type,
+                last_ingested_at = excluded.last_ingested_at,
+                metadata = excluded.metadata,
+                updated_at = CURRENT_TIMESTAMP
+        `;
+
+        this.run(sql, [
+            source.id,
+            source.name || source.id,
+            source.base_url || '',
+            source.source_type || 'registry',
+            source.last_ingested_at || new Date().toISOString(),
+            this.stringifyJson(source.metadata || {}, {})
+        ]);
+    }
+
+    upsertRegistryRepo(repo) {
+        const sql = `
+            INSERT INTO registry_repos (
+                id, source_id, repo_id, namespace, canonical_model_id, display_name, url, license,
+                gated, requires_auth, downloads, likes, tags, tasks, modalities, last_modified,
+                sha, metadata, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source_id, repo_id) DO UPDATE SET
+                namespace = excluded.namespace,
+                canonical_model_id = excluded.canonical_model_id,
+                display_name = excluded.display_name,
+                url = excluded.url,
+                license = excluded.license,
+                gated = excluded.gated,
+                requires_auth = excluded.requires_auth,
+                downloads = excluded.downloads,
+                likes = excluded.likes,
+                tags = excluded.tags,
+                tasks = excluded.tasks,
+                modalities = excluded.modalities,
+                last_modified = excluded.last_modified,
+                sha = excluded.sha,
+                metadata = excluded.metadata,
+                updated_at = CURRENT_TIMESTAMP
+        `;
+
+        const repoId = repo.repo_id || repo.id;
+        this.run(sql, [
+            repo.id,
+            repo.source_id,
+            repoId,
+            repo.namespace || '',
+            repo.canonical_model_id || repoId,
+            repo.display_name || repo.name || repoId,
+            repo.url || '',
+            repo.license || 'unknown',
+            repo.gated ? 1 : 0,
+            repo.requires_auth ? 1 : 0,
+            repo.downloads || 0,
+            repo.likes || 0,
+            this.stringifyJson(repo.tags || [], []),
+            this.stringifyJson(repo.tasks || [], []),
+            this.stringifyJson(repo.modalities || ['text'], ['text']),
+            repo.last_modified || '',
+            repo.sha || '',
+            this.stringifyJson(repo.metadata || {}, {})
+        ]);
+    }
+
+    upsertModelArtifact(artifact) {
+        const sql = `
+            INSERT INTO model_artifacts (
+                id, source_id, repo_key, repo_id, canonical_model_id, artifact_name, filename,
+                format, quantization, precision, parameter_count_b, active_parameter_count_b,
+                size_bytes, size_gb, context_length, runtime_support, tasks, modalities,
+                download_url, install_command, sha256, etag, license, gated, requires_auth,
+                downloads, likes, updated_at, metadata, refreshed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source_id, repo_key, artifact_name) DO UPDATE SET
+                filename = excluded.filename,
+                format = excluded.format,
+                quantization = excluded.quantization,
+                precision = excluded.precision,
+                parameter_count_b = excluded.parameter_count_b,
+                active_parameter_count_b = excluded.active_parameter_count_b,
+                size_bytes = excluded.size_bytes,
+                size_gb = excluded.size_gb,
+                context_length = excluded.context_length,
+                runtime_support = excluded.runtime_support,
+                tasks = excluded.tasks,
+                modalities = excluded.modalities,
+                download_url = excluded.download_url,
+                install_command = excluded.install_command,
+                sha256 = excluded.sha256,
+                etag = excluded.etag,
+                license = excluded.license,
+                gated = excluded.gated,
+                requires_auth = excluded.requires_auth,
+                downloads = excluded.downloads,
+                likes = excluded.likes,
+                updated_at = excluded.updated_at,
+                metadata = excluded.metadata,
+                refreshed_at = CURRENT_TIMESTAMP
+        `;
+
+        const sizeBytes = Number(artifact.size_bytes);
+        const sizeGB = Number(artifact.size_gb);
+        const repoId = artifact.repo_id || artifact.repo_key;
+
+        this.run(sql, [
+            artifact.id,
+            artifact.source_id,
+            artifact.repo_key,
+            repoId,
+            artifact.canonical_model_id || repoId,
+            artifact.artifact_name || artifact.filename || repoId,
+            artifact.filename || '',
+            artifact.format || 'unknown',
+            artifact.quantization || '',
+            artifact.precision || '',
+            artifact.parameter_count_b || null,
+            artifact.active_parameter_count_b || null,
+            Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : null,
+            Number.isFinite(sizeGB) && sizeGB > 0 ? sizeGB : null,
+            artifact.context_length || null,
+            this.stringifyJson(artifact.runtime_support || [], []),
+            this.stringifyJson(artifact.tasks || [], []),
+            this.stringifyJson(artifact.modalities || ['text'], ['text']),
+            artifact.download_url || '',
+            artifact.install_command || '',
+            artifact.sha256 || '',
+            artifact.etag || '',
+            artifact.license || 'unknown',
+            artifact.gated ? 1 : 0,
+            artifact.requires_auth ? 1 : 0,
+            artifact.downloads || 0,
+            artifact.likes || 0,
+            artifact.updated_at || '',
+            this.stringifyJson(artifact.metadata || {}, {})
+        ]);
+    }
+
+    searchModelArtifacts(query = '', filters = {}) {
+        let sql = `
+            SELECT
+                a.*,
+                s.name as source_name,
+                s.base_url as source_base_url,
+                r.display_name as repo_display_name,
+                r.url as repo_url
+            FROM model_artifacts a
+            JOIN registry_sources s ON s.id = a.source_id
+            JOIN registry_repos r ON r.id = a.repo_key
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (query) {
+            sql += ` AND (
+                a.canonical_model_id LIKE ? OR
+                a.artifact_name LIKE ? OR
+                a.filename LIKE ? OR
+                a.repo_id LIKE ? OR
+                r.display_name LIKE ?
+            )`;
+            const pattern = `%${query}%`;
+            params.push(pattern, pattern, pattern, pattern, pattern);
+        }
+
+        if (filters.source) {
+            sql += ` AND a.source_id = ?`;
+            params.push(filters.source);
+        }
+
+        if (filters.format) {
+            sql += ` AND a.format = ?`;
+            params.push(String(filters.format).toLowerCase());
+        }
+
+        if (filters.quantization) {
+            sql += ` AND UPPER(a.quantization) = ?`;
+            params.push(String(filters.quantization).toUpperCase());
+        }
+
+        if (filters.runtime && !['auto', 'all', '*'].includes(String(filters.runtime).toLowerCase())) {
+            // Escape LIKE wildcards so a runtime value (e.g. "lla_a") can't act as
+            // a pattern and over-match (it would otherwise match "llama").
+            const runtimeNeedle = String(filters.runtime).replace(/[\\%_]/g, '\\$&');
+            sql += ` AND a.runtime_support LIKE ? ESCAPE '\\'`;
+            params.push(`%"${runtimeNeedle}"%`);
+        }
+
+        if (filters.maxSizeGB) {
+            sql += ` AND (a.size_gb IS NULL OR a.size_gb <= ?)`;
+            params.push(filters.maxSizeGB);
+        }
+
+        if (filters.minParamsB) {
+            sql += ` AND (a.parameter_count_b IS NULL OR a.parameter_count_b >= ?)`;
+            params.push(filters.minParamsB);
+        }
+
+        if (filters.maxParamsB) {
+            sql += ` AND (a.parameter_count_b IS NULL OR a.parameter_count_b <= ?)`;
+            params.push(filters.maxParamsB);
+        }
+
+        if (filters.localOnly) {
+            sql += ` AND a.requires_auth = 0 AND a.gated = 0`;
+        }
+
+        sql += ` ORDER BY a.downloads DESC, a.likes DESC, a.size_gb ASC`;
+
+        if (filters.limit) {
+            sql += ` LIMIT ?`;
+            params.push(filters.limit);
+        }
+
+        return this.all(sql, params).map((row) => ({
+            ...row,
+            runtime_support: this.parseJson(row.runtime_support, []),
+            tasks: this.parseJson(row.tasks, []),
+            modalities: this.parseJson(row.modalities, ['text']),
+            metadata: this.parseJson(row.metadata, {})
+        }));
+    }
+
+    getRegistryStats() {
+        return {
+            sources: this.get(`SELECT COUNT(*) as count FROM registry_sources`)?.count || 0,
+            repos: this.get(`SELECT COUNT(*) as count FROM registry_repos`)?.count || 0,
+            artifacts: this.get(`SELECT COUNT(*) as count FROM model_artifacts`)?.count || 0,
+            bySource: this.all(`
+                SELECT source_id, COUNT(*) as artifact_count
+                FROM model_artifacts
+                GROUP BY source_id
+                ORDER BY artifact_count DESC
+            `),
+            byFormat: this.all(`
+                SELECT format, COUNT(*) as artifact_count
+                FROM model_artifacts
+                GROUP BY format
+                ORDER BY artifact_count DESC
+            `)
+        };
+    }
+
+    async seedRegistryFromPackagedSnapshotIfNeeded() {
+        if (!this.seedDbPath || !fs.existsSync(this.seedDbPath)) return false;
+        if (path.resolve(this.dbPath) === path.resolve(this.seedDbPath)) return false;
+
+        const currentArtifacts = this.get(`SELECT COUNT(*) as count FROM model_artifacts`)?.count || 0;
+        if (currentArtifacts > 0) return false;
+
+        const seed = new ModelDatabase({
+            dbPath: this.seedDbPath,
+            seedDbPath: this.seedDbPath,
+            disableRegistrySeedImport: true
+        });
+
+        await seed.initialize();
+        try {
+            const seedArtifacts = seed.get(`SELECT COUNT(*) as count FROM model_artifacts`)?.count || 0;
+            if (seedArtifacts === 0) return false;
+
+            const sources = seed.all(`SELECT * FROM registry_sources`);
+            const repos = seed.all(`SELECT * FROM registry_repos`);
+            const artifacts = seed.all(`SELECT * FROM model_artifacts`);
+
+            this.beginBatch();
+            try {
+                for (const source of sources) {
+                    this.upsertRegistrySource({
+                        ...source,
+                        metadata: this.parseJson(source.metadata, {})
+                    });
+                }
+
+                for (const repo of repos) {
+                    this.upsertRegistryRepo({
+                        ...repo,
+                        gated: Boolean(repo.gated),
+                        requires_auth: Boolean(repo.requires_auth),
+                        tags: this.parseJson(repo.tags, []),
+                        tasks: this.parseJson(repo.tasks, []),
+                        modalities: this.parseJson(repo.modalities, ['text']),
+                        metadata: this.parseJson(repo.metadata, {})
+                    });
+                }
+
+                for (const artifact of artifacts) {
+                    this.upsertModelArtifact({
+                        ...artifact,
+                        gated: Boolean(artifact.gated),
+                        requires_auth: Boolean(artifact.requires_auth),
+                        runtime_support: this.parseJson(artifact.runtime_support, []),
+                        tasks: this.parseJson(artifact.tasks, []),
+                        modalities: this.parseJson(artifact.modalities, ['text']),
+                        metadata: this.parseJson(artifact.metadata, {})
+                    });
+                }
+            } finally {
+                this.endBatch();
+            }
+
+            return true;
+        } finally {
+            seed.close();
+        }
     }
 
     // ==================== SEARCH OPERATIONS ====================
@@ -738,10 +1169,29 @@ class ModelDatabase {
      * Clear all data
      */
     clear() {
+        // The registry's Ollama source is derived from the local Ollama catalog.
+        // Clear only that source so a classic Ollama sync does not erase HF/GPT4All data.
+        this.clearRegistrySource('ollama');
         this.run(`DELETE FROM benchmarks`);
         this.run(`DELETE FROM variants`);
         this.run(`DELETE FROM models`);
         this.run(`DELETE FROM sync_meta`);
+    }
+
+    /**
+     * Clear registry data. When sourceId is provided, only that source is removed.
+     */
+    clearRegistrySource(sourceId = null) {
+        if (sourceId) {
+            this.run(`DELETE FROM model_artifacts WHERE source_id = ?`, [sourceId]);
+            this.run(`DELETE FROM registry_repos WHERE source_id = ?`, [sourceId]);
+            this.run(`DELETE FROM registry_sources WHERE id = ?`, [sourceId]);
+            return;
+        }
+
+        this.run(`DELETE FROM model_artifacts`);
+        this.run(`DELETE FROM registry_repos`);
+        this.run(`DELETE FROM registry_sources`);
     }
 
     /**

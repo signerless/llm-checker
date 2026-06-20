@@ -1,6 +1,27 @@
 Changelog
 =========
 
+3.7.0 — Multi-source Model Registry (2026-06-20)
+------------------------------------------------
+
+Adds a packaged multi-source model registry (Hugging Face + Ollama + GPT4All)
+and wires it into the recommendation flow. Full suite green at 44/44.
+
+- Registry: packaged snapshot of 3,259 repos / 33,729 artifacts seeded from
+  Hugging Face, Ollama, and GPT4All, with exact install/download commands
+  (`hf download ...`, `ollama pull ...`). New `registry-sync`/`registry-search`
+  /`registry-recommend` CLI surface.
+- `recommend` (and the `check` recommendation card) now source candidates from
+  the registry via the canonical deterministic scoring core, with `--runtime auto`
+  plus Ollama/vLLM/MLX/llama.cpp/Transformers targeting; falls back to the Ollama
+  catalog when the registry is empty or unavailable.
+- Packaged `src/data/seed/models.db` grows to ~43 MB unpacked (tarball ~6.2 MB).
+- Review fixes (PR #99): MoE `NxMB` naming (e.g. Mixtral 8x7B) is sized as the
+  full experts × per-expert total instead of a single expert; context tokens like
+  `128k` are no longer misread as ~0B parameters and dropped; the runtime LIKE
+  filter escapes `_`/`%` so it can't over-match; GPT4All entries with trailing-slash
+  URLs keep their name. Integration test: `tests/model-registry-param-parsing.test.js`.
+
 3.6.1 — Issue #88 / #86 Fixes & MCP Hardening (2026-06-19)
 ---------------------------------------------------------
 

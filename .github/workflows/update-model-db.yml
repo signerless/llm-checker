@@ -1,4 +1,4 @@
-name: Update Ollama Model Database
+name: Update Model Database
 
 on:
   workflow_dispatch:
@@ -38,13 +38,23 @@ jobs:
             const db = new ModelDatabase({ dbPath: 'src/data/seed/models.db' });
             await db.initialize();
             const stats = db.getStats();
+            const registryStats = db.getRegistryStats();
             db.close();
 
             if (stats.models < 100 || stats.variants < 1000) {
               throw new Error(`Seed DB looks incomplete: ${stats.models} models, ${stats.variants} variants`);
             }
 
-            console.log(`Seed DB OK: ${stats.models} models, ${stats.variants} variants`);
+            if (registryStats.repos < 2500 || registryStats.artifacts < 25000) {
+              throw new Error(
+                `Registry seed looks incomplete: ${registryStats.repos} repos, ${registryStats.artifacts} artifacts`
+              );
+            }
+
+            console.log(
+              `Seed DB OK: ${stats.models} Ollama models, ${stats.variants} variants, ` +
+              `${registryStats.repos} registry repos, ${registryStats.artifacts} registry artifacts`
+            );
           })().catch((error) => {
             console.error(error);
             process.exit(1);
@@ -56,10 +66,10 @@ jobs:
         with:
           branch: chore/update-ollama-model-db
           delete-branch: true
-          title: 'chore: update packaged Ollama model database'
-          commit-message: 'chore: update packaged Ollama model database'
+          title: 'chore: update packaged model database'
+          commit-message: 'chore: update packaged model database'
           body: |
-            Weekly refresh of the packaged Ollama model database snapshot.
+            Weekly refresh of the packaged Ollama and multi-source model registry snapshot.
 
             This keeps npm installs useful on first run without requiring an immediate sync.
           labels: dependencies, data

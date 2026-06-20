@@ -20,6 +20,17 @@ const {
 } = require('./provenance/model-provenance');
 const { normalizePlatform } = require('./utils/platform');
 
+function normalizeRecommendationRuntime(runtime = 'auto') {
+    const normalized = String(runtime || 'auto').trim().toLowerCase();
+    if (['auto', 'all', '*'].includes(normalized)) return 'auto';
+    if (['ollama', 'vllm', 'mlx', 'llama.cpp', 'llamacpp', 'llama_cpp', 'transformers', 'hf'].includes(normalized)) {
+        if (normalized === 'llamacpp' || normalized === 'llama_cpp') return 'llama.cpp';
+        if (normalized === 'hf') return 'transformers';
+        return normalized;
+    }
+    return normalizeRuntime(normalized);
+}
+
 class LLMChecker {
     constructor(options = {}) {
         this.hardwareDetector = new HardwareDetector();
@@ -2467,7 +2478,59 @@ class LLMChecker {
     async generateIntelligentRecommendations(hardware, options = {}) {
         try {
             this.logger.info('Generating intelligent recommendations...');
-            const selectedRuntime = normalizeRuntime(options.runtime || 'ollama');
+            const selectedRuntime = normalizeRecommendationRuntime(options.runtime || 'auto');
+            const optimizeFor = options.optimizeFor || options.optimize || 'balanced';
+
+            if (options.registry !== false) {
+                let registryRecommender = null;
+                try {
+                    const { RegistryRecommender } = require('./data/registry-recommender');
+                    registryRecommender = new RegistryRecommender();
+                    await registryRecommender.initialize();
+
+                    const registryResult = await registryRecommender.getBestModelsForHardware(hardware, {
+                        runtime: selectedRuntime,
+                        optimizeFor,
+                        limit: 3,
+                        poolLimit: options.poolLimit || 20000,
+                        localOnly: options.includeGated ? false : true
+                    });
+                    const recommendations = registryResult.recommendations;
+                    const hasRegistryRecommendations = Object.values(recommendations)
+                        .some((group) => Array.isArray(group.bestModels) && group.bestModels.length > 0);
+
+                    if (hasRegistryRecommendations) {
+                        const summary = this.intelligentRecommender.generateRecommendationSummary(
+                            recommendations,
+                            hardware,
+                            { optimizeFor }
+                        );
+                        const totalModelsAnalyzed = Number(registryResult.totalModelsAnalyzed) || Object.values(recommendations)
+                            .reduce((sum, group) => sum + (Number(group.totalCandidates) || Number(group.totalEvaluated) || 0), 0);
+
+                        this.logger.info(`Generated registry recommendations for ${Object.keys(recommendations).length} categories`);
+
+                        return {
+                            recommendations,
+                            summary,
+                            optimizeFor: summary.optimize_for || optimizeFor,
+                            runtime: selectedRuntime,
+                            recommendationSource: 'registry',
+                            registryStats: registryResult.registryStats,
+                            totalModelsAnalyzed,
+                            generatedAt: new Date().toISOString()
+                        };
+                    }
+
+                    this.logger.warn('Registry recommendations were empty, falling back to Ollama catalog');
+                } catch (error) {
+                    this.logger.warn('Registry recommendations unavailable, falling back to Ollama catalog', { error: error.message });
+                } finally {
+                    if (registryRecommender) {
+                        registryRecommender.close();
+                    }
+                }
+            }
             
             // Prefer the synced SQLite catalog so `llm-checker sync` updates recommendations immediately.
             const ollamaData = await this.loadOllamaModelData();
@@ -2479,11 +2542,11 @@ class LLMChecker {
             }
 
             // Generar recomendaciones inteligentes
-            const optimizeFor = options.optimizeFor || options.optimize || 'balanced';
+            const fallbackRuntime = selectedRuntime === 'auto' ? 'ollama' : selectedRuntime;
             const recommendations = await this.intelligentRecommender.getBestModelsForHardware(
                 hardware,
                 allModels,
-                { optimizeFor, runtime: selectedRuntime }
+                { optimizeFor, runtime: fallbackRuntime }
             );
             const summary = this.intelligentRecommender.generateRecommendationSummary(
                 recommendations,
@@ -2497,7 +2560,8 @@ class LLMChecker {
                 recommendations,
                 summary,
                 optimizeFor: summary.optimize_for || optimizeFor,
-                runtime: selectedRuntime,
+                runtime: fallbackRuntime,
+                recommendationSource: 'ollama_catalog',
                 totalModelsAnalyzed: allModels.length,
                 generatedAt: new Date().toISOString()
             };
