@@ -1,6 +1,23 @@
 Changelog
 =========
 
+3.7.1 — Registry Recommendation Diversity (2026-06-20)
+------------------------------------------------------
+
+Fixes "the registry only ever recommends Ollama" — other sources were scored but
+never surfaced, and the top was cluttered with near-identical variants.
+
+- Recommendations now collapse quant/shard/tag variants of the same model to a
+  single best-scoring entry, so the top picks are DISTINCT models instead of (for
+  example) a dozen `qwen2.5-coder:7b` quants or every `layers-N.safetensors` shard
+  of one repo.
+- Source diversity: a source (Hugging Face / GPT4All) that scores close to the top
+  is guaranteed a slot, so `recommend`/`check`/`registry-recommend` surface
+  Hugging Face artifacts (`hf download ...`) even when Ollama narrowly outscores
+  them. Diversity never promotes a clearly worse model (score floor + margin gates).
+- Tip: `--runtime vllm|mlx|llama.cpp|transformers` and `--source huggingface` still
+  let you target non-Ollama artifacts explicitly. Test: `tests/registry-diversity.test.js`.
+
 3.7.0 — Multi-source Model Registry (2026-06-20)
 ------------------------------------------------
 

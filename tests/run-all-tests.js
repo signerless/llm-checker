@@ -23,6 +23,7 @@ const TESTS = [
     { name: 'Fine-tuning support helper', file: 'fine-tuning-support.test.js', category: 'Recommendations' },
     { name: 'Model registry ingestors', file: 'model-registry-ingestors.test.js', category: 'Recommendations' },
     { name: 'Model registry param parsing', file: 'model-registry-param-parsing.test.js', category: 'Recommendations' },
+    { name: 'Registry recommendation diversity', file: 'registry-diversity.test.js', category: 'Recommendations' },
     { name: 'Model registry recommender', file: 'model-registry-recommender.test.js', category: 'Recommendations' },
     { name: 'Model registry main flow', file: 'model-registry-main-flow.test.js', category: 'Recommendations' },
     { name: 'Packaged model registry seed', file: 'model-registry-seed.test.js', category: 'Recommendations' },
