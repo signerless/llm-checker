@@ -1,6 +1,20 @@
 Changelog
 =========
 
+3.7.3 — Registry CLI Validation (2026-06-20)
+--------------------------------------------
+
+- `registry-search` and `registry-recommend` now reject invalid `--source`,
+  `--format`, `--runtime`, and `--optimize` values with a clear error (exit 1 /
+  JSON `{error}`) instead of silently returning "no results" or echoing a bogus
+  runtime.
+- When no registry artifacts match the filters, `registry-recommend` returns an
+  empty result rather than silently substituting the deterministic selector's
+  built-in catalog (which previously surfaced non-registry rows mislabeled as a
+  "Multi-source registry" result with `total_artifacts: 0`).
+- New `tests/registry-cli-validation.test.js` (spawn-based enum rejection +
+  empty-pool guard). Full suite 47/47.
+
 3.7.2 — Memory-sizing & Recommendation Hardening (2026-06-20)
 ------------------------------------------------------------
 

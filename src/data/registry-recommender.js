@@ -443,6 +443,26 @@ class RegistryRecommender {
 
         const selectorHardware = normalizeHardwareForSelector(options.hardware || {});
         const normalizedRuntime = runtimeFilter || 'auto';
+
+        // No registry artifacts matched the filters: return an empty result rather
+        // than letting the deterministic selector silently substitute its built-in
+        // catalog (which would mislabel non-registry models as "registry" rows).
+        if (modelPool.length === 0) {
+            return {
+                category,
+                runtime: normalizedRuntime,
+                rows,
+                modelPool,
+                result: {
+                    category,
+                    optimizeFor: this.selector.normalizeOptimizationObjective(options.optimizeFor || 'balanced'),
+                    runtime: normalizedRuntime,
+                    candidates: [],
+                    total_evaluated: 0,
+                    timestamp: new Date().toISOString()
+                }
+            };
+        }
         // Rank a wider window than requested so we can collapse model variants and
         // apply source diversity before trimming to the caller's limit.
         const rankWindow = Math.max(limit * 8, 200);

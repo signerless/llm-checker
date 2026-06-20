@@ -410,6 +410,30 @@ function parsePositiveNumberOption(value, fallback = null) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+// Allowed enum values for the registry commands. Invalid values must be rejected
+// with a clear error instead of silently returning "no results" or falling back
+// to the built-in catalog.
+const REGISTRY_SOURCES = ['ollama', 'huggingface', 'gpt4all'];
+const REGISTRY_FORMATS = ['gguf', 'safetensors', 'mlx', 'ollama', 'pytorch', 'pytorch_bin', 'ggml'];
+const REGISTRY_RUNTIMES = ['auto', 'all', '*', 'ollama', 'llama.cpp', 'transformers', 'vllm', 'mlx'];
+const REGISTRY_OPTIMIZE = ['balanced', 'speed', 'quality', 'context', 'coding'];
+
+function assertRegistryEnum(label, value, allowed) {
+    if (value === undefined || value === null || value === '') return;
+    if (!allowed.includes(String(value).toLowerCase())) {
+        const shown = allowed.filter((v) => !['all', '*'].includes(v)).join(', ');
+        throw new Error(`Invalid --${label} "${value}". Allowed: ${shown}`);
+    }
+}
+
+// Throws on the first invalid registry enum option. Returns nothing on success.
+function validateRegistryFilters(options = {}) {
+    assertRegistryEnum('source', options.source, REGISTRY_SOURCES);
+    assertRegistryEnum('format', options.format, REGISTRY_FORMATS);
+    assertRegistryEnum('runtime', options.runtime, REGISTRY_RUNTIMES);
+    assertRegistryEnum('optimize', options.optimize, REGISTRY_OPTIMIZE);
+}
+
 function truncateMiddle(value, maxLength = 48) {
     const text = String(value || '');
     if (text.length <= maxLength) return text;
@@ -4886,6 +4910,17 @@ program
     .option('-l, --limit <n>', 'Maximum number of results', '20')
     .option('-j, --json', 'Output as JSON')
     .action(async (query = '', options) => {
+        try {
+            validateRegistryFilters(options);
+        } catch (validationError) {
+            if (options.json) {
+                console.log(JSON.stringify({ error: validationError.message }, null, 2));
+            } else {
+                console.error(chalk.red(`✗ ${validationError.message}`));
+            }
+            process.exitCode = 1;
+            return;
+        }
         if (!options.json) showAsciiArt('registry-search');
 
         const ModelDatabase = require('../src/data/model-database');
@@ -4993,6 +5028,17 @@ program
     .option('-l, --limit <n>', 'Maximum number of recommendations', '10')
     .option('-j, --json', 'Output as JSON')
     .action(async (query = '', options) => {
+        try {
+            validateRegistryFilters(options);
+        } catch (validationError) {
+            if (options.json) {
+                console.log(JSON.stringify({ error: validationError.message }, null, 2));
+            } else {
+                console.error(chalk.red(`✗ ${validationError.message}`));
+            }
+            process.exitCode = 1;
+            return;
+        }
         if (!options.json) showAsciiArt('registry-recommend');
 
         const UnifiedDetector = require('../src/hardware/unified-detector');
