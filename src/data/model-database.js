@@ -670,8 +670,11 @@ class ModelDatabase {
         }
 
         if (filters.runtime && !['auto', 'all', '*'].includes(String(filters.runtime).toLowerCase())) {
-            sql += ` AND a.runtime_support LIKE ?`;
-            params.push(`%"${filters.runtime}"%`);
+            // Escape LIKE wildcards so a runtime value (e.g. "lla_a") can't act as
+            // a pattern and over-match (it would otherwise match "llama").
+            const runtimeNeedle = String(filters.runtime).replace(/[\\%_]/g, '\\$&');
+            sql += ` AND a.runtime_support LIKE ? ESCAPE '\\'`;
+            params.push(`%"${runtimeNeedle}"%`);
         }
 
         if (filters.maxSizeGB) {

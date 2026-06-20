@@ -79,7 +79,22 @@ function parseNumberWithUnit(rawValue) {
         return Number(text);
     }
 
-    const match = text.match(/(\d+(?:\.\d+)?)\s*(trillion|billion|million|thousand|[tkmb])\b/i);
+    // Mixture-of-Experts "NxMB" naming (e.g. Mixtral 8x7B, 8x22B): the total
+    // parameter footprint that must reside in memory is experts * per-expert
+    // size. Without this, "8x7B" matches the bare "7b" below and is stored as 7B.
+    const moe = text.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/i);
+    if (moe) {
+        const experts = Number(moe[1]);
+        const perExpert = Number(moe[2]);
+        if (experts > 0 && Number.isFinite(perExpert) && perExpert > 0) {
+            return experts * perExpert;
+        }
+    }
+
+    // Note: 'k'/'thousand' are intentionally NOT parameter units. Parameter
+    // counts are never expressed in thousands-of-billions, and tokens like
+    // "128k" (a context length) were being misread as ~0.0001B and rounded to 0.
+    const match = text.match(/(\d+(?:\.\d+)?)\s*(trillion|billion|million|[tmb])\b/i);
     if (!match) return null;
 
     const value = Number(match[1]);
@@ -87,7 +102,6 @@ function parseNumberWithUnit(rawValue) {
     const unit = (match[2] || '').toLowerCase();
     if (unit === 't' || unit === 'trillion') return value * 1000;
     if (unit === 'm' || unit === 'million') return value / 1000;
-    if (unit === 'k' || unit === 'thousand') return value / 1000000;
     return value;
 }
 
@@ -110,7 +124,11 @@ function sumSafetensorsParams(safetensors) {
 function parseParamsB(...values) {
     for (const value of values) {
         const parsed = parseNumberWithUnit(value);
-        if (parsed !== null && parsed > 0) return Math.round(parsed * 1000) / 1000;
+        if (parsed !== null && parsed > 0) {
+            const rounded = Math.round(parsed * 1000) / 1000;
+            // Never let a value that rounds to 0 escape the > 0 guard.
+            if (rounded > 0) return rounded;
+        }
     }
     return null;
 }
@@ -371,12 +389,12 @@ function normalizeGpt4AllEntry(entry) {
     const filenameCandidate = entry.filename || '';
     const url = entry.url || entry.downloadUrl || entry.download_url ||
         (filenameCandidate ? `https://gpt4all.io/models/gguf/${encodeURIComponent(filenameCandidate)}` : '');
-    const name = entry.name || filenameCandidate || url.split('/').pop();
+    const name = entry.name || filenameCandidate || url.split('/').filter(Boolean).pop();
     if (!name || !url) return null;
 
     const repoMatch = url.match(/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/([^/]+)\/(.+)$/);
     const repoId = repoMatch ? repoMatch[1] : `gpt4all/${name}`;
-    const filename = repoMatch ? decodeURIComponent(repoMatch[3]) : (filenameCandidate || url.split('/').pop());
+    const filename = repoMatch ? decodeURIComponent(repoMatch[3]) : (filenameCandidate || url.split('/').filter(Boolean).pop());
     const repoKey = makeScopedId('gpt4all', repoId);
     const tags = ['gpt4all', entry.type, entry.quant].filter(Boolean);
     const paramsB = parseParamsB(entry.parameters, name, filename);

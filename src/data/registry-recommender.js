@@ -11,6 +11,16 @@ function parseParamsB(...values) {
             return value;
         }
         const text = String(value || '').replace(/,/g, '');
+        // Mixture-of-Experts "NxMB" (e.g. 8x7B) -> experts * per-expert size,
+        // so MoE models are not sized as if they were a single expert.
+        const moe = text.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/i);
+        if (moe) {
+            const experts = Number(moe[1]);
+            const perExpert = Number(moe[2]);
+            if (experts > 0 && Number.isFinite(perExpert) && perExpert > 0) {
+                return experts * perExpert;
+            }
+        }
         const match = text.match(/(\d+(?:\.\d+)?)\s*([bmt])\b/i);
         if (!match) continue;
         const amount = Number(match[1]);
