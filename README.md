@@ -382,7 +382,7 @@ llm-checker search "qwen coder" --json
 | `recommend` | Intelligent recommendations by category (coding, reasoning, multimodal, etc.) |
 | `calibrate` | Generate calibration result + routing policy artifacts from a JSONL prompt suite |
 | `installed` | Rank your installed Ollama models by compatibility |
-| `list-models` | List the synced Ollama catalog by popularity, category, size, or JSON output |
+| `list-models` | List the synced Ollama catalog by popularity, category, size, or JSON output (add `--registry`/`--source` to list the multi-source registry) |
 | `ollama-plan` | Compute safe Ollama runtime env vars (`NUM_CTX`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) for selected local models |
 | `mcp-setup` | Print/apply Claude MCP setup command and config snippet (`--apply`, `--json`, `--npx`) |
 | `gpu-plan` | Multi-GPU placement advisor with single/pooled model-size envelopes |
@@ -395,7 +395,7 @@ llm-checker search "qwen coder" --json
 | Command | Description |
 |---------|-------------|
 | `sync` | Refresh the local SQLite model catalog from Ollama |
-| `search <query>` | Search the synced catalog with filters and intelligent scoring |
+| `search <query>` | Search the synced Ollama catalog; add `--registry`/`--source` to search the multi-source registry (HF + Ollama + GPT4All) with `--max-params`/`--runtime`/`--format` filters |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
 
 ### Model Registry Commands (v3.7.0+)
