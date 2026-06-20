@@ -144,6 +144,24 @@ async function testRuntimeLikeEscape() {
     }
 }
 
+function testShardedFileSizeNotUsedAsModelSize() {
+    // A single shard's size must NOT stand in for the whole model: a 56B model
+    // whose shard is 4.66GB must be sized from params, not "fit" as 4.66GB.
+    const model = artifactToSelectorModel({
+        source_id: 'huggingface',
+        repo_id: 'org/Big-56B',
+        canonical_model_id: 'org/Big-56B',
+        artifact_name: 'model-00001-of-00012.safetensors',
+        filename: 'model-00001-of-00012.safetensors',
+        parameter_count_b: 56,
+        size_gb: 4.66
+    });
+    assert.ok(model, 'sharded artifact still maps');
+    assert.strictEqual(model.paramsB, 56, 'keeps the full param count');
+    assert.strictEqual(model.sizeGB, undefined, 'per-shard size must not become the model size');
+    assert.deepStrictEqual(model.sizeByQuant, {}, 'no observed size from a shard');
+}
+
 async function run() {
     testMoEParamParsing();
     testContextTokenNotMisreadAsParams();
@@ -151,6 +169,7 @@ async function run() {
     testRecommenderActiveParamTotalSizing();
     testHugeMoEDoesNotFitSmallHardware();
     testGpt4AllTrailingSlashName();
+    testShardedFileSizeNotUsedAsModelSize();
     await testRuntimeLikeEscape();
     console.log('model-registry-param-parsing.test.js: OK');
 }

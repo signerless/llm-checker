@@ -1,6 +1,32 @@
 Changelog
 =========
 
+3.7.2 — Memory-sizing & Recommendation Hardening (2026-06-20)
+------------------------------------------------------------
+
+A bug-hunt pass (multi-area review) fixing several causes of FALSE "fits" and
+dropped picks. Full suite 46/46; new `tests/selector-memory-sizing.test.js` plus
+added cases across the registry/MCP tests.
+
+- MoE weight memory is sized by the TOTAL parameter count, and a real observed
+  artifact size ALWAYS wins — the "sparse inference" path that sized MoE weights
+  by active params (making a 236B MoE look ~14GB and "fit" a 16GB box) is gone.
+  This fixes the Ollama-catalog path that the 3.7.0 registry fix didn't cover.
+- A size-unknown Ollama variant (e.g. `:latest`) no longer inherits `model_sizes[0]`:
+  it's disambiguated by its own artifact size, so `qwen3:latest` is sized ~9B
+  instead of 30B and stops poisoning the real `qwen3:30b` size map (a 19GB model
+  that was falsely "fitting" 16GB).
+- Multi-GPU VRAM is no longer double-counted: a bare total `vramGB` is treated as
+  the box total (a 2x24=48GB box stays 48GB, not 96GB).
+- `filterByCategory` tolerates malformed pool rows instead of throwing (one bad
+  row used to silently empty a whole category).
+- Registry recommendations: source diversity no longer drops several genuine top
+  picks to seed obscure sources (most slots stay best-by-score); a sharded HF
+  weight file's per-shard size is no longer used as the whole-model size; and
+  unknown-param models with the same name no longer collapse into one.
+- MCP: `registry-sync` / `registry-search` / `registry-recommend` are now in the
+  `cli_exec` allowlist (and the allowlist is exported + tested).
+
 3.7.1 — Registry Recommendation Diversity (2026-06-20)
 ------------------------------------------------------
 

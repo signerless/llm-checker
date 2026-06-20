@@ -18,6 +18,7 @@ const TESTS = [
     { name: 'Termux platform support', file: 'termux-platform-support.test.js', category: 'Hardware' },
     { name: 'Token speed estimation', file: 'token-speed-estimation.test.js', category: 'Performance' },
     { name: 'Deterministic model pool', file: 'deterministic-model-pool-check.js', category: 'Recommendations' },
+    { name: 'Selector memory sizing', file: 'selector-memory-sizing.test.js', category: 'Recommendations' },
     { name: 'Multi-objective selector regression', file: 'multi-objective-selector-regression.test.js', category: 'Recommendations' },
     { name: 'Scoring engine unification', file: 'scoring-unification.test.js', category: 'Recommendations' },
     { name: 'Fine-tuning support helper', file: 'fine-tuning-support.test.js', category: 'Recommendations' },

@@ -744,7 +744,7 @@ async function runMoECompleteMetadataUsesActiveParams() {
     assert.ok(moeBreakdown.requiredGB < denseRequired, 'MoE active-param estimate should be smaller than dense equivalent');
 }
 
-async function runMoEActivePathOverridesObservedArtifactSize() {
+async function runMoEObservedArtifactSizeWinsOverActiveParams() {
     const selector = new DeterministicModelSelector();
     const denseEquivalent = {
         paramsB: 46,
@@ -765,18 +765,22 @@ async function runMoEActivePathOverridesObservedArtifactSize() {
     const denseBreakdown = selector.estimateMemoryBreakdown(denseEquivalent, 'Q4_K_M', 8192);
     const moeBreakdown = selector.estimateMemoryBreakdown(moeModel, 'Q4_K_M', 8192);
 
+    // A real measured on-disk size must win for weight memory: all experts are
+    // resident under Ollama / Metal / vLLM, so the MoE cannot shrink to its active
+    // footprint and falsely "fit" hardware it can't run on.
     assert.strictEqual(
         moeBreakdown.memorySource,
-        'moe_sparse_inference_params',
-        'Complete MoE metadata should prioritize sparse inference params over artifact-size fallback'
+        'observed_artifact_size',
+        'Observed artifact size must win over the MoE sparse-inference assumption'
+    );
+    assert.strictEqual(
+        moeBreakdown.modelMemGB,
+        denseBreakdown.modelMemGB,
+        'MoE weight memory equals the observed artifact size, same as the dense equivalent'
     );
     assert.ok(
-        moeBreakdown.modelMemGB < denseBreakdown.modelMemGB,
-        'MoE model memory should be lower than dense equivalent even when artifact size metadata exists'
-    );
-    assert.ok(
-        moeBreakdown.requiredGB < denseBreakdown.requiredGB,
-        'MoE required memory should remain below dense equivalent when active metadata is available'
+        moeBreakdown.requiredGB <= denseBreakdown.requiredGB + 1e-9,
+        'MoE total may only be lower via a smaller KV cache, never via shrunken weights'
     );
 }
 
@@ -937,7 +941,7 @@ async function runAll() {
     await runDenseMemoryPathUsesDenseParams();
     await runConvertedVariantCarriesExplicitMoEMetadataSchemaFields();
     await runMoECompleteMetadataUsesActiveParams();
-    await runMoEActivePathOverridesObservedArtifactSize();
+    await runMoEObservedArtifactSizeWinsOverActiveParams();
     await runMoEPartialMetadataFallsBackDeterministically();
     await runMoERuntimeProfilesChangeSpeedEstimate();
     await runRuntimePropagationInCategoryRecommendations();

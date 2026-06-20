@@ -173,7 +173,12 @@ function artifactToSelectorModel(row) {
         .filter(Boolean)
         .map((tag) => String(tag).toLowerCase());
 
-    const sizeGB = Number(row.size_gb);
+    // A sharded weight file's size is only ONE shard, not the whole model. Don't
+    // let it stand in for the model's memory (that made a 56B model look like
+    // ~4.6GB and "fit" tiny hardware); leave size unset so memory estimates from
+    // the (total) parameter count instead.
+    const rawSizeGB = Number(row.size_gb);
+    const sizeGB = (!shardedFile && Number.isFinite(rawSizeGB) && rawSizeGB > 0) ? rawSizeGB : NaN;
     const sizeByQuant = Number.isFinite(sizeGB) && sizeGB > 0
         ? { [quant]: sizeGB }
         : {};
@@ -255,8 +260,16 @@ function modelDiversityKey(candidate) {
         .replace(/:.*$/, '')   // drop an ollama :tag
         .replace(/\s+/g, ' ')
         .trim();
-    const params = Number(meta.paramsB) > 0 ? Math.round(Number(meta.paramsB) * 10) / 10 : 'na';
-    return `${name}|${params}`;
+    const p = Number(meta.paramsB);
+    if (Number.isFinite(p) && p > 0) {
+        return `${name}|${Math.round(p * 10) / 10}`;
+    }
+    // Params unknown: do NOT bucket every unknown-size model of the same name
+    // together (that silently drops distinct models / sources). Keep them apart by
+    // source + identifier.
+    const src = String(meta.source || '').toLowerCase();
+    const id = String(meta.model_identifier || meta.name || '').toLowerCase();
+    return `${name}|na|${src}|${id}`;
 }
 
 // Collapse quant/shard/tag variants of the same model to a single best-scoring
@@ -279,27 +292,31 @@ function applySourceDiversity(distinctSorted, limit) {
     const list = Array.isArray(distinctSorted) ? distinctSorted : [];
     if (list.length === 0) return [];
     const max = Number(limit) > 0 ? Number(limit) : 10;
+    if (list.length <= max) return list.slice(0, max);
     const topScore = Number(list[0].score) || 0;
 
-    const seeds = [];
-    const seenSource = new Set();
-    for (const c of list) {
-        const src = (c.meta && c.meta.source) || 'unknown';
-        if (seenSource.has(src)) continue;
-        const score = Number(c.score) || 0;
-        if (score >= SOURCE_DIVERSITY_FLOOR && score >= topScore - SOURCE_DIVERSITY_MARGIN) {
-            seeds.push(c);
-            seenSource.add(src);
-        }
-    }
+    // Reserve most slots for the genuine best-by-score so diversity can never
+    // displace several real top picks for several obscure sources. Only the tail
+    // (~40% of slots) is used to surface competitive alternate sources.
+    const guaranteed = Math.max(1, Math.ceil(max * 0.6));
+    const result = list.slice(0, guaranteed);
+    const chosen = new Set(result);
+    const present = new Set(result.map((c) => (c.meta && c.meta.source) || 'unknown'));
 
-    const chosen = new Set(seeds);
-    const result = [...seeds];
-    for (const c of list) {
-        if (result.length >= max) break;
-        if (chosen.has(c)) continue;
-        result.push(c);
-        chosen.add(c);
+    while (result.length < max) {
+        // Prefer the best candidate from a not-yet-shown source that is still
+        // competitive (within margin + above floor); otherwise the next best overall.
+        let pick = list.find((c) => {
+            if (chosen.has(c)) return false;
+            const src = (c.meta && c.meta.source) || 'unknown';
+            const score = Number(c.score) || 0;
+            return !present.has(src) && score >= SOURCE_DIVERSITY_FLOOR && score >= topScore - SOURCE_DIVERSITY_MARGIN;
+        });
+        if (!pick) pick = list.find((c) => !chosen.has(c));
+        if (!pick) break;
+        result.push(pick);
+        chosen.add(pick);
+        present.add((pick.meta && pick.meta.source) || 'unknown');
     }
     return result
         .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))

@@ -243,13 +243,12 @@ class DeterministicModelSelector {
             directVRAM ??
             0;
 
-        // Multi-GPU fallback when only per-GPU memory is known.
-        if (!explicitTotalVRAM && gpuCount > 1) {
-            if (vramPerGPU) {
-                vramGB = vramPerGPU * gpuCount;
-            } else if (directVRAM && Boolean(gpu.isMultiGPU || input.isMultiGPU)) {
-                vramGB = Math.max(directVRAM, directVRAM * gpuCount);
-            }
+        // Multi-GPU: only scale up when memory is known to be PER-GPU (vramPerGPU).
+        // A bare `vram`/`vramGB` is treated as the box total and never multiplied,
+        // so we don't double an already-total figure and falsely "fit" a model
+        // (e.g. a 2x24=48GB box must stay 48GB, not become 96GB).
+        if (!explicitTotalVRAM && gpuCount > 1 && vramPerGPU) {
+            vramGB = vramPerGPU * gpuCount;
         }
 
         let gpuType = gpu.type;
@@ -1152,6 +1151,17 @@ class DeterministicModelSelector {
             return explicitParams;
         }
 
+        // Use the variant's OWN artifact size to DISAMBIGUATE the model-level size
+        // list. A size-unknown variant (e.g. `:latest`) must not blindly inherit
+        // model_sizes[0]: for qwen3 (model_sizes ["30b","235b"]) that mislabeled a
+        // small qwen3:latest as 30B and poisoned the real qwen3:30b size map, making
+        // a 19GB model falsely "fit" a 16GB machine.
+        const artifactSizeGB = this.extractVariantSizeGB(variant, null);
+        const artifactParamsB =
+            (!this.isCloudVariantTag(variant.tag) && Number.isFinite(artifactSizeGB) && artifactSizeGB > 0)
+                ? this.inferParamsFromArtifactSizeGB(artifactSizeGB, quant)
+                : null;
+
         const metadataCandidates = this.extractParameterCandidates(
             ollamaModel.model_sizes,
             ollamaModel.parameters,
@@ -1159,12 +1169,23 @@ class DeterministicModelSelector {
             ollamaModel.parameter_count
         );
         if (metadataCandidates.length > 0) {
+            if (Number.isFinite(artifactParamsB) && artifactParamsB > 0) {
+                // Pick the listed size CLOSEST to what this variant's own artifact
+                // implies; if even the closest is far off, trust the artifact size.
+                let closest = metadataCandidates[0];
+                let bestDiff = Math.abs(closest - artifactParamsB);
+                for (const cand of metadataCandidates) {
+                    const diff = Math.abs(cand - artifactParamsB);
+                    if (diff < bestDiff) { bestDiff = diff; closest = cand; }
+                }
+                const tolerance = Math.max(2, closest * 0.5);
+                return bestDiff <= tolerance ? closest : artifactParamsB;
+            }
             return metadataCandidates[0];
         }
 
-        const artifactSizeGB = this.extractVariantSizeGB(variant, null);
-        if (!this.isCloudVariantTag(variant.tag) && Number.isFinite(artifactSizeGB) && artifactSizeGB > 0) {
-            return this.inferParamsFromArtifactSizeGB(artifactSizeGB, quant);
+        if (Number.isFinite(artifactParamsB) && artifactParamsB > 0) {
+            return artifactParamsB;
         }
 
         const modelArtifactSizeGB = this.extractArtifactSizeGBFromValue(ollamaModel.main_size);
@@ -1512,28 +1533,35 @@ class DeterministicModelSelector {
                 return false;
             }
 
+            // Guard against malformed external pool rows (a missing tags/modalities
+            // /name field used to throw and silently nuke the whole category).
+            const tags = Array.isArray(model.tags) ? model.tags : [];
+            const modalities = Array.isArray(model.modalities) ? model.modalities : [];
+            const name = String(model.name || model.model_identifier || '').toLowerCase();
+            const paramsB = Number(model.paramsB) || 0;
+
             switch (category) {
                 case 'coding':
-                    return model.tags.some(tag => ['coder', 'code', 'instruct'].includes(tag)) ||
-                           model.name.toLowerCase().includes('code');
-                           
+                    return tags.some(tag => ['coder', 'code', 'instruct'].includes(tag)) ||
+                           name.includes('code');
+
                 case 'multimodal':
-                    return model.modalities.includes('vision') ||
-                           model.tags.includes('vision');
-                           
+                    return modalities.includes('vision') ||
+                           tags.includes('vision');
+
                 case 'embeddings':
-                    return model.tags.includes('embedding') ||
-                           model.tags.includes('embeddings') ||
-                           model.name.toLowerCase().includes('embed') ||
-                           model.name.toLowerCase().includes('bge-') ||
-                           model.name.toLowerCase().includes('nomic-embed') ||
-                           model.name.toLowerCase().includes('all-minilm') ||
+                    return tags.includes('embedding') ||
+                           tags.includes('embeddings') ||
+                           name.includes('embed') ||
+                           name.includes('bge-') ||
+                           name.includes('nomic-embed') ||
+                           name.includes('all-minilm') ||
                            model.specialization === 'embeddings';
-                           
+
                 case 'reasoning':
-                    return model.tags.includes('instruct') || 
-                           model.paramsB >= 7; // Prefer larger models for reasoning
-                           
+                    return tags.includes('instruct') ||
+                           paramsB >= 7; // Prefer larger models for reasoning
+
                 default: // general, reading, summarization
                     return true; // Most models can handle these
             }
@@ -1711,15 +1739,19 @@ class DeterministicModelSelector {
             : (Number.isFinite(directVariantMatch) && directVariantMatch > 0 ? directVariantMatch : null);
 
         const parameterProfile = this.resolveMemoryParameterProfile(model);
-        const modeledWeightGB = parameterProfile.effectiveParamsB * bpp;
-        const preferSparseInferenceParams =
-            parameterProfile.isMoE &&
-            (parameterProfile.assumptionSource === 'moe_active_metadata' ||
-                parameterProfile.assumptionSource === 'moe_derived_expert_ratio');
-        const useObservedArtifactSize =
-            !preferSparseInferenceParams &&
-            Number.isFinite(observedWeightGB) &&
-            observedWeightGB > 0;
+        // Weight memory must account for ALL resident parameters. For MoE under
+        // Ollama / Metal / vLLM every expert is resident, so size the weights by
+        // the TOTAL parameter count (not the active count). Active params drive
+        // speed and KV-cache only. Sizing weights by active params used to make a
+        // 236B MoE look like ~14GB and falsely "fit" small hardware.
+        const weightParamsB =
+            parameterProfile.isMoE && Number.isFinite(parameterProfile.totalParamsB) && parameterProfile.totalParamsB > 0
+                ? parameterProfile.totalParamsB
+                : parameterProfile.effectiveParamsB;
+        const modeledWeightGB = weightParamsB * bpp;
+        // A real observed artifact size always wins for weight memory — never let
+        // an MoE "sparse inference" assumption discard a measured on-disk size.
+        const useObservedArtifactSize = Number.isFinite(observedWeightGB) && observedWeightGB > 0;
         const modelMemGB = useObservedArtifactSize ? observedWeightGB : modeledWeightGB;
         const effectiveCtx = Number.isFinite(Number(ctx)) && Number(ctx) > 0 ? Number(ctx) : 4096;
 
@@ -1729,9 +1761,10 @@ class DeterministicModelSelector {
 
         // Runtime overhead (Metal/CUDA context, buffers)
         const runtimeOverhead = useObservedArtifactSize ? 0.35 : 0.5;
+        const usedMoeTotal = parameterProfile.isMoE && weightParamsB === parameterProfile.totalParamsB;
         const memorySource = useObservedArtifactSize
             ? 'observed_artifact_size'
-            : (preferSparseInferenceParams ? 'moe_sparse_inference_params' : 'estimated_from_params');
+            : (usedMoeTotal ? 'moe_total_params' : 'estimated_from_params');
 
         return {
             parameterProfile,
