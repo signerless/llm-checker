@@ -2342,6 +2342,9 @@ class DeterministicModelSelector {
             estimatedRAM: candidate.requiredGB,
             reasoning: candidate.rationale,
             runtime: candidate.runtime || candidate.speed?.runtime || 'ollama',
+            installCommand: candidate.meta.installCommand || provenance.install_command || '',
+            downloadUrl: candidate.meta.downloadUrl || provenance.download_url || '',
+            artifactFormat: candidate.meta.artifact?.format || '',
             memoryAssumptionSource: candidate.memory?.assumptionSource || 'dense_params',
             speedAssumptions: candidate.speed?.moe ? {
                 applied: Boolean(candidate.speed.moe.applied),
@@ -2523,19 +2526,24 @@ class DeterministicModelSelector {
         Object.entries(recommendations).forEach(([category, data]) => {
             const bestModel = data.bestModels[0];
             if (bestModel) {
+                const command = bestModel.installCommand ||
+                    bestModel.provenance?.install_command ||
+                    `ollama pull ${bestModel.model_identifier}`;
                 summary.by_category[category] = {
                     name: bestModel.model_name || bestModel.name,
                     identifier: bestModel.model_identifier,
                     score: Math.round(bestModel.categoryScore || bestModel.score),
-                    command: `ollama pull ${bestModel.model_identifier}`,
+                    command,
                     size: this.formatModelSize(bestModel),
                     quantization: bestModel.quantization || bestModel.quant || 'Q4_K_M',
+                    runtime: bestModel.runtime || bestModel.provenance?.runtime || 'ollama',
                     pulls: bestModel.pulls || 0,
                     source: bestModel.source || bestModel.provenance?.source || 'unknown',
                     registry: bestModel.registry || bestModel.provenance?.registry || 'unknown',
                     version: bestModel.version || bestModel.provenance?.version || 'unknown',
                     license: bestModel.license || bestModel.provenance?.license || 'unknown',
                     digest: bestModel.digest || bestModel.provenance?.digest || 'unknown',
+                    download_url: bestModel.downloadUrl || bestModel.provenance?.download_url || '',
                     provenance: bestModel.provenance || {
                         source: bestModel.source || 'unknown',
                         registry: bestModel.registry || 'unknown',
@@ -2545,7 +2553,7 @@ class DeterministicModelSelector {
                     }
                 };
 
-                summary.quick_commands.push(`ollama pull ${bestModel.model_identifier}`);
+                summary.quick_commands.push(command);
 
                 const isGeneralCategory = ['general', 'coding', 'talking', 'reading'].includes(category);
                 const score = bestModel.categoryScore || bestModel.score || 0;
@@ -2559,18 +2567,23 @@ class DeterministicModelSelector {
         });
 
         if (bestOverallModel) {
+            const command = bestOverallModel.installCommand ||
+                bestOverallModel.provenance?.install_command ||
+                `ollama pull ${bestOverallModel.model_identifier}`;
             summary.best_overall = {
                 name: bestOverallModel.model_name || bestOverallModel.name,
                 identifier: bestOverallModel.model_identifier,
                 category: bestOverallCategory,
                 score: Math.round(bestOverallScore),
-                command: `ollama pull ${bestOverallModel.model_identifier}`,
+                command,
                 quantization: bestOverallModel.quantization || bestOverallModel.quant || 'Q4_K_M',
+                runtime: bestOverallModel.runtime || bestOverallModel.provenance?.runtime || 'ollama',
                 source: bestOverallModel.source || bestOverallModel.provenance?.source || 'unknown',
                 registry: bestOverallModel.registry || bestOverallModel.provenance?.registry || 'unknown',
                 version: bestOverallModel.version || bestOverallModel.provenance?.version || 'unknown',
                 license: bestOverallModel.license || bestOverallModel.provenance?.license || 'unknown',
                 digest: bestOverallModel.digest || bestOverallModel.provenance?.digest || 'unknown',
+                download_url: bestOverallModel.downloadUrl || bestOverallModel.provenance?.download_url || '',
                 provenance: bestOverallModel.provenance || {
                     source: bestOverallModel.source || 'unknown',
                     registry: bestOverallModel.registry || 'unknown',

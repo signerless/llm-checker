@@ -641,30 +641,36 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 ## Model Catalog
 
-LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install.
+LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog plus a multi-source registry of exact downloadable/installable model artifacts. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install.
 
 The packaged snapshot currently includes:
 
 - 229 Ollama models
 - 7176 variants
+- 3259 multi-source registry repositories
+- 33729 exact model artifacts from Hugging Face, Ollama, and GPT4All
+- Hugging Face top 3000 repositories by downloads, fetched with API pagination
 - pull counts
 - tag counts
 - last-updated metadata
-- variant params, quantization, size, context, and input type fields when available
+- variant params, quantization, size, context, runtime, install commands, download URLs, license/gated flags, tasks, and modalities when available
 
 Refresh it any time:
 
 ```bash
 llm-checker sync
+llm-checker registry-sync --sources ollama,huggingface,gpt4all
+llm-checker registry-search qwen --runtime auto --max-size 8
+llm-checker registry-recommend --category coding --runtime auto --max-size 8
 ```
 
-For release maintainers, the packaged seed can be regenerated from the synced local DB:
+For release maintainers, the packaged seed can be regenerated from the synced local DB and registry APIs:
 
 ```bash
 npm run sync:seed
 ```
 
-`recommend`, `list-models`, `ai-run`, and `ai-check` prefer the synced SQLite catalog. If the SQLite catalog is unavailable, LLM Checker falls back to the scraped cache and then to the curated catalog.
+`recommend`, `list-models`, `ai-run`, and `ai-check` prefer the synced SQLite catalog. `registry-search` queries exact artifacts across sources, and `registry-recommend` ranks exact artifacts from the registry with the deterministic hardware-aware selector. If the SQLite catalog is unavailable, LLM Checker falls back to the scraped cache and then to the curated catalog.
 
 The curated fallback catalog includes 35+ models from the most popular Ollama families:
 
@@ -836,7 +842,7 @@ LLM Checker uses a deterministic pipeline so the same inputs produce the same ra
 flowchart LR
   subgraph Inputs
     HW["Hardware detector<br/>CPU/GPU/RAM/backend"]
-    REG["Synced SQLite Ollama catalog<br/>(packaged seed + live sync)"]
+    REG["Synced SQLite model catalog<br/>(Ollama seed + multi-source registry)"]
     LOCAL["Installed local models"]
     FLAGS["CLI options<br/>use-case/runtime/limits/policy"]
   end
@@ -952,8 +958,9 @@ src/
     detector.js                # Hardware detection
     unified-detector.js        # Cross-platform detection
   data/
-    model-database.js          # SQLite storage and packaged seed loading
-    seed/models.db             # npm-packaged Ollama catalog snapshot
+    model-database.js          # SQLite storage, registry tables, and packaged seed loading
+    registry-ingestors.js      # Ollama/Hugging Face/GPT4All artifact normalization
+    seed/models.db             # npm-packaged Ollama + multi-source registry snapshot
     sync-manager.js            # Database sync from Ollama registry
 bin/
   enhanced_cli.js              # CLI entry point

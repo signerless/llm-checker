@@ -24,6 +24,14 @@ const MOE_RUNTIME_PROFILES = Object.freeze({
         maxEffectiveGain: 2.65,
         notes: ['optimized scheduler', 'better expert batching', 'lower offload pressure']
     }),
+    transformers: Object.freeze({
+        runtime: 'transformers',
+        routingOverhead: 0.15,
+        communicationOverhead: 0.10,
+        offloadOverhead: 0.06,
+        maxEffectiveGain: 2.45,
+        notes: ['general Hugging Face path', 'broad architecture support', 'higher Python overhead than vLLM']
+    }),
     mlx: Object.freeze({
         runtime: 'mlx',
         routingOverhead: 0.16,
@@ -45,6 +53,9 @@ const MOE_RUNTIME_PROFILES = Object.freeze({
 const RUNTIME_ALIASES = Object.freeze({
     ollama: 'ollama',
     vllm: 'vllm',
+    transformers: 'transformers',
+    'huggingface-transformers': 'transformers',
+    hf: 'transformers',
     mlx: 'mlx',
     'mlx-lm': 'mlx',
     mlx_lm: 'mlx',

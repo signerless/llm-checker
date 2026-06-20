@@ -61,6 +61,9 @@ const COMMAND_HEADER_LABELS = {
     'smart-recommend': 'Smart Recommend (Experimental)',
     search: 'Model Search',
     sync: 'Database Sync',
+    'registry-sync': 'Model Registry Sync',
+    'registry-search': 'Model Registry Search',
+    'registry-recommend': 'Registry Recommendations',
     'mcp-setup': 'Claude MCP Setup',
     check: 'Compatibility Check',
     installed: 'Installed Models',
@@ -399,6 +402,41 @@ function getRealSizeFromOllamaCache(model) {
         console.warn('Error reading Ollama cache:', error.message);
         return null;
     }
+}
+
+function parsePositiveNumberOption(value, fallback = null) {
+    if (value === undefined || value === null || value === '') return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function truncateMiddle(value, maxLength = 48) {
+    const text = String(value || '');
+    if (text.length <= maxLength) return text;
+    if (maxLength <= 4) return text.slice(0, maxLength);
+    const head = Math.ceil((maxLength - 3) / 2);
+    const tail = Math.floor((maxLength - 3) / 2);
+    return `${text.slice(0, head)}...${text.slice(text.length - tail)}`;
+}
+
+function formatRegistryNumber(value, suffix = '') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '?';
+    const rounded = parsed >= 100 ? Math.round(parsed) : Math.round(parsed * 10) / 10;
+    return `${rounded}${suffix}`;
+}
+
+function formatRegistrySize(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '?';
+    return `${Math.round(parsed * 100) / 100}GB`;
+}
+
+function formatRegistryList(value, maxItems = 3) {
+    const items = Array.isArray(value) ? value : [];
+    if (items.length === 0) return '-';
+    const shown = items.slice(0, maxItems).join(', ');
+    return items.length > maxItems ? `${shown}, +${items.length - maxItems}` : shown;
 }
 
 const program = new Command();
@@ -1285,12 +1323,17 @@ function displayIntelligentRecommendations(intelligentData, hardware = null) {
     const { summary, recommendations } = intelligentData;
     const tier = summary.hardware_tier.replace('_', ' ').toUpperCase();
     const optimizeProfile = (summary.optimize_for || intelligentData.optimizeFor || 'balanced').toUpperCase();
+    const runtimeLabel = (intelligentData.runtime || summary.best_overall?.runtime || 'auto').toUpperCase();
+    const sourceLabel = intelligentData.recommendationSource === 'registry'
+        ? 'Multi-source registry'
+        : 'Ollama catalog';
     const tierColor = tier.includes('HIGH') ? chalk.green : tier.includes('MEDIUM') ? chalk.yellow : chalk.red;
 
     console.log('\n' + chalk.bgRed.white.bold(' INTELLIGENT RECOMMENDATIONS BY CATEGORY '));
     console.log(chalk.red('╭' + '─'.repeat(65)));
     console.log(chalk.red('│') + ` Hardware Tier: ${tierColor.bold(tier)} | Models Analyzed: ${chalk.cyan.bold(intelligentData.totalModelsAnalyzed)}`);
-    console.log(chalk.red('│') + ` Optimization: ${chalk.magenta.bold(optimizeProfile)}`);
+    console.log(chalk.red('│') + ` Optimization: ${chalk.magenta.bold(optimizeProfile)} | Runtime: ${chalk.cyan.bold(runtimeLabel)}`);
+    console.log(chalk.red('│') + ` Source: ${chalk.white.bold(sourceLabel)}`);
     console.log(chalk.red('│'));
 
     // Mostrar mejor modelo general
@@ -1301,6 +1344,7 @@ function displayIntelligentRecommendations(intelligentData, hardware = null) {
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(best.command)}`);
         console.log(chalk.red('│') + `    Score: ${chalk.yellow.bold(best.score)}/100 | Category: ${chalk.magenta(best.category)}`);
         console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(best.quantization || 'Q4_K_M')}`);
+        console.log(chalk.red('│') + `    Runtime: ${chalk.cyan.bold(best.runtime || intelligentData.runtime || 'ollama')} | Source: ${chalk.gray(best.source || 'unknown')}`);
         console.log(chalk.red('│') + `    Fine-tuning: ${chalk.blue.bold(bestFineTuning.shortLabel)}`);
         console.log(chalk.red('│'));
     }
@@ -1326,6 +1370,7 @@ function displayIntelligentRecommendations(intelligentData, hardware = null) {
         console.log(chalk.red('│') + `    ${chalk.green(model.name)} (${model.size})`);
         console.log(chalk.red('│') + `    Score: ${scoreColor.bold(model.score)}/100 | Pulls: ${chalk.gray(model.pulls?.toLocaleString() || 'N/A')}`);
         console.log(chalk.red('│') + `    Quantization: ${chalk.white.bold(model.quantization || 'Q4_K_M')}`);
+        console.log(chalk.red('│') + `    Runtime: ${chalk.cyan(model.runtime || intelligentData.runtime || 'ollama')} | Source: ${chalk.gray(model.source || 'unknown')}`);
         console.log(chalk.red('│') + `    Fine-tuning: ${chalk.blue.bold(fineTuningSupport.shortLabel)}`);
         console.log(chalk.red('│') + `    Command: ${chalk.cyan.bold(model.command)}`);
         console.log(chalk.red('│'));
@@ -3017,7 +3062,7 @@ auditCommand
     .option('-u, --use-case <case>', 'Use case when --command check is selected', 'general')
     .option('-c, --category <category>', 'Category hint when --command recommend is selected')
     .option('--optimize <profile>', 'Optimization profile for recommend mode (balanced|speed|quality|context|coding)', 'balanced')
-    .option('--runtime <runtime>', `Runtime for check mode (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
+    .option('--runtime <runtime>', 'Runtime for check/recommend mode (auto|ollama|vllm|mlx|llama.cpp|transformers)', 'auto')
     .option('--include-cloud', 'Include cloud models in check-mode analysis')
     .option('--max-size <size>', 'Maximum model size for check mode (e.g., "24B" or "12GB")')
     .option('--min-size <size>', 'Minimum model size for check mode (e.g., "3B" or "2GB")')
@@ -3071,13 +3116,14 @@ auditCommand
                 policyCandidates = collectCandidatesFromAnalysis(analysisResult);
             } else {
                 recommendationResult = await checker.generateIntelligentRecommendations(hardware, {
-                    optimizeFor: options.optimize
+                    optimizeFor: options.optimize,
+                    runtime: options.runtime
                 });
                 if (!recommendationResult) {
                     throw new Error('Unable to generate recommendation data for policy audit export.');
                 }
 
-                runtimeBackend = normalizeRuntime(options.runtime || 'ollama');
+                runtimeBackend = recommendationResult.runtime || options.runtime || 'auto';
                 policyCandidates = collectCandidatesFromRecommendationData(recommendationResult);
             }
 
@@ -3844,6 +3890,8 @@ program
     .description('Get intelligent model recommendations for your hardware')
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
+    .option('--runtime <runtime>', 'Runtime target for registry recommendations (auto|ollama|vllm|mlx|llama.cpp|transformers)', 'auto')
+    .option('--no-registry', 'Use the legacy Ollama catalog recommendation path')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
     .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
@@ -3867,6 +3915,11 @@ Hardware simulation:
   $ llm-checker recommend --simulate rtx4090
   $ llm-checker recommend --simulate m4pro24 --category coding
   $ llm-checker recommend --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
+
+Registry/runtime examples:
+  $ llm-checker recommend --runtime auto --category coding
+  $ llm-checker recommend --runtime vllm --category coding
+  $ llm-checker recommend --runtime mlx --category general
 
 Calibrated routing examples:
   $ llm-checker recommend --calibrated --category coding
@@ -3945,7 +3998,9 @@ Calibrated routing examples:
 
             const hardware = await checker.getSystemInfo();
             const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware, {
-                optimizeFor: options.optimize
+                optimizeFor: options.optimize,
+                runtime: options.runtime,
+                registry: options.registry
             });
 
             if (!intelligentRecommendations) {
@@ -4726,6 +4781,307 @@ program
             console.error(chalk.red('Error:'), error.message);
             if (process.env.DEBUG) console.error(error.stack);
             process.exit(1);
+        }
+    });
+
+program
+    .command('registry-sync')
+    .description('Sync the multi-source model registry (Ollama, Hugging Face, GPT4All)')
+    .option('-s, --sources <list>', 'Comma-separated sources: ollama,huggingface,gpt4all', 'ollama,huggingface,gpt4all')
+    .option('-l, --limit <n>', 'Fallback maximum records per source')
+    .option('--hf-limit <n>', 'Maximum Hugging Face repos to ingest', '3000')
+    .option('--ollama-limit <n>', 'Maximum Ollama artifacts to ingest', '10000')
+    .option('--gpt4all-limit <n>', 'Maximum GPT4All entries to ingest', '1000')
+    .option('--query <text>', 'Hugging Face search query')
+    .option('--task <task>', 'Hugging Face task/filter, for example text-generation or text-embeddings-inference')
+    .option('--dry-run', 'Fetch and normalize without writing to the database')
+    .option('-q, --quiet', 'Suppress progress output')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (options) => {
+        const quiet = Boolean(options.quiet || options.json);
+        if (!quiet) showAsciiArt('registry-sync');
+
+        const ModelDatabase = require('../src/data/model-database');
+        const { RegistryIngestor } = require('../src/data/registry-ingestors');
+        const database = new ModelDatabase();
+        const spinner = quiet ? null : ora('Preparing model registry sync...').start();
+
+        try {
+            await database.initialize();
+
+            const ingestor = new RegistryIngestor({
+                database,
+                onProgress: (info) => {
+                    if (spinner && info.message) {
+                        spinner.text = info.message;
+                    }
+                }
+            });
+
+            const summary = await ingestor.ingest({
+                sources: options.sources,
+                limit: parsePositiveNumberOption(options.limit),
+                hfLimit: parsePositiveNumberOption(options.hfLimit, 3000),
+                ollamaLimit: parsePositiveNumberOption(options.ollamaLimit, 10000),
+                gpt4allLimit: parsePositiveNumberOption(options.gpt4allLimit, 1000),
+                query: options.query,
+                task: options.task,
+                dryRun: Boolean(options.dryRun)
+            });
+            const stats = options.dryRun ? null : database.getRegistryStats();
+
+            if (options.json) {
+                console.log(JSON.stringify({ summary, stats }, null, 2));
+                return;
+            }
+
+            if (spinner) {
+                const action = options.dryRun ? 'normalized' : 'synced';
+                spinner.succeed(`Registry ${action}: ${summary.repos} repos, ${summary.artifacts} artifacts`);
+            }
+
+            console.log(chalk.green('\n[OK] Registry sync complete'));
+            console.log(chalk.gray(`  Sources touched: ${summary.sources}`));
+            console.log(chalk.gray(`  Collections: ${summary.collections}`));
+            console.log(chalk.gray(`  Repositories: ${summary.repos}`));
+            console.log(chalk.gray(`  Artifacts: ${summary.artifacts}`));
+
+            if (stats) {
+                console.log(chalk.blue.bold('\nRegistry totals:'));
+                console.log(chalk.gray(`  Sources: ${stats.sources}`));
+                console.log(chalk.gray(`  Repositories: ${stats.repos}`));
+                console.log(chalk.gray(`  Artifacts: ${stats.artifacts}`));
+
+                if (stats.bySource.length > 0) {
+                    const rows = [['Source', 'Artifacts']];
+                    for (const item of stats.bySource) {
+                        rows.push([item.source_id, String(item.artifact_count)]);
+                    }
+                    console.log('\n' + table(rows));
+                }
+            }
+
+            console.log(chalk.cyan('Try: llm-checker registry-search llama --runtime auto --limit 10'));
+        } catch (error) {
+            if (spinner) spinner.fail('Registry sync failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exitCode = 1;
+        } finally {
+            database.close();
+        }
+    });
+
+program
+    .command('registry-search [query]')
+    .description('Search exact downloadable/installable artifacts in the multi-source model registry')
+    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all')
+    .option('--format <format>', 'Filter by artifact format: gguf, safetensors, mlx, ollama')
+    .option('--runtime <runtime>', 'Filter by runtime support: auto, ollama, llama.cpp, transformers, vllm, mlx')
+    .option('--quant <type>', 'Filter by quantization, for example Q4_K_M or Q8_0')
+    .option('--max-size <gb>', 'Maximum artifact size in GB')
+    .option('--min-params <billion>', 'Minimum parameter count in billions')
+    .option('--max-params <billion>', 'Maximum parameter count in billions')
+    .option('--local-only', 'Exclude gated/auth-required artifacts')
+    .option('-l, --limit <n>', 'Maximum number of results', '20')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (query = '', options) => {
+        if (!options.json) showAsciiArt('registry-search');
+
+        const ModelDatabase = require('../src/data/model-database');
+        const database = new ModelDatabase();
+
+        try {
+            await database.initialize();
+
+            const filters = {
+                source: options.source,
+                format: options.format ? String(options.format).toLowerCase() : undefined,
+                runtime: options.runtime,
+                quantization: options.quant,
+                maxSizeGB: parsePositiveNumberOption(options.maxSize),
+                minParamsB: parsePositiveNumberOption(options.minParams),
+                maxParamsB: parsePositiveNumberOption(options.maxParams),
+                localOnly: Boolean(options.localOnly),
+                limit: parsePositiveNumberOption(options.limit, 20)
+            };
+            const results = database.searchModelArtifacts(query, filters);
+            const stats = database.getRegistryStats();
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    query,
+                    filters,
+                    count: results.length,
+                    stats,
+                    results
+                }, null, 2));
+                return;
+            }
+
+            if (results.length === 0) {
+                console.log(chalk.yellow('No registry artifacts found.'));
+                if (stats.artifacts === 0) {
+                    console.log(chalk.gray('Populate the registry first with: llm-checker registry-sync'));
+                }
+                return;
+            }
+
+            console.log(chalk.blue.bold('\nRegistry Results'));
+            console.log(chalk.gray(`Stored registry: ${stats.artifacts} artifacts across ${stats.sources} sources`));
+            console.log('');
+
+            const rows = [[
+                'Source',
+                'Model',
+                'Artifact',
+                'Params',
+                'Size',
+                'Format',
+                'Runtime',
+                'Install'
+            ]];
+
+            for (const item of results) {
+                rows.push([
+                    item.source_id,
+                    truncateMiddle(item.canonical_model_id, 34),
+                    truncateMiddle(item.artifact_name || item.filename, 34),
+                    formatRegistryNumber(item.parameter_count_b, 'B'),
+                    formatRegistrySize(item.size_gb),
+                    item.quantization ? `${item.format}/${item.quantization}` : item.format,
+                    formatRegistryList(item.runtime_support, 2),
+                    truncateMiddle(item.install_command || item.download_url, 46)
+                ]);
+            }
+
+            console.log(table(rows));
+
+            const links = results
+                .filter((item) => item.download_url)
+                .slice(0, 5);
+            if (links.length > 0) {
+                console.log(chalk.blue.bold('Exact download links:'));
+                links.forEach((item, index) => {
+                    console.log(chalk.gray(`  ${index + 1}. ${item.canonical_model_id} -> ${item.download_url}`));
+                });
+            }
+        } catch (error) {
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exitCode = 1;
+        } finally {
+            database.close();
+        }
+    });
+
+program
+    .command('registry-recommend [query]')
+    .description('Recommend the best exact model artifacts from the multi-source registry for this hardware')
+    .option('-c, --category <category>', 'Task category (general, coding, reasoning, embeddings, multimodal)', 'general')
+    .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
+    .option('--runtime <runtime>', 'Runtime target: auto, ollama, llama.cpp, vllm, mlx, transformers', 'auto')
+    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all')
+    .option('--format <format>', 'Filter by artifact format: gguf, safetensors, mlx, ollama')
+    .option('--quant <type>', 'Filter by quantization, for example Q4_K_M or Q8_0')
+    .option('--max-size <gb>', 'Maximum artifact size in GB')
+    .option('--min-params <billion>', 'Minimum parameter count in billions')
+    .option('--max-params <billion>', 'Maximum parameter count in billions')
+    .option('--target-context <tokens>', 'Target context window for scoring')
+    .option('--include-gated', 'Include gated/auth-required artifacts')
+    .option('--pool-limit <n>', 'Maximum registry artifacts to score before ranking', '20000')
+    .option('-l, --limit <n>', 'Maximum number of recommendations', '10')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (query = '', options) => {
+        if (!options.json) showAsciiArt('registry-recommend');
+
+        const UnifiedDetector = require('../src/hardware/unified-detector');
+        const { RegistryRecommender } = require('../src/data/registry-recommender');
+        const recommender = new RegistryRecommender();
+        const spinner = options.json ? null : ora('Scoring registry artifacts...').start();
+
+        try {
+            await recommender.initialize();
+
+            const detector = new UnifiedDetector();
+            const hardware = await detector.detect();
+            const category = normalizeTaskName(options.category || 'general');
+            const result = await recommender.recommend({
+                query,
+                category,
+                optimizeFor: options.optimize,
+                runtime: options.runtime,
+                source: options.source,
+                format: options.format ? String(options.format).toLowerCase() : undefined,
+                quantization: options.quant,
+                maxSizeGB: parsePositiveNumberOption(options.maxSize),
+                minParamsB: parsePositiveNumberOption(options.minParams),
+                maxParamsB: parsePositiveNumberOption(options.maxParams),
+                targetContext: parsePositiveNumberOption(options.targetContext),
+                localOnly: !options.includeGated,
+                poolLimit: parsePositiveNumberOption(options.poolLimit, 20000),
+                limit: parsePositiveNumberOption(options.limit, 10),
+                hardware
+            });
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    query,
+                    hardware: hardware.summary || hardware,
+                    ...result
+                }, null, 2));
+                return;
+            }
+
+            if (spinner) {
+                spinner.succeed(
+                    `Scored ${result.total_evaluated} candidates from ${result.total_artifacts} registry artifacts`
+                );
+            }
+
+            if (result.recommendations.length === 0) {
+                console.log(chalk.yellow('No registry recommendations found for those filters.'));
+                if (result.registry.artifacts === 0) {
+                    console.log(chalk.gray('Populate the registry first with: llm-checker registry-sync'));
+                }
+                return;
+            }
+
+            console.log(chalk.blue.bold('\nRegistry Recommendations'));
+            console.log(chalk.gray(`Registry: ${result.registry.repos} repos, ${result.registry.artifacts} artifacts`));
+            console.log(chalk.gray(`Runtime: ${result.runtime} | Category: ${result.category} | Optimize: ${result.optimizeFor}`));
+            console.log('');
+
+            const rows = [['#', 'Score', 'Source', 'Model', 'Artifact', 'Params', 'Size', 'Install']];
+            result.recommendations.forEach((item, index) => {
+                rows.push([
+                    String(index + 1),
+                    String(item.score),
+                    item.source,
+                    truncateMiddle(item.model, 30),
+                    truncateMiddle(item.artifact, 32),
+                    formatRegistryNumber(item.params_b, 'B'),
+                    formatRegistrySize(item.size_gb),
+                    truncateMiddle(item.install_command || item.download_url, 44)
+                ]);
+            });
+
+            console.log(table(rows));
+
+            console.log(chalk.blue.bold('Top pick:'));
+            const best = result.recommendations[0];
+            console.log(chalk.white.bold(`  ${best.model}`));
+            console.log(chalk.gray(`  Artifact: ${best.artifact}`));
+            console.log(chalk.gray(`  Why: ${best.rationale}`));
+            if (best.install_command) console.log(chalk.cyan(`  ${best.install_command}`));
+            if (best.download_url) console.log(chalk.gray(`  ${best.download_url}`));
+        } catch (error) {
+            if (spinner) spinner.fail('Registry recommendation failed');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exitCode = 1;
+        } finally {
+            recommender.close();
         }
     });
 
