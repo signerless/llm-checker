@@ -33,6 +33,26 @@ function parseParamsB(...values) {
     return null;
 }
 
+// Active-param naming, e.g. "...-A17B" in "Qwen3-397B-A17B".
+function parseActiveParamsFromName(...values) {
+    for (const value of values) {
+        const m = String(value || '').match(/(?:^|[-_\s/])a(\d+(?:\.\d+)?)\s*b\b/i);
+        if (m) {
+            const v = Number(m[1]);
+            if (Number.isFinite(v) && v > 0) return v;
+        }
+    }
+    return null;
+}
+
+// Detect Mixture-of-Experts naming so we size by total params (memory) and can
+// apply MoE speed assumptions. Covers "8x7B", "397B-A17B", "moe", and Mixtral.
+function isMoEName(...values) {
+    return values.some((value) =>
+        /(\d+\s*x\s*\d+(?:\.\d+)?\s*b\b)|(\d+(?:\.\d+)?\s*b[-_\s]*a\d)|\bmoe\b|mixtral/i.test(String(value || ''))
+    );
+}
+
 function inferFamily(identifier = '') {
     const text = String(identifier || '').toLowerCase();
     const families = [
@@ -101,17 +121,42 @@ function artifactToSelectorModel(row) {
         : (row.artifact_name || row.filename || row.canonical_model_id || row.repo_id);
     const displayName = row.canonical_model_id || row.repo_display_name || identifier;
     const quant = normalizeQuantization(row);
-    const paramsB = parseParamsB(
-        row.active_parameter_count_b,
-        row.parameter_count_b,
-        row.artifact_name,
-        row.filename,
-        row.canonical_model_id,
-        row.repo_id
-    );
+
+    // MEMORY sizing must use the TOTAL parameter count (for MoE, ALL experts are
+    // resident), never the active count. We re-derive the total from the model
+    // name (MoE-aware) and take the max with the stored column, so a stale or
+    // under-reported DB value (an MoE saved as one expert, or an active-param
+    // count) can never make a huge model look tiny and "fit" small hardware.
+    const nameStrings = [row.artifact_name, row.filename, row.canonical_model_id, row.repo_id];
+    const storedTotalB = parseParamsB(row.parameter_count_b);
+    const nameTotalB = parseParamsB(...nameStrings);
+    const totalParamsB = Math.max(storedTotalB || 0, nameTotalB || 0) || null;
+    const activeParamsB = parseParamsB(row.active_parameter_count_b) || parseActiveParamsFromName(...nameStrings);
+    const isMoE = isMoEName(...nameStrings)
+        || (Number.isFinite(activeParamsB) && Number.isFinite(totalParamsB) && activeParamsB < totalParamsB);
+
+    // The sizing param is the total; fall back to the active count only if no
+    // total can be determined at all.
+    const paramsB = Number.isFinite(totalParamsB) && totalParamsB > 0
+        ? totalParamsB
+        : parseParamsB(row.active_parameter_count_b);
 
     if (!identifier || !Number.isFinite(paramsB) || paramsB <= 0) {
         return null;
+    }
+
+    // Flag MoE and carry the TOTAL parameter count so memory is sized by the
+    // full weight set (all experts are resident under Ollama / Metal / vLLM).
+    // We deliberately do NOT set activeParamsB here: that would switch the memory
+    // model to "sparse inference" (sizing by active params), which would let a
+    // 397B-A17B model falsely "fit" ~11GB. Active params drive speed only, and
+    // sparse offload is not how the local runtimes this tool targets behave, so
+    // we stay conservative on memory.
+    const moeFields = {};
+    if (isMoE && Number.isFinite(totalParamsB) && totalParamsB > 0) {
+        moeFields.isMoE = true;
+        moeFields.totalParamsB = totalParamsB;
+        moeFields.total_params_b = totalParamsB;
     }
 
     const runtimeSupport = toArray(row.runtime_support);
@@ -138,6 +183,7 @@ function artifactToSelectorModel(row) {
         model_identifier: identifier,
         family: inferFamily(`${displayName} ${identifier}`),
         paramsB,
+        ...moeFields,
         quant,
         availableQuantizations: [quant],
         sizeGB: Number.isFinite(sizeGB) && sizeGB > 0 ? sizeGB : undefined,
