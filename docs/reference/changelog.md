@@ -1,12 +1,34 @@
 Changelog
 =========
 
-Unreleased — Issue #88 / #86 Fixes & MCP Hardening
---------------------------------------------------
+3.7.0 — Multi-source Model Registry (2026-06-20)
+------------------------------------------------
 
-Four focused, independently-tested fixes (one PR each). Every item ships with an
-integration test registered in `tests/run-all-tests.js`; the full suite is green
-at 39/39 (35 prior + 4 new).
+Adds a packaged multi-source model registry (Hugging Face + Ollama + GPT4All)
+and wires it into the recommendation flow. Full suite green at 44/44.
+
+- Registry: packaged snapshot of 3,259 repos / 33,729 artifacts seeded from
+  Hugging Face, Ollama, and GPT4All, with exact install/download commands
+  (`hf download ...`, `ollama pull ...`). New `registry-sync`/`registry-search`
+  /`registry-recommend` CLI surface.
+- `recommend` (and the `check` recommendation card) now source candidates from
+  the registry via the canonical deterministic scoring core, with `--runtime auto`
+  plus Ollama/vLLM/MLX/llama.cpp/Transformers targeting; falls back to the Ollama
+  catalog when the registry is empty or unavailable.
+- Packaged `src/data/seed/models.db` grows to ~43 MB unpacked (tarball ~6.2 MB).
+- Review fixes (PR #99): MoE `NxMB` naming (e.g. Mixtral 8x7B) is sized as the
+  full experts × per-expert total instead of a single expert; context tokens like
+  `128k` are no longer misread as ~0B parameters and dropped; the runtime LIKE
+  filter escapes `_`/`%` so it can't over-match; GPT4All entries with trailing-slash
+  URLs keep their name. Integration test: `tests/model-registry-param-parsing.test.js`.
+
+3.6.1 — Issue #88 / #86 Fixes & MCP Hardening (2026-06-19)
+---------------------------------------------------------
+
+First npm release since 3.5.15 — it also carries the previously-unpublished
+3.6.0 batch below. Four focused, independently-tested fixes (one PR each). Every
+item ships with an integration test registered in `tests/run-all-tests.js`; the
+full suite is green at 39/39 (35 prior + 4 new).
 
 - Hardware — GPU-VRAM detection for high-end / multi-GPU machines (PR #95, part of #88):
   - Added accurate workstation/datacenter VRAM entries (RTX PRO 6000, RTX 6000 Ada,
