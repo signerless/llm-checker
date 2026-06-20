@@ -323,9 +323,13 @@ function normalizeHuggingFaceModel(model) {
         }
     };
 
-    const repoParamsB =
+    const nameTotalB = parseParamsB(repoId, tags.join(' '));
+    const metadataParamsB =
         sumSafetensorsParams(model.safetensors) ||
-        parseParamsB(model.config?.num_parameters, model.cardData?.params, repoId, tags.join(' '));
+        parseParamsB(model.config?.num_parameters, model.cardData?.params);
+    // Prefer the larger of metadata vs the MoE-aware name total, so an MoE whose
+    // safetensors/config under-reports (or is absent) still stores the full total.
+    const repoParamsB = Math.max(metadataParamsB || 0, nameTotalB || 0) || null;
     const activeParamsB = parseActiveParamsB(repoId, tags.join(' '));
     const contextLength = Number(
         model.config?.max_position_embeddings ||
@@ -357,7 +361,7 @@ function normalizeHuggingFaceModel(model) {
             format,
             quantization,
             precision,
-            parameter_count_b: parseParamsB(filename) || repoParamsB,
+            parameter_count_b: Math.max(parseParamsB(filename) || 0, repoParamsB || 0) || null,
             active_parameter_count_b: activeParamsB,
             size_bytes: sizeBytes,
             size_gb: bytesToGB(sizeBytes),
@@ -513,7 +517,7 @@ function normalizeOllamaRows(model, variant) {
             format: 'ollama',
             quantization: variant.quant || inferQuantization(tag),
             precision: inferPrecision(variant.quant, tag),
-            parameter_count_b: Number(variant.params_b) || parseParamsB(tag),
+            parameter_count_b: Math.max(Number(variant.params_b) || 0, parseParamsB(tag) || 0) || null,
             active_parameter_count_b: null,
             size_bytes: null,
             size_gb: Number(variant.size_gb) || null,

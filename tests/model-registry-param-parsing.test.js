@@ -47,6 +47,54 @@ function testRecommenderMoEParsing() {
     });
     assert.ok(model, 'MoE artifact should map to a selector model');
     assert.strictEqual(model.paramsB, 56, 'recommender should size 8x7B as 56B total');
+    assert.strictEqual(model.isMoE, true, '8x7B should be flagged MoE');
+    assert.strictEqual(model.totalParamsB, 56, 'totalParamsB carries the full MoE total');
+}
+
+function testRecommenderActiveParamTotalSizing() {
+    // "397B-A17B" = 397B total / 17B active. Memory must be sized by the TOTAL.
+    const model = artifactToSelectorModel({
+        source_id: 'huggingface',
+        repo_id: 'Qwen/Qwen3-397B-A17B',
+        canonical_model_id: 'Qwen/Qwen3-397B-A17B',
+        artifact_name: 'Qwen3-397B-A17B'
+    });
+    assert.ok(model, 'active-param MoE should map');
+    assert.strictEqual(model.paramsB, 397, 'sizing param must be the 397B total, not the 17B active');
+    assert.strictEqual(model.totalParamsB, 397, 'totalParamsB = 397');
+    assert.strictEqual(model.isMoE, true, 'flagged MoE');
+    // activeParamsB must NOT be set on the model: setting it would switch the
+    // selector to sparse-inference memory and let a 397B model falsely "fit".
+    assert.strictEqual(model.activeParamsB, undefined, 'activeParamsB must not drive memory sizing');
+
+    // The critical guard: even when a STALE DB stored the active count (17) in
+    // parameter_count_b, the name re-derivation must still size it as 397B.
+    const stale = artifactToSelectorModel({
+        source_id: 'huggingface',
+        repo_id: 'Qwen/Qwen3-397B-A17B',
+        canonical_model_id: 'Qwen/Qwen3-397B-A17B',
+        artifact_name: 'Qwen3-397B-A17B',
+        parameter_count_b: 17
+    });
+    assert.strictEqual(stale.paramsB, 397, 'stale active-param DB value must not shrink the model');
+}
+
+function testHugeMoEDoesNotFitSmallHardware() {
+    // End-to-end memory guard: a 397B MoE must NOT be reported as fitting a 24GB Mac.
+    const DeterministicModelSelector = require('../src/models/deterministic-selector');
+    const selector = new DeterministicModelSelector();
+    const model = artifactToSelectorModel({
+        source_id: 'huggingface',
+        repo_id: 'Qwen/Qwen3-397B-A17B',
+        canonical_model_id: 'Qwen/Qwen3-397B-A17B',
+        artifact_name: 'Qwen3-397B-A17B',
+        parameter_count_b: 17,
+        runtime_support: ['vllm']
+    });
+    const breakdown = selector.estimateMemoryBreakdown(model, 'Q4_K_M', 8192);
+    // 397B at Q4 is hundreds of GB; it must be far above a 24GB budget.
+    assert.ok(breakdown.requiredGB > 100,
+        `397B MoE should require >100GB, got ${breakdown.requiredGB.toFixed(1)}GB (memory must use total params)`);
 }
 
 function testGpt4AllTrailingSlashName() {
@@ -100,6 +148,8 @@ async function run() {
     testMoEParamParsing();
     testContextTokenNotMisreadAsParams();
     testRecommenderMoEParsing();
+    testRecommenderActiveParamTotalSizing();
+    testHugeMoEDoesNotFitSmallHardware();
     testGpt4AllTrailingSlashName();
     await testRuntimeLikeEscape();
     console.log('model-registry-param-parsing.test.js: OK');

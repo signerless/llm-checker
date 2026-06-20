@@ -7,10 +7,19 @@ Changelog
 Adds a packaged multi-source model registry (Hugging Face + Ollama + GPT4All)
 and wires it into the recommendation flow. Full suite green at 44/44.
 
-- Registry: packaged snapshot of 3,259 repos / 33,729 artifacts seeded from
+- Registry: packaged snapshot of ~3,259 repos / ~33,736 artifacts seeded from
   Hugging Face, Ollama, and GPT4All, with exact install/download commands
   (`hf download ...`, `ollama pull ...`). New `registry-sync`/`registry-search`
   /`registry-recommend` CLI surface.
+- MoE memory sizing is now correct: the recommender sizes Mixture-of-Experts
+  models (e.g. `Mixtral-8x7B`, `Qwen3-397B-A17B`) by their TOTAL parameter count
+  (all experts are resident under Ollama / Metal / vLLM), re-deriving the total
+  from the model name so a stale/under-reported DB value can never make a huge
+  model falsely "fit" small hardware. Active params drive speed only — they no
+  longer switch memory onto a sparse-offload assumption. The packaged seed DB was
+  regenerated so stored MoE totals are correct (Mixtral-8x7B 7B→56B,
+  Qwen3.5-397B-A17B 17B→397B total / 17B active). Test:
+  `tests/model-registry-param-parsing.test.js`.
 - `recommend` (and the `check` recommendation card) now source candidates from
   the registry via the canonical deterministic scoring core, with `--runtime auto`
   plus Ollama/vLLM/MLX/llama.cpp/Transformers targeting; falls back to the Ollama
