@@ -15,6 +15,7 @@ const TESTS = [
     { name: 'ROCm VRAM parsing regression', file: 'rocm-vram-parsing.test.js', category: 'Hardware' },
     { name: 'High-end / multi-GPU VRAM detection', file: 'hardware-vram-highend.test.js', category: 'Hardware' },
     { name: 'CPU detector Windows fallback', file: 'cpu-detector-windows-fallback.test.js', category: 'Hardware' },
+    { name: 'Virtual-monitor GPU detection', file: 'virtual-monitor-gpu-detection.test.js', category: 'Hardware' },
     { name: 'Termux platform support', file: 'termux-platform-support.test.js', category: 'Hardware' },
     { name: 'Token speed estimation', file: 'token-speed-estimation.test.js', category: 'Performance' },
     { name: 'Deterministic model pool', file: 'deterministic-model-pool-check.js', category: 'Recommendations' },

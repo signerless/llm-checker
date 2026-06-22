@@ -1,6 +1,19 @@
 Changelog
 =========
 
+3.7.6 — Virtual-monitor GPU detection fix (2026-06-22)
+-----------------------------------------------------
+
+- Fixed #106: virtual display adapters created by streaming hosts (Apollo/Sunshine
+  via IddSampleDriver), VR headsets (Meta Quest, Oculus), and remote-desktop tools
+  (Parsec, spacedesk, Splashtop) were being counted as dedicated GPUs. That faked
+  multi-GPU and buried the real card — a Radeon RX 7900 XTX was ignored, leaving
+  CPU-only results. These adapters are now filtered from GPU detection (both the
+  unified detector's Windows fallback/inventory and the legacy detector), while
+  real GPUs — including an Intel "Apollo Lake" iGPU and rare vGPUs with a real-GPU
+  signature — are kept.
+- New `tests/virtual-monitor-gpu-detection.test.js`. Full suite 49/49.
+
 3.7.5 — Registry in search / list-models (2026-06-20)
 -----------------------------------------------------
 
