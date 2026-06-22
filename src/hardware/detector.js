@@ -202,7 +202,14 @@ class HardwareDetector {
             ) {
                 return false;
             }
-            
+
+            // Skip virtual display adapters (streaming hosts, VR headsets, remote
+            // desktop) that are not physical compute GPUs and otherwise bury the
+            // real card (issue #106: Apollo + Quest 2 virtual monitors).
+            if (this.isVirtualDisplayAdapter(model)) {
+                return false;
+            }
+
             return true;
         });
 
@@ -476,6 +483,21 @@ class HardwareDetector {
         } else {
             return process.arch || 'Unknown';
         }
+    }
+
+    // Virtual / non-physical display adapters (streaming hosts via IddSampleDriver,
+    // VR headsets, remote-desktop tools) that must not be treated as compute GPUs.
+    isVirtualDisplayAdapter(model) {
+        const lower = String(model || '').toLowerCase();
+        if (!lower) return false;
+        const markers = [
+            'iddsampledriver', 'indirect display', 'idd device',
+            'meta quest', 'oculus', 'parsec', 'spacedesk', 'splashtop',
+            'rainway', 'dummy display', 'usb display adapter'
+        ];
+        if (markers.some((marker) => lower.includes(marker))) return true;
+        const realGpuSignature = /(geforce|radeon\s*(\(tm\))?\s*rx|\brx\s?\d|rtx|gtx|quadro|tesla|instinct|\barc\b|a\d{3,}|h100|a100|l40|mi\d{2,})/i;
+        return lower.includes('virtual') && !realGpuSignature.test(lower);
     }
 
     isIntegratedGPU(model) {

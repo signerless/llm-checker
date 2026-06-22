@@ -496,15 +496,40 @@ class UnifiedDetector {
             .filter(Boolean);
     }
 
+    // True for adapters that are NOT physical compute GPUs and must be excluded
+    // from the GPU inventory: remote/basic display drivers, and virtual display
+    // adapters created by streaming hosts (Apollo/Sunshine via IddSampleDriver),
+    // VR headsets (Meta Quest, Oculus), and remote-desktop tools (Parsec, spacedesk).
+    // These otherwise get mis-counted as dedicated GPUs and bury the real card.
     isRemoteDisplayModel(model) {
         const lower = String(model || '').toLowerCase();
         if (!lower) return false;
 
-        return (
-            lower.includes('microsoft remote display adapter') ||
-            lower.includes('remote display adapter') ||
-            lower.includes('basic render driver')
-        );
+        // Explicit non-GPU display-adapter markers (some don't contain "virtual").
+        const markers = [
+            'remote display adapter',
+            'basic render driver',
+            'iddsampledriver',
+            'indirect display',
+            'idd device',
+            'meta quest',
+            'oculus',
+            'parsec',
+            'spacedesk',
+            'splashtop',
+            'rainway',
+            'dummy display',
+            'usb display adapter'
+        ];
+        if (markers.some((marker) => lower.includes(marker))) return true;
+
+        // Generic "virtual" display/monitor adapters (e.g. "Apollo Virtual Monitor",
+        // "Meta Quest Virtual Monitor"). A real discrete GPU never has "virtual" in
+        // its name; guard against the rare vGPU named with a real-GPU signature.
+        const realGpuSignature = /(geforce|radeon\s*(\(tm\))?\s*rx|\brx\s?\d|rtx|gtx|quadro|tesla|instinct|\barc\b|a\d{3,}|h100|a100|l40|mi\d{2,})/i;
+        if (lower.includes('virtual') && !realGpuSignature.test(lower)) return true;
+
+        return false;
     }
 
     inferGpuVendor(name) {
