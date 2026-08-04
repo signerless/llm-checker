@@ -15,11 +15,13 @@ import { fileURLToPath } from "url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import { server } from "../bin/mcp-server.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BIN_PATH = path.resolve(__dirname, "..", "bin", "enhanced_cli.js");
+const MCP_SERVER_PATH = path.resolve(__dirname, "..", "bin", "mcp-server.mjs");
 
 function runCli(args, home) {
   return spawnSync(process.execPath, [BIN_PATH, ...args], {
@@ -93,20 +95,62 @@ async function testVerifyModelTool(tempDir) {
     fs.writeFileSync(badPath, buildGguf({ version: 99 }));
     const badResult = await client.callTool({ name: "verify_model", arguments: { path: badPath } });
     const bad = toolResultJson(badResult);
+    assert.notStrictEqual(badResult.isError, true, "a structural rejection is a completed verification result");
     assert.strictEqual(bad.accepted, false, "version-99 GGUF must be rejected");
     assert.strictEqual(bad.verdict, "reject");
     assert.strictEqual(bad.violationName, "VERSION_UNSUPPORTED");
 
-    // Missing path -> structured error payload, not a thrown/protocol error.
+    // Missing path -> structured payload marked as an MCP tool error. The
+    // client still receives machine-readable ModelVet details.
     const missingResult = await client.callTool({
       name: "verify_model",
       arguments: { path: path.join(tempDir, "missing.gguf") },
     });
     const missing = toolResultJson(missingResult);
+    assert.strictEqual(missingResult.isError, true, "verifier infrastructure failures must set MCP isError");
     assert.strictEqual(missing.verdict, "error", "missing file must yield verdict 'error'");
     assert.ok(typeof missing.reason === "string" && missing.reason.length > 0, "error payload must carry a reason");
     assert.ok(typeof missing.code === "string" && missing.code.length > 0, "error payload must carry a code");
   });
+}
+
+async function testStdioHandshakeThroughSymlink(tempDir) {
+  const shimDir = path.join(tempDir, "node_modules", ".bin");
+  const shimPath = path.join(shimDir, "llm-checker-mcp");
+  fs.mkdirSync(shimDir, { recursive: true });
+
+  // npm creates package-bin symlinks on POSIX. Launching Node with that link
+  // makes argv[1] differ from import.meta.url even though both identify the
+  // same file; this is the exact installed-package regression being covered.
+  fs.symlinkSync(MCP_SERVER_PATH, shimPath, "file");
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [shimPath],
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "mcp-symlink-handshake-test", version: "0.0.0" });
+  let timeout;
+
+  try {
+    await Promise.race([
+      client.connect(transport),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("timed out waiting for MCP initialize through the npm-style symlink")),
+          10_000
+        );
+      }),
+    ]);
+
+    // connect() completes the MCP initialize/initialized handshake. Listing
+    // tools proves the child stayed up and is serving protocol messages.
+    const { tools } = await client.listTools();
+    assert.ok(tools.some((tool) => tool.name === "verify_model"), "symlink-launched server must expose verify_model");
+  } finally {
+    clearTimeout(timeout);
+    await client.close().catch(() => {});
+  }
 }
 
 function testMcpSetupClients(home) {
@@ -170,12 +214,40 @@ function testMcpSetupClients(home) {
   assert.strictEqual(generic.apply, null);
   assert.strictEqual(generic.snippet.mcpServers["llm-checker"].command, "llm-checker-mcp");
 
-  // --npx switches the launch command for every client.
-  const npxCursor = parseJsonRun(["mcp-setup", "--client", "cursor", "--npx", "--json"]);
-  assert.deepStrictEqual(npxCursor.snippet.mcpServers["llm-checker"], { command: "npx", args: ["llm-checker-mcp"] });
-  const npxCodex = parseJsonRun(["mcp-setup", "--client", "codex", "--npx", "--json"]);
-  assert.ok(npxCodex.snippet.includes('command = "npx"'), `codex npx snippet: ${npxCodex.snippet}`);
-  assert.ok(npxCodex.snippet.includes('args = ["llm-checker-mcp"]'), `codex npx snippet: ${npxCodex.snippet}`);
+  // --npx must select the npm package explicitly. `llm-checker-mcp` is a bin
+  // exposed by `llm-checker`, not a standalone package name.
+  const npxArgs = ["--yes", "--package", "llm-checker", "llm-checker-mcp"];
+  const npxClaude = parseJsonRun(["mcp-setup", "--client", "claude", "--npx", "--json"]);
+  assert.deepStrictEqual(
+    npxClaude.claudeDesktop.snippet.mcpServers["llm-checker"],
+    { command: "npx", args: npxArgs }
+  );
+  assert.deepStrictEqual(
+    npxClaude.recommended.args,
+    ["mcp", "add", "llm-checker", "--", "npx", ...npxArgs]
+  );
+
+  for (const clientName of ["cursor", "windsurf", "gemini", "kimi", "generic"]) {
+    const setup = parseJsonRun(["mcp-setup", "--client", clientName, "--npx", "--json"]);
+    assert.deepStrictEqual(
+      setup.snippet.mcpServers["llm-checker"],
+      { command: "npx", args: npxArgs },
+      `${clientName} must use the package-qualified npx command`
+    );
+  }
+
+  for (const clientName of ["codex", "grok"]) {
+    const setup = parseJsonRun(["mcp-setup", "--client", clientName, "--npx", "--json"]);
+    assert.ok(setup.snippet.includes('command = "npx"'), `${clientName} npx snippet: ${setup.snippet}`);
+    assert.ok(
+      setup.snippet.includes('args = ["--yes", "--package", "llm-checker", "llm-checker-mcp"]'),
+      `${clientName} npx snippet: ${setup.snippet}`
+    );
+    assert.ok(
+      setup.commandLine.includes('npx --yes --package llm-checker llm-checker-mcp'),
+      `${clientName} npx commandLine: ${setup.commandLine}`
+    );
+  }
 
   // Unknown client -> non-zero exit, no silent fallback.
   const bad = runCli(["mcp-setup", "--client", "nope", "--json"], home);
@@ -277,6 +349,7 @@ async function run() {
   const cliHome = fs.mkdtempSync(path.join(os.tmpdir(), "llm-checker-mcp-home-"));
   try {
     await testVerifyModelTool(tempDir);
+    await testStdioHandshakeThroughSymlink(tempDir);
     testMcpSetupClients(cliHome);
     testMcpSetupApplyMerges();
     console.log("mcp-multiclient tests: OK");

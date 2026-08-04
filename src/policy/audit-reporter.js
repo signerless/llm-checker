@@ -426,7 +426,7 @@ function reportToSarif(report) {
                     driver: {
                         name: 'llm-checker-policy',
                         version: '1.0.0',
-                        informationUri: 'https://github.com/Pavelevich/llm-checker',
+                        informationUri: 'https://github.com/signerless/llm-checker',
                         rules: Array.from(rulesMap.values())
                     }
                 },

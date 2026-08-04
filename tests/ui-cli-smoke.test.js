@@ -96,6 +96,14 @@ function run() {
         stripAnsi(aiRunHelp.stdout).includes('--calibrated [file]'),
         'ai-run help should expose calibrated routing option'
     );
+    assert.ok(
+        stripAnsi(aiRunHelp.stdout).includes('--verify'),
+        'ai-run help should expose strict model verification'
+    );
+    assert.ok(
+        stripAnsi(aiRunHelp.stdout).includes('--allow-unverified'),
+        'ai-run help should expose the explicit no-verdict override'
+    );
 
     const aiCheckModelsSpacedHelp = runWrapperCli([
         'ai-check',

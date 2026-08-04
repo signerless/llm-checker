@@ -482,7 +482,7 @@ function drawTextBanner(lines, options = {}) {
         ) {
             inner = chalk.hex(palette.subtitle)(fittedContent);
         } else if (
-            fittedContent.includes('github.com/Pavelevich/llm-checker') ||
+            fittedContent.includes('github.com/signerless/llm-checker') ||
             fittedContent.includes('npmjs.com/package/llm-checker')
         ) {
             inner = chalk.hex(palette.link)(fittedContent);
