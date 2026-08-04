@@ -5,6 +5,7 @@ const YAML = require('yaml');
 const ALLOWED_POLICY_MODES = ['audit', 'enforce'];
 const ALLOWED_ENFORCEMENT_BEHAVIOR = ['warn', 'error'];
 const ALLOWED_REPORT_FORMATS = ['json', 'csv', 'sarif'];
+const ALLOWED_ON_UNVERIFIABLE = ['warn', 'fail'];
 
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -42,6 +43,10 @@ rules:
 
   compliance:
     approved_licenses: ["mit", "apache-2.0", "llama"]
+
+  structural_validation:
+    enabled: true
+    on_unverifiable: warn # warn | fail
 
 enforcement:
   on_violation: error # warn | error
@@ -144,6 +149,7 @@ reporting:
             this.validateModelsRules(policy.rules.models, addError);
             this.validateRuntimeRules(policy.rules.runtime, addError);
             this.validateComplianceRules(policy.rules.compliance, addError);
+            this.validateStructuralValidationRules(policy.rules.structural_validation, addError);
         }
 
         this.validateEnforcement(policy.enforcement, addError);
@@ -213,6 +219,32 @@ reporting:
             'rules.compliance.approved_licenses',
             addError
         );
+    }
+
+    validateStructuralValidationRules(structuralValidation, addError) {
+        if (structuralValidation === undefined) return;
+
+        if (!isPlainObject(structuralValidation)) {
+            addError('rules.structural_validation', 'Must be an object.');
+            return;
+        }
+
+        if (
+            structuralValidation.enabled !== undefined &&
+            typeof structuralValidation.enabled !== 'boolean'
+        ) {
+            addError('rules.structural_validation.enabled', 'Must be a boolean.');
+        }
+
+        if (
+            structuralValidation.on_unverifiable !== undefined &&
+            !ALLOWED_ON_UNVERIFIABLE.includes(structuralValidation.on_unverifiable)
+        ) {
+            addError(
+                'rules.structural_validation.on_unverifiable',
+                `Must be one of: ${ALLOWED_ON_UNVERIFIABLE.join(', ')}.`
+            );
+        }
     }
 
     validateEnforcement(enforcement, addError) {
