@@ -239,7 +239,7 @@ main() {
     echo "  - Run benchmarks: node scripts/benchmark.js"
     echo "  - View logs: tail -f ~/.llm-checker/logs/llm-checker.log"
     echo ""
-    print_status "Documentation: https://github.com/Pavelevich/llm-checker"
+    print_status "Documentation: https://github.com/signerless/llm-checker"
 }
 
 # Run main function

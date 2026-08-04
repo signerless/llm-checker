@@ -816,11 +816,13 @@ function getClaudeDesktopConfigPath() {
 
 function buildClaudeMcpSetup(useNpx = false, serverName = 'llm-checker') {
     const normalizedServerName = String(serverName || 'llm-checker').trim() || 'llm-checker';
-    const runner = useNpx ? ['npx', 'llm-checker-mcp'] : ['llm-checker-mcp'];
+    const runner = useNpx
+        ? ['npx', '--yes', '--package', 'llm-checker', 'llm-checker-mcp']
+        : ['llm-checker-mcp'];
     const claudeArgs = ['mcp', 'add', normalizedServerName, '--', ...runner];
     const commandLine = ['claude', ...claudeArgs].map(quoteCliArg).join(' ');
     const desktopServerConfig = useNpx
-        ? { command: 'npx', args: ['llm-checker-mcp'] }
+        ? { command: 'npx', args: ['--yes', '--package', 'llm-checker', 'llm-checker-mcp'] }
         : { command: 'llm-checker-mcp', args: [] };
 
     return {
@@ -856,10 +858,12 @@ async function runExternalCommand(command, args) {
 const MCP_SETUP_CLIENTS = ['claude', 'codex', 'cursor', 'windsurf', 'gemini', 'kimi', 'grok', 'generic'];
 
 // The stdio server entry every client launches: the globally installed
-// `llm-checker-mcp` binary, or `npx llm-checker-mcp` with --npx.
+// `llm-checker-mcp` binary, or an explicit `npx --package llm-checker`
+// invocation with --npx. `llm-checker-mcp` is a bin exposed by the
+// `llm-checker` package, not a standalone npm package name.
 function getMcpServerEntry(useNpx = false) {
     return useNpx
-        ? { command: 'npx', args: ['llm-checker-mcp'] }
+        ? { command: 'npx', args: ['--yes', '--package', 'llm-checker', 'llm-checker-mcp'] }
         : { command: 'llm-checker-mcp', args: [] };
 }
 
@@ -3241,7 +3245,7 @@ program
     .description('Show or apply MCP setup for llm-checker (Claude Code, Codex, Cursor, Windsurf, Gemini, Kimi, Grok, or generic)')
     .option('--client <name>', `Target MCP client (${MCP_SETUP_CLIENTS.join(', ')})`, 'claude')
     .option('--name <server-name>', 'MCP server name in the client config', 'llm-checker')
-    .option('--npx', 'Use npx llm-checker-mcp instead of global llm-checker-mcp')
+    .option('--npx', 'Use npx --yes --package llm-checker llm-checker-mcp instead of a global install')
     .option('--apply', 'Apply the setup (run the client CLI or merge its config file)')
     .option('-j, --json', 'Output setup details as JSON')
     .action(async (options) => {
@@ -4989,9 +4993,14 @@ program
     )
     .option('--benchmark', 'Run a short local speed test before launching')
     .option('--reference-only', 'Show model choice and speed reference without launching Ollama')
-    .option('--verify', 'Verify the selected model blob with modelvet before running (REJECT aborts the run)')
+    .option('--verify', 'Verify the selected model blob with modelvet before running (fails closed unless ACCEPT)')
+    .option('--allow-unverified', 'Continue only when --verify cannot produce a verdict; never bypasses REJECT')
     .action(async (options) => {
         showAsciiArt('ai-run');
+        if (options.allowUnverified && !options.verify) {
+            console.error(chalk.red('Error: --allow-unverified requires --verify.'));
+            process.exit(1);
+        }
         // Check if Ollama is installed first
         await checkOllamaAndExit();
         
@@ -5088,13 +5097,11 @@ program
             // local blob BEFORE the model is ever loaded/run (also covers the
             // post-`ollama pull` case, since pull only writes these same
             // manifests/blobs). Semantics:
-            //   REJECT  -> hard stop, refuse to run, exit 1.
+            //   REJECT  -> hard stop, refuse to run, exit 1. No override.
             //   skipped -> manifest/blob missing or verifier error (e.g.
             //              >3 GiB wasm32 ceiling, wasm artifact missing):
-            //              warn and continue. Verification is an opt-in
-            //              best-effort gate; blocking normal runs because the
-            //              verifier itself cannot cover a file would break
-            //              legitimate usage. Only an affirmative REJECT blocks.
+            //              fail closed by default. --allow-unverified is the
+            //              explicit opt-in escape hatch for this state only.
             if (options.verify) {
                 const { verifyOllamaModel } = require('../src/security/ollama-blobs');
                 const verifySpinner = ora(`Verifying ${result.bestModel} blob structure with modelvet...`).start();
@@ -5115,8 +5122,20 @@ program
                     console.log(chalk.gray('  (ACCEPT is structural only — no provenance or poisoned-weights guarantee.)'));
                 } else {
                     verifySpinner.stop();
-                    console.log(chalk.yellow(`Verification skipped: ${verification.reason}`));
-                    console.log(chalk.gray('Continuing without verification (--verify is best-effort).'));
+                    const reason = verification.reason || 'modelvet did not produce a verification verdict';
+                    console.log(chalk.yellow(`Verification unavailable: ${reason}`));
+                    if (options.allowUnverified) {
+                        console.log(chalk.yellow.bold(
+                            'Continuing without verification because --allow-unverified was explicitly set.'
+                        ));
+                    } else {
+                        console.log(chalk.red.bold('Refusing to run without an ACCEPT verdict (fail-closed, exit 2).'));
+                        console.log(chalk.gray(
+                            'If you accept this risk, re-run with --verify --allow-unverified. ' +
+                            'This override never bypasses a REJECT verdict.'
+                        ));
+                        process.exit(2);
+                    }
                 }
             }
 
@@ -6032,7 +6051,7 @@ program
 
 program
     .command('verify <file>')
-    .description('Structural safety validation of a GGUF or safetensors model file (modelvet, verify-before-load)')
+    .description('ModelVet: verify GGUF or safetensors structural safety before loading')
     .option('-j, --json', 'Output as JSON')
     .action(async (file, options) => {
         const spinner = options.json ? null : ora('Verifying model file structure...').start();

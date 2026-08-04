@@ -176,23 +176,29 @@ fetch('${resolvedBaseURL}/api/version', { headers: { 'Content-Type': 'applicatio
     assert(Number.isFinite(probeTPS) && probeTPS > 0, `Expected positive real probe TPS, got ${probeTPS}`);
 
     const aiCheckSelector = new AICheckSelector();
-    const aiResult = await aiCheckSelector.callOllamaEvaluator(probeModel.name, {
-        hardware: { category: 'general' },
-        candidates: [
-            {
-                name: probeModel.name,
-                paramsB: probeModelSizeB,
-                quant: String(probeModel.quantization || 'Q4'),
-                requiredGB: Math.max(1, Number(probeModel.fileSizeGB) || 1),
-                budgetGB: 24,
-                installed: true
-            }
-        ]
-    });
-    assert.strictEqual(aiResult.winner, probeModel.name, `Expected evaluator winner to be ${probeModel.name}`);
-    assert(Array.isArray(aiResult.ranking), 'Expected ranking array in evaluator response');
-    assert.strictEqual(aiResult.ranking.length, 1, 'Expected single ranking entry with one candidate');
-    assert.strictEqual(aiResult.ranking[0].name, probeModel.name, 'Expected ranking to include selected probe model');
+    const hardware = await deterministicSelector.getHardware();
+    const evaluatorModel = await aiCheckSelector.pickEvaluatorModel(hardware);
+    if (evaluatorModel) {
+        const aiResult = await aiCheckSelector.callOllamaEvaluator(evaluatorModel, {
+            hardware: { category: 'general' },
+            candidates: [
+                {
+                    name: probeModel.name,
+                    paramsB: probeModelSizeB,
+                    quant: String(probeModel.quantization || 'Q4'),
+                    requiredGB: Math.max(1, Number(probeModel.fileSizeGB) || 1),
+                    budgetGB: 24,
+                    installed: true
+                }
+            ]
+        });
+        assert.strictEqual(aiResult.winner, probeModel.name, `Expected evaluator winner to be ${probeModel.name}`);
+        assert(Array.isArray(aiResult.ranking), 'Expected ranking array in evaluator response');
+        assert.strictEqual(aiResult.ranking.length, 1, 'Expected single ranking entry with one candidate');
+        assert.strictEqual(aiResult.ranking[0].name, probeModel.name, 'Expected ranking to include selected probe model');
+    } else {
+        console.log('ollama-client-speed-metrics.test.js: evaluator assertions SKIPPED (no suitable local evaluator installed)');
+    }
 
     const planResult = runCli(['ollama-plan', '--json']);
     assert.strictEqual(

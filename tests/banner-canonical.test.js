@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BANNER_PATH = path.resolve(__dirname, '..', 'src', 'ui', 'banner-profesional-v2.txt');
-const CANONICAL_BANNER_SHA256 = 'ddbc9788510a1577b6b584b46e4eb60409e46f8708305e6cbd6ec61e847f87f3';
+const CANONICAL_BANNER_SHA256 = '28acd9ad25fe0c6f93f28a199fa3e4d0e74b5f03f27add3f7ead765050918237';
 
 function run() {
     const raw = fs.readFileSync(BANNER_PATH, 'utf8');

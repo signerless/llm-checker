@@ -1,8 +1,17 @@
 Changelog
 =========
 
-Unreleased — modelvet structural validation (WASM)
---------------------------------------------------
+3.8.1 — ModelVet attribution (2026-08-04)
+-------------------------------------------
+
+- Added prominent README credit for
+  [ModelVet](https://github.com/tetsuo-ai/modelvet) and its creator,
+  [Tetsuo AI](https://github.com/tetsuo-ai), covering the `verify`,
+  `ai-run --verify`, structural policy validation, and MCP `verify_model`
+  integration.
+
+3.8.0 — ModelVet structural validation (2026-08-04)
+-----------------------------------------------------
 
 Verify-before-load structural safety validation for GGUF and safetensors
 model files, powered by [modelvet](https://github.com/tetsuo-ai/modelvet)
@@ -17,8 +26,10 @@ dependencies, works offline on every supported platform.
 - New verification gates in the Ollama flows: `installed --verify` audits
   every installed model's blob while ranking (any REJECT exits 1), and
   `ai-run --verify` verifies the selected model's blob after pull and
-  refuses to run a REJECTED model. Files over the 3 GiB wasm32 ceiling are
-  warned about and skipped — only an affirmative REJECT blocks.
+  refuses to run a REJECTED model. `ai-run --verify` now fails closed: missing
+  blobs/manifests, files over the 3 GiB wasm32 ceiling, verifier errors, and
+  other no-verdict states exit 2. `--allow-unverified` explicitly permits
+  only those unverifiable states; it can never bypass a REJECT verdict.
 - New `structural_validation` policy rule (`enabled`, `on_unverifiable:
   warn|fail`): a REJECTED local model is a `STRUCTURAL_VALIDATION_FAILED`
   violation (blocking in enforce mode); catalog-only candidates are
