@@ -41,25 +41,29 @@ class PolicyEngine {
         return Boolean(
             (isPlainObject(rules.models) && Object.keys(rules.models).length > 0) ||
             (isPlainObject(rules.runtime) && Object.keys(rules.runtime).length > 0) ||
-            (isPlainObject(rules.compliance) && Object.keys(rules.compliance).length > 0)
+            (isPlainObject(rules.compliance) && Object.keys(rules.compliance).length > 0) ||
+            this.isStructuralValidationActive(rules.structural_validation)
         );
     }
 
     evaluateModel(model, context = {}) {
         const target = isPlainObject(model) ? model : {};
         const violations = [];
+        const warnings = [];
         const rules = this.policy.rules || {};
 
         this.evaluateModelRules(target, rules.models || {}, violations);
         this.evaluateRuntimeRules(target, context, rules.runtime || {}, violations);
         this.evaluateComplianceRules(target, rules.compliance || {}, violations);
+        this.evaluateStructuralValidationRules(target, rules.structural_validation, violations, warnings);
 
         return {
             pass: violations.length === 0,
             mode: this.getMode(),
             violationCount: violations.length,
             violations,
-            rationale: this.buildRationale(violations)
+            warnings,
+            rationale: this.buildRationale(violations, warnings)
         };
     }
 
@@ -303,12 +307,85 @@ class PolicyEngine {
         }
     }
 
-    buildRationale(violations) {
-        if (!Array.isArray(violations) || violations.length === 0) {
+    isStructuralValidationActive(structuralRules) {
+        return isPlainObject(structuralRules) && structuralRules.enabled !== false;
+    }
+
+    getStructuralOnUnverifiable(structuralRules) {
+        return structuralRules.on_unverifiable === 'fail' ? 'fail' : 'warn';
+    }
+
+    /**
+     * Evaluates rules.structural_validation against the `verification`
+     * object attached to the candidate by the structural-validation pre-pass
+     * (src/policy/structural-validation.js). Candidates without a resolved
+     * local file are not_applicable and never violate; verifier errors are
+     * governed by on_unverifiable (warn by default, fail makes them blocking
+     * violations in enforce mode).
+     */
+    evaluateStructuralValidationRules(model, structuralRules, violations, warnings) {
+        if (!this.isStructuralValidationActive(structuralRules)) return;
+
+        const verification = isPlainObject(model.verification) ? model.verification : null;
+        if (!verification) return; // pre-pass not run (or no rule wiring); nothing to evaluate
+
+        const verdict = toLowerString(verification.verdict);
+
+        if (verdict === 'reject') {
+            const code = verification.violation_code ?? 'unknown';
+            const name = verification.violation_name || 'unknown';
+            this.pushViolation(
+                violations,
+                'STRUCTURAL_VALIDATION_FAILED',
+                'rules.structural_validation',
+                `Model file failed structural validation (${name}, code ${code}).`,
+                'accept',
+                `reject: ${name} (code ${code})`
+            );
+            return;
+        }
+
+        if (verdict === 'error') {
+            const reason = verification.reason || 'verification failed';
+            if (this.getStructuralOnUnverifiable(structuralRules) === 'fail') {
+                this.pushViolation(
+                    violations,
+                    'STRUCTURAL_VALIDATION_UNVERIFIABLE',
+                    'rules.structural_validation',
+                    `Model file could not be structurally verified: ${reason}`,
+                    'verifiable model file',
+                    reason
+                );
+            } else {
+                warnings.push({
+                    code: 'STRUCTURAL_VALIDATION_UNVERIFIABLE',
+                    path: 'rules.structural_validation',
+                    message: `Model file could not be structurally verified: ${reason}`
+                });
+            }
+        }
+
+        // 'accept' and 'not_applicable' never produce violations.
+    }
+
+    buildRationale(violations, warnings = []) {
+        const entries = [];
+        if (Array.isArray(violations)) {
+            violations.forEach((violation) => {
+                entries.push(`${violation.code}: ${violation.message}`);
+            });
+        }
+        if (Array.isArray(warnings)) {
+            warnings.forEach((warning) => {
+                entries.push(`${warning.code} (warning): ${warning.message}`);
+            });
+        }
+
+        if (entries.length === 0) {
             return ['Policy evaluation passed with zero violations.'];
         }
 
-        return violations.map((violation) => `${violation.code}: ${violation.message}`);
+        return entries;
     }
 
     pushViolation(violations, code, rulePath, message, expected, actual) {

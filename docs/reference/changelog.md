@@ -1,6 +1,50 @@
 Changelog
 =========
 
+Unreleased — modelvet structural validation (WASM)
+--------------------------------------------------
+
+Verify-before-load structural safety validation for GGUF and safetensors
+model files, powered by [modelvet](https://github.com/tetsuo-ai/modelvet)
+(MIT, vendored at commit `748ac72`) compiled to a 19.8 KB WebAssembly module
+that ships inside the npm package — pure JavaScript, zero native
+dependencies, works offline on every supported platform.
+
+- New `verify <file>` command: structural validation of a GGUF/safetensors
+  file with content-based format detection. Exit codes mirror the modelvet
+  CLI contract (`0` ACCEPT, `1` REJECT, `2` no verdict) for CI gates.
+  `--json` for machine-readable reports.
+- New verification gates in the Ollama flows: `installed --verify` audits
+  every installed model's blob while ranking (any REJECT exits 1), and
+  `ai-run --verify` verifies the selected model's blob after pull and
+  refuses to run a REJECTED model. Files over the 3 GiB wasm32 ceiling are
+  warned about and skipped — only an affirmative REJECT blocks.
+- New `structural_validation` policy rule (`enabled`, `on_unverifiable:
+  warn|fail`): a REJECTED local model is a `STRUCTURAL_VALIDATION_FAILED`
+  violation (blocking in enforce mode); catalog-only candidates are
+  `not_applicable`. `audit export` reports (JSON/CSV/SARIF) carry a
+  `verification` field per finding, using the "unknown, never omitted"
+  provenance convention.
+- New MCP tool `verify_model` (path + optional format; errors return
+  `{verdict: 'error'}` instead of throwing), and `verify` added to the
+  MCP-allowlisted CLI commands.
+- `mcp-setup` is now multi-client: `--client claude|codex|cursor|windsurf|
+  gemini|kimi|grok|generic` with `--apply` (non-destructive merge into the
+  client's config), `--npx`, and `--json` support.
+- Shared Ollama blob resolver `src/security/ollama-blobs.js` (manifest →
+  blob path, docker-reference rules for host/namespace/tag defaults,
+  respects `OLLAMA_MODELS`), used by both the CLI gates and the policy
+  engine.
+- Vendored source + rebuild script: `vendor/modelvet/`,
+  `scripts/build-modelvet-wasm.sh` (local clang or `--docker`).
+
+New tests: `tests/modelvet-verify.test.js`, `tests/verify-gates.test.js`,
+`tests/policy-structural-validation.test.js`,
+`tests/mcp-multiclient.test.mjs`. Full suite 53/53.
+
+An ACCEPT verdict is structural only: it says nothing about model behavior,
+provenance, or poisoned weights.
+
 3.7.6 — Virtual-monitor GPU detection fix (2026-06-22)
 -----------------------------------------------------
 

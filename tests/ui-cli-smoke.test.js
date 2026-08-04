@@ -148,7 +148,7 @@ function run() {
     const mcpSetupHelp = runCli(['mcp-setup', '--help']);
     assert.strictEqual(mcpSetupHelp.status, 0, stripAnsi(mcpSetupHelp.stderr || mcpSetupHelp.stdout));
     assert.ok(
-        stripAnsi(mcpSetupHelp.stdout).includes('Show or apply Claude MCP setup for llm-checker'),
+        stripAnsi(mcpSetupHelp.stdout).includes('Show or apply MCP setup for llm-checker'),
         'mcp-setup help should describe command purpose'
     );
 

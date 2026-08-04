@@ -11,6 +11,8 @@ const SEVERITY_BY_CODE = {
     MODEL_TOO_MANY_PARAMS: 'medium',
     INSUFFICIENT_RAM: 'medium',
     QUANTIZATION_NOT_ALLOWED: 'medium',
+    STRUCTURAL_VALIDATION_UNVERIFIABLE: 'medium',
+    STRUCTURAL_VALIDATION_FAILED: 'high',
     MODEL_SIZE_UNKNOWN: 'low',
     MODEL_PARAMS_UNKNOWN: 'low',
     QUANTIZATION_UNKNOWN: 'low',
@@ -33,7 +35,11 @@ const RECOMMENDATIONS_BY_CODE = {
     MODEL_PARAMS_UNKNOWN: 'Add parameter metadata (params_b) to model metadata.',
     QUANTIZATION_UNKNOWN: 'Add quantization metadata (quant/quantization) to model metadata.',
     BACKEND_UNKNOWN: 'Provide runtime backend context in policy evaluation inputs.',
-    RAM_UNKNOWN: 'Provide system RAM metadata in policy evaluation context.'
+    RAM_UNKNOWN: 'Provide system RAM metadata in policy evaluation context.',
+    STRUCTURAL_VALIDATION_FAILED:
+        'Remove or replace this model artifact; it failed structural validation (modelvet). Pull a known-good copy or update rules.structural_validation.',
+    STRUCTURAL_VALIDATION_UNVERIFIABLE:
+        'The model file could not be verified (missing verifier artifact, unreadable blob, or >3 GiB file). Restore verifiability or set rules.structural_validation.on_unverifiable to warn.'
 };
 
 function normalizeValue(value, fallback = 'unknown') {
@@ -76,6 +82,29 @@ function sarifLevelFromSeverity(severity) {
     }
 }
 
+function normalizeVerification(verification) {
+    if (typeof verification !== 'object' || verification === null || Array.isArray(verification)) {
+        return { verdict: 'unknown', reason: 'unknown' };
+    }
+
+    const verdict = normalizeValue(verification.verdict);
+    if (verdict === 'accept' || verdict === 'reject') {
+        return {
+            verdict,
+            violation_code: Number.isInteger(verification.violation_code)
+                ? verification.violation_code
+                : 'unknown',
+            violation_name: normalizeValue(verification.violation_name),
+            offset: Number.isFinite(verification.offset) ? verification.offset : 'unknown'
+        };
+    }
+
+    return {
+        verdict,
+        reason: normalizeValue(verification.reason)
+    };
+}
+
 function toFindingRecord(entry, generatedAt) {
     const violation = entry?.violation || {};
     const code = normalizeValue(violation.code, 'UNKNOWN');
@@ -92,6 +121,7 @@ function toFindingRecord(entry, generatedAt) {
         version: normalizeValue(entry?.version),
         license: normalizeValue(entry?.license),
         digest: normalizeValue(entry?.digest),
+        verification: normalizeVerification(entry?.verification),
         violation_code: code,
         rule_path: rulePath,
         rule_id: deterministicRuleId(code, rulePath),
@@ -184,6 +214,17 @@ function reportToJson(report) {
     return JSON.stringify(report, null, 2);
 }
 
+function csvVerificationFields(verification) {
+    const normalized = normalizeVerification(verification);
+    return [
+        normalized.verdict,
+        normalized.violation_code ?? 'unknown',
+        normalized.violation_name ?? 'unknown',
+        normalized.offset ?? 'unknown',
+        normalized.reason ?? 'unknown'
+    ];
+}
+
 function reportToCsv(report) {
     const headers = [
         'generated_at',
@@ -202,6 +243,11 @@ function reportToCsv(report) {
         'version',
         'license',
         'digest',
+        'verification_verdict',
+        'verification_violation_code',
+        'verification_violation_name',
+        'verification_offset',
+        'verification_reason',
         'violation_code',
         'rule_path',
         'rule_id',
@@ -230,6 +276,11 @@ function reportToCsv(report) {
                 report.summary?.pass_count,
                 report.summary?.fail_count,
                 'compliant',
+                '',
+                '',
+                '',
+                '',
+                '',
                 '',
                 '',
                 '',
@@ -276,6 +327,7 @@ function reportToCsv(report) {
                 finding.version,
                 finding.license,
                 finding.digest,
+                ...csvVerificationFields(finding.verification),
                 finding.violation_code,
                 finding.rule_path,
                 finding.rule_id,
@@ -354,6 +406,7 @@ function reportToSarif(report) {
                 actual: finding.actual,
                 recommendation: finding.recommendation,
                 status: finding.status,
+                verification: normalizeVerification(finding.verification),
                 exceptionReason: finding.exception_reason
             },
             partialFingerprints: {

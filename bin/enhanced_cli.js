@@ -44,6 +44,7 @@ const {
     collectCandidatesFromRecommendationData,
     buildPolicyRuntimeContext,
     evaluatePolicyCandidates,
+    evaluatePolicyCandidatesAsync,
     resolvePolicyEnforcement
 } = require('../src/policy/cli-policy');
 const {
@@ -64,7 +65,7 @@ const COMMAND_HEADER_LABELS = {
     'registry-sync': 'Model Registry Sync',
     'registry-search': 'Model Registry Search',
     'registry-recommend': 'Registry Recommendations',
-    'mcp-setup': 'Claude MCP Setup',
+    'mcp-setup': 'MCP Setup',
     check: 'Compatibility Check',
     installed: 'Installed Models',
     'ai-check': 'AI Check',
@@ -846,6 +847,229 @@ async function runExternalCommand(command, args) {
         child.on('error', reject);
         child.on('close', (code) => resolve(code));
     });
+}
+
+// ---------------------------------------------------------------------------
+// Multi-client MCP setup helpers (mcp-setup --client <name>)
+// ---------------------------------------------------------------------------
+
+const MCP_SETUP_CLIENTS = ['claude', 'codex', 'cursor', 'windsurf', 'gemini', 'kimi', 'grok', 'generic'];
+
+// The stdio server entry every client launches: the globally installed
+// `llm-checker-mcp` binary, or `npx llm-checker-mcp` with --npx.
+function getMcpServerEntry(useNpx = false) {
+    return useNpx
+        ? { command: 'npx', args: ['llm-checker-mcp'] }
+        : { command: 'llm-checker-mcp', args: [] };
+}
+
+function getCodexConfigPath() {
+    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    return path.join(codexHome, 'config.toml');
+}
+
+function getCursorMcpConfigPath() {
+    return path.join(os.homedir(), '.cursor', 'mcp.json');
+}
+
+function getWindsurfMcpConfigPath() {
+    return path.join(os.homedir(), '.codeium', 'windsurf', 'mcp_config.json');
+}
+
+function getGeminiConfigPath() {
+    return path.join(os.homedir(), '.gemini', 'settings.json');
+}
+
+function getKimiMcpConfigPath() {
+    const homeDir = os.homedir();
+    // Official Kimi Code CLI docs: ~/.kimi/mcp.json. The kimi-code fork keeps
+    // its config under ~/.kimi-code/ and reads mcp.json there instead. Prefer
+    // whichever layout is actually present; default to the documented one.
+    const upstream = path.join(homeDir, '.kimi', 'mcp.json');
+    const fork = path.join(homeDir, '.kimi-code', 'mcp.json');
+    if (fs.existsSync(upstream)) return upstream;
+    if (fs.existsSync(fork) || fs.existsSync(path.dirname(fork))) return fork;
+    return upstream;
+}
+
+function getGrokConfigPath() {
+    const grokHome = process.env.GROK_HOME || path.join(os.homedir(), '.grok');
+    return path.join(grokHome, 'config.toml');
+}
+
+function tomlBasicString(value) {
+    return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function tomlMcpServerKey(serverName) {
+    if (/^[A-Za-z0-9_-]+$/.test(serverName)) return serverName;
+    return tomlBasicString(serverName);
+}
+
+// Render one [mcp_servers.<name>] TOML table (Codex / Grok config format).
+function buildTomlMcpServerSection(serverName, entry) {
+    const lines = [
+        `[mcp_servers.${tomlMcpServerKey(serverName)}]`,
+        `command = ${tomlBasicString(entry.command)}`
+    ];
+    if (Array.isArray(entry.args) && entry.args.length > 0) {
+        lines.push(`args = [${entry.args.map(tomlBasicString).join(', ')}]`);
+    }
+    return lines.join('\n');
+}
+
+// Merge a [mcp_servers.<name>] table into existing TOML text. Any previous
+// table for the same server (including dotted subtables like
+// [mcp_servers.<name>.env]) is replaced; every other line is preserved.
+function mergeTomlMcpServer(existingText, serverName, entry) {
+    const section = buildTomlMcpServerSection(serverName, entry);
+    const text = String(existingText || '');
+    if (!text.trim()) return section + '\n';
+
+    const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const keyPattern = `(?:${escapeRe(serverName)}|${escapeRe(tomlBasicString(serverName))})`;
+    const sectionStart = new RegExp(`^\\s*\\[mcp_servers\\.${keyPattern}(?:\\..*)?\\]\\s*$`);
+    const anyHeader = /^\s*\[/;
+
+    const kept = [];
+    let skipping = false;
+    for (const line of text.split('\n')) {
+        if (sectionStart.test(line)) {
+            skipping = true;
+            continue;
+        }
+        if (skipping && anyHeader.test(line)) skipping = false;
+        if (!skipping) kept.push(line);
+    }
+
+    const body = kept.join('\n').replace(/\s*$/, '');
+    return `${body}\n\n${section}\n`;
+}
+
+// Merge one mcpServers entry into a JSON config file. Refuses to touch a file
+// that exists but is not a valid JSON object — never clobbers user content.
+function mergeJsonMcpConfig(filePath, serverName, entry) {
+    let config = {};
+    if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        if (raw.trim()) {
+            try {
+                config = JSON.parse(raw);
+            } catch (error) {
+                throw new Error(
+                    `Refusing to modify ${filePath}: existing file is not valid JSON (${error.message}). ` +
+                    'Fix or back it up manually, then re-run.'
+                );
+            }
+            if (!config || typeof config !== 'object' || Array.isArray(config)) {
+                throw new Error(`Refusing to modify ${filePath}: existing config is not a JSON object.`);
+            }
+        }
+    }
+    if (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers)) {
+        config.mcpServers = {};
+    }
+    config.mcpServers[serverName] = entry;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n');
+    return filePath;
+}
+
+function mergeTomlMcpConfig(filePath, serverName, entry) {
+    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+    const merged = mergeTomlMcpServer(existing, serverName, entry);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, merged);
+    return filePath;
+}
+
+// Build the per-client setup description for mcp-setup. Returns
+// { client, serverName, useNpx, format, configPath, snippet, commandLine,
+//   apply, notes } where snippet is a JSON object (format 'json') or a TOML
+// string (format 'toml'), and apply is 'json-merge' | 'toml-merge' | null.
+function buildMcpClientSetup(client, useNpx = false, serverName = 'llm-checker') {
+    const normalizedServerName = String(serverName || 'llm-checker').trim() || 'llm-checker';
+    const entry = getMcpServerEntry(useNpx);
+    const jsonSnippet = { mcpServers: { [normalizedServerName]: entry } };
+    const runnerWords = [entry.command, ...(entry.args || [])].map(quoteCliArg).join(' ');
+
+    const base = {
+        client,
+        serverName: normalizedServerName,
+        useNpx: Boolean(useNpx),
+        format: 'json',
+        configPath: null,
+        snippet: jsonSnippet,
+        commandLine: null,
+        apply: null,
+        notes: []
+    };
+
+    switch (client) {
+        case 'codex':
+            return {
+                ...base,
+                format: 'toml',
+                configPath: getCodexConfigPath(),
+                snippet: buildTomlMcpServerSection(normalizedServerName, entry),
+                commandLine: `codex mcp add ${quoteCliArg(normalizedServerName)} -- ${runnerWords}`,
+                apply: 'toml-merge',
+                notes: ['Codex CLI reads [mcp_servers.<name>] tables from ~/.codex/config.toml (CODEX_HOME overrides the directory).']
+            };
+        case 'cursor':
+            return {
+                ...base,
+                configPath: getCursorMcpConfigPath(),
+                apply: 'json-merge',
+                notes: ['Cursor reads global MCP servers from ~/.cursor/mcp.json (mcpServers key).']
+            };
+        case 'windsurf':
+            return {
+                ...base,
+                configPath: getWindsurfMcpConfigPath(),
+                apply: 'json-merge',
+                notes: ['Windsurf reads MCP servers from ~/.codeium/windsurf/mcp_config.json (mcpServers key).']
+            };
+        case 'gemini':
+            return {
+                ...base,
+                configPath: getGeminiConfigPath(),
+                apply: 'json-merge',
+                notes: ['Gemini CLI reads MCP servers from the mcpServers key in ~/.gemini/settings.json.']
+            };
+        case 'kimi':
+            return {
+                ...base,
+                configPath: getKimiMcpConfigPath(),
+                commandLine: `kimi mcp add --transport stdio ${quoteCliArg(normalizedServerName)} -- ${runnerWords}`,
+                apply: 'json-merge',
+                notes: [
+                    'Kimi Code CLI reads MCP servers from ~/.kimi/mcp.json (official docs); the kimi-code fork uses ~/.kimi-code/mcp.json.',
+                    'You can also run `kimi mcp add` (shown above) or `/mcp-config` inside the CLI.'
+                ]
+            };
+        case 'grok':
+            return {
+                ...base,
+                format: 'toml',
+                configPath: getGrokConfigPath(),
+                snippet: buildTomlMcpServerSection(normalizedServerName, entry),
+                commandLine: `grok mcp add ${quoteCliArg(normalizedServerName)} -- ${runnerWords}`,
+                apply: 'toml-merge',
+                notes: ['Grok CLI reads [mcp_servers.<name>] tables from ~/.grok/config.toml (GROK_HOME overrides the directory).']
+            };
+        case 'generic':
+            return {
+                ...base,
+                format: 'json',
+                notes: [
+                    'Standard mcpServers JSON snippet — merge it into the MCP configuration of any MCP-compatible client.',
+                    'There is no well-known config path for a generic client, so --apply is a no-op here.'
+                ]
+            };
+        default:
+            return base;
+    }
 }
 
 function parsePositiveIntegerOption(rawValue, optionName) {
@@ -3014,72 +3238,141 @@ function displayPolicySummary(commandName, policyConfig, evaluation, enforcement
 
 program
     .command('mcp-setup')
-    .description('Show or apply Claude MCP setup for llm-checker')
-    .option('--name <server-name>', 'MCP server name in Claude', 'llm-checker')
+    .description('Show or apply MCP setup for llm-checker (Claude Code, Codex, Cursor, Windsurf, Gemini, Kimi, Grok, or generic)')
+    .option('--client <name>', `Target MCP client (${MCP_SETUP_CLIENTS.join(', ')})`, 'claude')
+    .option('--name <server-name>', 'MCP server name in the client config', 'llm-checker')
     .option('--npx', 'Use npx llm-checker-mcp instead of global llm-checker-mcp')
-    .option('--apply', 'Run `claude mcp add ...` automatically')
+    .option('--apply', 'Apply the setup (run the client CLI or merge its config file)')
     .option('-j, --json', 'Output setup details as JSON')
     .action(async (options) => {
-        const primarySetup = buildClaudeMcpSetup(Boolean(options.npx), options.name);
-        const alternateSetup = buildClaudeMcpSetup(!Boolean(options.npx), options.name);
+        const client = String(options.client || 'claude').trim().toLowerCase();
+        if (!MCP_SETUP_CLIENTS.includes(client)) {
+            console.error(chalk.red(`Unknown MCP client "${options.client}".`));
+            console.error(chalk.yellow(`Supported clients: ${MCP_SETUP_CLIENTS.join(', ')}`));
+            process.exit(1);
+        }
+
+        // --- Claude Code (default): original behavior, unchanged ------------
+        if (client === 'claude') {
+            const primarySetup = buildClaudeMcpSetup(Boolean(options.npx), options.name);
+            const alternateSetup = buildClaudeMcpSetup(!Boolean(options.npx), options.name);
+
+            if (options.json) {
+                console.log(JSON.stringify({
+                    client: 'claude',
+                    recommended: {
+                        command: 'claude',
+                        args: primarySetup.claudeArgs,
+                        commandLine: primarySetup.commandLine
+                    },
+                    alternatives: [
+                        {
+                            command: 'claude',
+                            args: alternateSetup.claudeArgs,
+                            commandLine: alternateSetup.commandLine
+                        }
+                    ],
+                    claudeDesktop: {
+                        configPath: primarySetup.desktopConfigPath,
+                        snippet: primarySetup.desktopConfig
+                    }
+                }, null, 2));
+                return;
+            }
+
+            showAsciiArt('mcp-setup');
+
+            console.log(chalk.blue.bold('\nClaude Code MCP Setup'));
+            console.log(chalk.white('\nRecommended command:'));
+            console.log(chalk.cyan(`  ${primarySetup.commandLine}`));
+
+            console.log(chalk.white('\nAlternative command:'));
+            console.log(chalk.gray(`  ${alternateSetup.commandLine}`));
+
+            console.log(chalk.white('\nClaude Desktop config path (manual):'));
+            console.log(chalk.gray(`  ${primarySetup.desktopConfigPath}`));
+            console.log(chalk.white('\nConfig snippet:'));
+            console.log(chalk.gray(JSON.stringify(primarySetup.desktopConfig, null, 2)));
+
+            if (!options.apply) {
+                console.log(chalk.green('\nTip: run with --apply to execute the command automatically.'));
+                return;
+            }
+
+            console.log(chalk.blue('\nApplying MCP setup via Claude CLI...\n'));
+            try {
+                const exitCode = await runExternalCommand('claude', primarySetup.claudeArgs);
+                if (exitCode === 0) {
+                    console.log(chalk.green('\nClaude MCP setup applied successfully.'));
+                } else {
+                    console.error(chalk.red(`\nClaude command exited with code ${exitCode}.`));
+                    process.exit(exitCode || 1);
+                }
+            } catch (error) {
+                if (error && error.code === 'ENOENT') {
+                    console.error(chalk.red('Could not find `claude` in PATH.'));
+                    console.log(chalk.yellow('Run the printed command manually once Claude CLI is installed.'));
+                } else {
+                    console.error(chalk.red(`Failed to apply MCP setup: ${error.message}`));
+                }
+                process.exit(1);
+            }
+            return;
+        }
+
+        // --- Other MCP clients ----------------------------------------------
+        const setup = buildMcpClientSetup(client, Boolean(options.npx), options.name);
 
         if (options.json) {
-            console.log(JSON.stringify({
-                recommended: {
-                    command: 'claude',
-                    args: primarySetup.claudeArgs,
-                    commandLine: primarySetup.commandLine
-                },
-                alternatives: [
-                    {
-                        command: 'claude',
-                        args: alternateSetup.claudeArgs,
-                        commandLine: alternateSetup.commandLine
-                    }
-                ],
-                claudeDesktop: {
-                    configPath: primarySetup.desktopConfigPath,
-                    snippet: primarySetup.desktopConfig
-                }
-            }, null, 2));
+            console.log(JSON.stringify(setup, null, 2));
             return;
         }
 
         showAsciiArt('mcp-setup');
 
-        console.log(chalk.blue.bold('\nClaude Code MCP Setup'));
-        console.log(chalk.white('\nRecommended command:'));
-        console.log(chalk.cyan(`  ${primarySetup.commandLine}`));
+        console.log(chalk.blue.bold(`\nMCP Setup for ${client}`));
+        if (setup.configPath) {
+            console.log(chalk.white('\nConfig path:'));
+            console.log(chalk.gray(`  ${setup.configPath}`));
+        }
+        console.log(chalk.white(`\nConfig snippet (${setup.format}):`));
+        const renderedSnippet = setup.format === 'toml'
+            ? setup.snippet
+            : JSON.stringify(setup.snippet, null, 2);
+        console.log(chalk.gray(renderedSnippet));
 
-        console.log(chalk.white('\nAlternative command:'));
-        console.log(chalk.gray(`  ${alternateSetup.commandLine}`));
+        if (setup.commandLine) {
+            console.log(chalk.white('\nEquivalent CLI command:'));
+            console.log(chalk.cyan(`  ${setup.commandLine}`));
+        }
 
-        console.log(chalk.white('\nClaude Desktop config path (manual):'));
-        console.log(chalk.gray(`  ${primarySetup.desktopConfigPath}`));
-        console.log(chalk.white('\nConfig snippet:'));
-        console.log(chalk.gray(JSON.stringify(primarySetup.desktopConfig, null, 2)));
+        for (const note of setup.notes) {
+            console.log(chalk.gray(`\nNote: ${note}`));
+        }
 
         if (!options.apply) {
-            console.log(chalk.green('\nTip: run with --apply to execute the command automatically.'));
+            if (setup.apply) {
+                console.log(chalk.green('\nTip: run with --apply to merge this into the config file automatically.'));
+            }
             return;
         }
 
-        console.log(chalk.blue('\nApplying MCP setup via Claude CLI...\n'));
+        if (!setup.apply) {
+            console.log(chalk.yellow('\nNothing to apply: merge the snippet above into your client config manually.'));
+            return;
+        }
+
+        console.log(chalk.blue(`\nApplying MCP setup to ${setup.configPath} ...\n`));
         try {
-            const exitCode = await runExternalCommand('claude', primarySetup.claudeArgs);
-            if (exitCode === 0) {
-                console.log(chalk.green('\nClaude MCP setup applied successfully.'));
+            const entry = getMcpServerEntry(setup.useNpx);
+            if (setup.apply === 'json-merge') {
+                mergeJsonMcpConfig(setup.configPath, setup.serverName, entry);
             } else {
-                console.error(chalk.red(`\nClaude command exited with code ${exitCode}.`));
-                process.exit(exitCode || 1);
+                mergeTomlMcpConfig(setup.configPath, setup.serverName, entry);
             }
+            console.log(chalk.green(`MCP setup applied: merged "${setup.serverName}" into ${setup.configPath}`));
         } catch (error) {
-            if (error && error.code === 'ENOENT') {
-                console.error(chalk.red('Could not find `claude` in PATH.'));
-                console.log(chalk.yellow('Run the printed command manually once Claude CLI is installed.'));
-            } else {
-                console.error(chalk.red(`Failed to apply MCP setup: ${error.message}`));
-            }
+            console.error(chalk.red(`Failed to apply MCP setup: ${error.message}`));
             process.exit(1);
         }
     });
@@ -3242,7 +3535,7 @@ auditCommand
                 runtimeBackend
             });
 
-            const policyEvaluation = evaluatePolicyCandidates(
+            const policyEvaluation = await evaluatePolicyCandidatesAsync(
                 policyConfig.policyEngine,
                 policyCandidates,
                 policyContext,
@@ -3594,7 +3887,7 @@ Policy scope:
                     hardware,
                     runtimeBackend: selectedRuntime
                 });
-                policyEvaluation = evaluatePolicyCandidates(
+                policyEvaluation = await evaluatePolicyCandidatesAsync(
                     policyConfig.policyEngine,
                     policyCandidates,
                     policyContext,
@@ -3671,11 +3964,23 @@ program
     });
 
 // New command: installed - Show ranking of installed Ollama models
+function formatVerificationCell(verification) {
+    if (!verification) return chalk.gray('-');
+    if (verification.status === 'verified') return chalk.green('✓');
+    if (verification.status === 'rejected') {
+        const name = verification.report ? verification.report.violationName : 'REJECTED';
+        return chalk.red(`✗ ${name}`);
+    }
+    const reason = String(verification.reason || 'unknown');
+    return chalk.gray(`skipped: ${reason.length > 30 ? reason.substring(0, 27) + '...' : reason}`);
+}
+
 program
     .command('installed')
     .description('Show ranking of installed Ollama models by compatibility and use-case')
     .option('--sort <by>', 'Sort by: score, size, name (default: score)', 'score')
     .option('--json', 'Output in JSON format')
+    .option('--verify', 'Structurally verify each installed model blob with modelvet (GGUF/safetensors)')
     .action(async (options) => {
         if (!options.json) showAsciiArt('installed');
         const spinner = ora('Analyzing installed models...').start();
@@ -3798,6 +4103,33 @@ program
                 }
             });
 
+            // Optional modelvet structural verification of each model's local
+            // blob(s). Fail-soft: unresolvable blobs or verifier errors (e.g.
+            // >3 GiB wasm32 ceiling, missing artifact) become
+            // { status: 'skipped', reason }; only an affirmative REJECT turns
+            // the run red (exit code 1, also in --json mode).
+            let rejectedCount = 0;
+            if (options.verify) {
+                const { verifyOllamaModel } = require('../src/security/ollama-blobs');
+                const verifySpinner = options.json ? null : ora('Verifying model blobs with modelvet...').start();
+                for (const model of scoredModels) {
+                    if (verifySpinner) verifySpinner.text = `Verifying ${model.name}...`;
+                    const verification = await verifyOllamaModel(model.name);
+                    model.verification = verification;
+                    if (verification.status === 'rejected') rejectedCount += 1;
+                }
+                if (verifySpinner) {
+                    if (rejectedCount > 0) {
+                        verifySpinner.fail(`${rejectedCount} model(s) REJECTED by modelvet`);
+                    } else {
+                        verifySpinner.succeed('modelvet verification complete');
+                    }
+                }
+                if (rejectedCount > 0) {
+                    process.exitCode = 1;
+                }
+            }
+
             // Output
             if (options.json) {
                 console.log(JSON.stringify(scoredModels, null, 2));
@@ -3815,6 +4147,7 @@ program
                 chalk.bold(' Size '),
                 chalk.bold(' Score '),
                 chalk.bold(' Use Case '),
+                ...(options.verify ? [chalk.bold(' Verified ')] : []),
                 chalk.bold(' Command ')
             ];
             const data = [headers];
@@ -3824,17 +4157,38 @@ program
                 const rankIcon = rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : `${rank}.`;
                 const scoreColor = model.score >= 75 ? chalk.green : model.score >= 50 ? chalk.yellow : chalk.red;
 
-                data.push([
+                const row = [
                     rankIcon,
                     model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name,
                     `${model.fileSizeGB}GB`,
                     scoreColor(`${model.score}/100`),
-                    model.useCase,
-                    chalk.cyan(`ollama run ${model.name.split(':')[0]}`)
-                ]);
+                    model.useCase
+                ];
+
+                if (options.verify) {
+                    row.push(formatVerificationCell(model.verification));
+                }
+
+                row.push(chalk.cyan(`ollama run ${model.name.split(':')[0]}`));
+                data.push(row);
             });
 
             console.log(table(data));
+
+            if (options.verify) {
+                const rejectedModels = scoredModels.filter(m => m.verification && m.verification.status === 'rejected');
+                if (rejectedModels.length > 0) {
+                    console.log(chalk.red.bold('\nmodelvet REJECTED these models — do NOT load them in any runtime:'));
+                    rejectedModels.forEach(m => {
+                        const report = m.verification.report;
+                        console.log(chalk.red(
+                            `  ✗ ${m.name}: ${report.violationName} (code ${report.violation}) at 0x${report.offset.toString(16)}`
+                        ));
+                    });
+                }
+                console.log(chalk.gray('\nNote: a ✓ verdict is structural only. It says nothing about model'));
+                console.log(chalk.gray('behavior, provenance, or poisoned weights.'));
+            }
 
             // Show suggestions for low-ranking models
             const lowRankingModels = scoredModels.filter(m => m.score < 50);
@@ -4130,7 +4484,7 @@ Calibrated routing examples:
                     hardware,
                     runtimeBackend: 'ollama'
                 });
-                policyEvaluation = evaluatePolicyCandidates(
+                policyEvaluation = await evaluatePolicyCandidatesAsync(
                     policyConfig.policyEngine,
                     policyCandidates,
                     policyContext,
@@ -4635,6 +4989,7 @@ program
     )
     .option('--benchmark', 'Run a short local speed test before launching')
     .option('--reference-only', 'Show model choice and speed reference without launching Ollama')
+    .option('--verify', 'Verify the selected model blob with modelvet before running (REJECT aborts the run)')
     .action(async (options) => {
         showAsciiArt('ai-run');
         // Check if Ollama is installed first
@@ -4728,6 +5083,42 @@ program
             }
             
             spinner.succeed(`Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
+
+            // Opt-in modelvet gate: structurally verify the selected model's
+            // local blob BEFORE the model is ever loaded/run (also covers the
+            // post-`ollama pull` case, since pull only writes these same
+            // manifests/blobs). Semantics:
+            //   REJECT  -> hard stop, refuse to run, exit 1.
+            //   skipped -> manifest/blob missing or verifier error (e.g.
+            //              >3 GiB wasm32 ceiling, wasm artifact missing):
+            //              warn and continue. Verification is an opt-in
+            //              best-effort gate; blocking normal runs because the
+            //              verifier itself cannot cover a file would break
+            //              legitimate usage. Only an affirmative REJECT blocks.
+            if (options.verify) {
+                const { verifyOllamaModel } = require('../src/security/ollama-blobs');
+                const verifySpinner = ora(`Verifying ${result.bestModel} blob structure with modelvet...`).start();
+                const verification = await verifyOllamaModel(result.bestModel);
+
+                if (verification.status === 'rejected') {
+                    const report = verification.report;
+                    verifySpinner.fail(`modelvet REJECTED ${result.bestModel}`);
+                    console.log(chalk.red.bold('\nThis model blob failed structural verification:'));
+                    console.log(`  Violation: ${chalk.red(report.violationName)} (code ${report.violation})`);
+                    console.log(`  Offset:    ${chalk.yellow(`0x${report.offset.toString(16)}`)}`);
+                    console.log(`  Blob:      ${chalk.gray(verification.blob)}`);
+                    console.log(chalk.red('\nRefusing to run this model. Remove it with:'));
+                    console.log(chalk.cyan(`  ollama rm ${result.bestModel}`));
+                    process.exit(1);
+                } else if (verification.status === 'verified') {
+                    verifySpinner.succeed(`modelvet ACCEPT: ${result.bestModel} is structurally well-formed`);
+                    console.log(chalk.gray('  (ACCEPT is structural only — no provenance or poisoned-weights guarantee.)'));
+                } else {
+                    verifySpinner.stop();
+                    console.log(chalk.yellow(`Verification skipped: ${verification.reason}`));
+                    console.log(chalk.gray('Continuing without verification (--verify is best-effort).'));
+                }
+            }
 
             let benchmark = null;
             if (options.benchmark) {
@@ -5636,6 +6027,54 @@ program
             console.error(chalk.red('Error:'), error.message);
             if (process.env.DEBUG) console.error(error.stack);
             process.exit(1);
+        }
+    });
+
+program
+    .command('verify <file>')
+    .description('Structural safety validation of a GGUF or safetensors model file (modelvet, verify-before-load)')
+    .option('-j, --json', 'Output as JSON')
+    .action(async (file, options) => {
+        const spinner = options.json ? null : ora('Verifying model file structure...').start();
+
+        try {
+            const modelvet = require('../src/security/modelvet-verifier');
+            const report = await modelvet.verifyFile(file);
+
+            if (options.json) {
+                console.log(JSON.stringify(report, null, 2));
+            } else {
+                const sizeGB = (report.sizeBytes / 1024 / 1024 / 1024).toFixed(2);
+                if (report.accepted) {
+                    if (spinner) spinner.succeed('Model verification complete');
+                    console.log(chalk.blue.bold('\n=== Model Verification (modelvet) ==='));
+                    console.log(`File:    ${chalk.white.bold(report.file)}`);
+                    console.log(`Format:  ${chalk.cyan(report.format)} (${chalk.cyan(`${sizeGB} GiB`)})`);
+                    console.log(`Verdict: ${chalk.green.bold('ACCEPT')} — structurally safe to load`);
+                    console.log(chalk.gray('\nNote: ACCEPT is structural only. It says nothing about model'));
+                    console.log(chalk.gray('behavior, provenance, or poisoned weights.'));
+                    console.log('');
+                } else {
+                    if (spinner) spinner.fail('Model verification failed');
+                    console.log(chalk.blue.bold('\n=== Model Verification (modelvet) ==='));
+                    console.log(`File:      ${chalk.white.bold(report.file)}`);
+                    console.log(`Format:    ${chalk.cyan(report.format)} (${chalk.cyan(`${sizeGB} GiB`)})`);
+                    console.log(`Verdict:   ${chalk.red.bold('REJECT')}`);
+                    console.log(`Violation: ${chalk.red(report.violationName)} (code ${report.violation})`);
+                    console.log(`Offset:    ${chalk.yellow(`0x${report.offset.toString(16)}`)}`);
+                    console.log(`Detail:    ${chalk.gray(`[${report.detail.join(', ')}]`)}`);
+                    console.log(chalk.red('\nThis file must NOT be loaded by any model runtime.'));
+                    console.log('');
+                }
+            }
+
+            // Mirror the modelvet CLI contract: 0 = ACCEPT, 1 = REJECT, 2 = no verdict.
+            process.exit(report.accepted ? 0 : 1);
+        } catch (error) {
+            if (spinner) spinner.fail('Model verification error');
+            console.error(chalk.red('Error:'), error.message);
+            if (process.env.DEBUG) console.error(error.stack);
+            process.exit(2);
         }
     });
 
