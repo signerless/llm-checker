@@ -7,7 +7,7 @@
  * and other MCP-compatible AI assistants.
  *
  * Usage:
- *   claude mcp add llm-checker -- npx llm-checker-mcp
+ *   claude mcp add llm-checker -- npx --yes --package llm-checker llm-checker-mcp
  *   # or
  *   claude mcp add llm-checker -- node node_modules/llm-checker/bin/mcp-server.mjs
  */
@@ -18,9 +18,9 @@ import { z } from "zod";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { dirname, join, normalize, resolve } from "path";
 import { readdir, stat } from "fs/promises";
-import { readFileSync } from "fs";
+import { readFileSync, realpathSync } from "fs";
 import { createRequire } from "module";
 import http from "http";
 import os from "os";
@@ -436,7 +436,7 @@ server.tool(
 
 server.tool(
   "verify_model",
-  "Structurally verify a local model file (GGUF or safetensors) with the modelvet WASM verifier before any model loader touches it. Returns the full verification report (format, verdict, accepted, violation, violationName, offset, detail, arenaUsed, modelvetVersion, file, sizeBytes). An 'accept' verdict is structural only: it says nothing about model behavior, provenance, or poisoned weights. Verifier/infrastructure errors are returned as { verdict: 'error', reason, code } instead of throwing.",
+  "Structurally verify a local model file (GGUF or safetensors) with the modelvet WASM verifier before any model loader touches it. Returns the full verification report (format, verdict, accepted, violation, violationName, offset, detail, arenaUsed, modelvetVersion, file, sizeBytes). An 'accept' verdict is structural only: it says nothing about model behavior, provenance, or poisoned weights. Verifier/infrastructure failures return { verdict: 'error', reason, code } with the MCP isError flag set.",
   {
     path: z.string().describe("Path to the model file (.gguf or .safetensors)"),
     format: z
@@ -478,7 +478,10 @@ server.tool(
         reason: err.message,
         code: err.code || "MODELVET_ERROR",
       };
-      return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        isError: true,
+      };
     }
   }
 );
@@ -1559,22 +1562,35 @@ async function main() {
   await server.connect(transport);
 }
 
-// Detect whether this module is the process entry point. When invoked as
-// `node bin/mcp-server.mjs`, process.argv[1] resolves to this file's path; when
-// merely imported (e.g. from a test), it points at the importer instead, so the
-// server is not started. fileURLToPath(import.meta.url) gives this file's
-// absolute path; argv[1] is the absolute path Node was launched with. We also
-// resolve argv[1] through fileURLToPath when it is a file:// URL.
-function runningAsEntry() {
-  const entry = process.argv[1];
-  if (!entry) return false;
+// Resolve a path (or file: URL) to the filesystem's canonical spelling. npm
+// installs package bins as symlinks on POSIX, so process.argv[1] can name the
+// symlink while import.meta.url names its target. A raw string comparison makes
+// a correctly installed `llm-checker-mcp` silently exit without connecting.
+function canonicalPath(pathOrUrl) {
+  if (typeof pathOrUrl !== "string" || pathOrUrl.length === 0) return null;
   try {
-    const thisPath = fileURLToPath(import.meta.url);
-    const entryPath = entry.startsWith("file://") ? fileURLToPath(entry) : entry;
-    return entryPath === thisPath;
+    const filePath = /^file:/i.test(pathOrUrl) ? fileURLToPath(pathOrUrl) : pathOrUrl;
+    const absolutePath = resolve(filePath);
+    const canonical = realpathSync.native
+      ? realpathSync.native(absolutePath)
+      : realpathSync(absolutePath);
+
+    // Windows paths are case-insensitive. realpath normally normalizes case,
+    // but folding here also handles drive-letter differences consistently.
+    return process.platform === "win32"
+      ? normalize(canonical).toLowerCase()
+      : normalize(canonical);
   } catch {
-    return false;
+    return null;
   }
+}
+
+// Detect whether this module is the process entry point without confusing an
+// npm-installed bin symlink for an importing module.
+function runningAsEntry(entry = process.argv[1], moduleUrl = import.meta.url) {
+  const entryPath = canonicalPath(entry);
+  const modulePath = canonicalPath(moduleUrl);
+  return entryPath !== null && modulePath !== null && entryPath === modulePath;
 }
 
 if (runningAsEntry()) {
@@ -1592,4 +1608,6 @@ export {
   mapHardwareJson,
   detectFrameworkMarker,
   FRAMEWORK_MARKERS,
+  canonicalPath,
+  runningAsEntry,
 };

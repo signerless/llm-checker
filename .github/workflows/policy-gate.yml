@@ -8,6 +8,38 @@ on:
       - master
 
 jobs:
+  test-suite:
+    name: Full test suite (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        if: matrix.node-version == 20
+        run: npm audit --omit=dev
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Verify npm package contents
+        if: matrix.node-version == 20
+        run: npm pack --dry-run
+
   policy-gate:
     runs-on: ubuntu-latest
 

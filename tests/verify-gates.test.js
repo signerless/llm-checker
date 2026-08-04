@@ -23,6 +23,8 @@ const OLLAMA_ROOT = path.join(TEST_HOME, '.ollama', 'models');
 const DIGEST_OK = 'aa'.repeat(32);
 const DIGEST_BAD = 'bb'.repeat(32);
 const DIGEST_GONE = 'cc'.repeat(32);
+const DIGEST_HUGE = 'ee'.repeat(32);
+const TOO_LARGE_BYTES = (3 * 1024 * 1024 * 1024) + 1;
 
 function buildGguf({ version = 3 } = {}) {
     const buf = Buffer.alloc(24);
@@ -33,14 +35,14 @@ function buildGguf({ version = 3 } = {}) {
     return buf;
 }
 
-function writeManifest(name, tag, digest) {
+function writeManifest(name, tag, digest, size = 24) {
     const manifestDir = path.join(OLLAMA_ROOT, 'manifests', 'registry.ollama.ai', 'library', name);
     fs.mkdirSync(manifestDir, { recursive: true });
     const manifest = {
         schemaVersion: 2,
         mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
         layers: [
-            { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${digest}`, size: 24 },
+            { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${digest}`, size },
             { mediaType: 'application/vnd.ollama.image.license', digest: `sha256:${'dd'.repeat(32)}`, size: 10 }
         ]
     };
@@ -53,6 +55,18 @@ function writeBlob(digest, contents) {
     fs.writeFileSync(path.join(blobDir, `sha256-${digest}`), contents);
 }
 
+function writeSparseBlob(digest, size) {
+    const blobDir = path.join(OLLAMA_ROOT, 'blobs');
+    fs.mkdirSync(blobDir, { recursive: true });
+    const blobPath = path.join(blobDir, `sha256-${digest}`);
+    const fd = fs.openSync(blobPath, 'w');
+    try {
+        fs.ftruncateSync(fd, size);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 function buildFakeOllamaTree() {
     writeManifest('tinyok', 'latest', DIGEST_OK);
     writeBlob(DIGEST_OK, buildGguf({ version: 3 }));
@@ -60,6 +74,10 @@ function buildFakeOllamaTree() {
     writeBlob(DIGEST_BAD, buildGguf({ version: 99 }));
     // Manifest exists but the blob was never written (partial install).
     writeManifest('tinygone', 'latest', DIGEST_GONE);
+    // Sparse file exercises the verifier's 3 GiB wasm32 guard without using
+    // 3 GiB of physical disk space or reading the contents into memory.
+    writeManifest('tinyhuge', 'latest', DIGEST_HUGE, TOO_LARGE_BYTES);
+    writeSparseBlob(DIGEST_HUGE, TOO_LARGE_BYTES);
 }
 
 // Pre-seed the Ollama registry scraper cache so checker.analyze() (called by
@@ -86,7 +104,8 @@ const http = require('http');
 const models = [
     { name: 'tinyok:latest', size: 24, details: { family: 'tinyok', parameter_size: '1B', quantization_level: 'Q4_0', format: 'gguf' } },
     { name: 'tinybad:latest', size: 24, details: { family: 'tinybad', parameter_size: '1B', quantization_level: 'Q4_0', format: 'gguf' } },
-    { name: 'tinygone:latest', size: 24, details: { family: 'tinygone', parameter_size: '1B', quantization_level: 'Q4_0', format: 'gguf' } }
+    { name: 'tinygone:latest', size: 24, details: { family: 'tinygone', parameter_size: '1B', quantization_level: 'Q4_0', format: 'gguf' } },
+    { name: 'tinyhuge:latest', size: ${TOO_LARGE_BYTES}, details: { family: 'tinyhuge', parameter_size: '7B', quantization_level: 'Q4_0', format: 'gguf' } }
 ];
 const server = http.createServer((req, res) => {
     if (req.url === '/api/version') {
@@ -187,6 +206,11 @@ async function run() {
 
             const skipped = await verifyOllamaModel('tinygone:latest');
             assert.strictEqual(skipped.status, 'skipped');
+
+            const tooLarge = await verifyOllamaModel('tinyhuge:latest');
+            assert.strictEqual(tooLarge.status, 'skipped');
+            assert.strictEqual(tooLarge.code, 'MODELVET_FILE_TOO_LARGE');
+            assert.ok(tooLarge.reason.includes('limited to 3 GiB'), tooLarge.reason);
         } finally {
             delete process.env.OLLAMA_MODELS;
         }
@@ -197,7 +221,7 @@ async function run() {
         assert.strictEqual(jsonResult.status, 1,
             `rejected model should make installed --verify exit 1; stderr: ${jsonResult.stderr}`);
         const payload = JSON.parse(jsonResult.stdout);
-        assert.strictEqual(payload.length, 3, 'expected 3 installed models in JSON output');
+        assert.strictEqual(payload.length, 4, 'expected 4 installed models in JSON output');
         const byName = Object.fromEntries(payload.map((m) => [m.name, m]));
 
         assert.strictEqual(byName['tinyok:latest'].verification.status, 'verified');
@@ -208,6 +232,9 @@ async function run() {
 
         assert.strictEqual(byName['tinygone:latest'].verification.status, 'skipped');
         assert.ok(byName['tinygone:latest'].verification.reason.length > 0);
+
+        assert.strictEqual(byName['tinyhuge:latest'].verification.status, 'skipped');
+        assert.strictEqual(byName['tinyhuge:latest'].verification.code, 'MODELVET_FILE_TOO_LARGE');
 
         // --- CLI: installed --json without --verify stays unchanged ---
         const plainResult = runCli(['installed', '--json'], cliEnv);
@@ -230,6 +257,15 @@ async function run() {
             PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}`
         };
 
+        const invalidOverride = runCli(['ai-run', '--allow-unverified', '--reference-only'], aiEnv);
+        assert.strictEqual(invalidOverride.status, 1, '--allow-unverified without --verify must be rejected');
+        assert.ok(
+            stripAnsi(`${invalidOverride.stdout}\n${invalidOverride.stderr}`).includes(
+                '--allow-unverified requires --verify'
+            ),
+            'invalid override use should explain the required verification flag'
+        );
+
         const aiReject = runCli(['ai-run', '-m', 'tinybad:latest', '--verify', '--reference-only'], aiEnv);
         assert.strictEqual(aiReject.status, 1,
             `ai-run must refuse to run a REJECTED model; stdout: ${aiReject.stdout}\nstderr: ${aiReject.stderr}`);
@@ -239,6 +275,15 @@ async function run() {
         assert.ok(aiRejectOut.includes('VERSION_UNSUPPORTED'), 'ai-run should print the violation name');
         assert.ok(aiRejectOut.includes('Refusing to run'), 'ai-run should explain the refusal');
 
+        const aiRejectOverride = runCli([
+            'ai-run', '-m', 'tinybad:latest', '--verify', '--allow-unverified', '--reference-only'
+        ], aiEnv);
+        assert.strictEqual(aiRejectOverride.status, 1,
+            `--allow-unverified must never bypass REJECT; stdout: ${aiRejectOverride.stdout}\nstderr: ${aiRejectOverride.stderr}`);
+        const aiRejectOverrideOut = stripAnsi(`${aiRejectOverride.stdout}\n${aiRejectOverride.stderr}`);
+        assert.ok(aiRejectOverrideOut.includes('REJECTED'), 'override attempt should still report REJECT');
+        assert.ok(aiRejectOverrideOut.includes('Refusing to run'), 'override attempt should still refuse to run');
+
         const aiAccept = runCli(['ai-run', '-m', 'tinyok:latest', '--verify', '--reference-only'], aiEnv);
         assert.strictEqual(aiAccept.status, 0,
             `ai-run should continue on ACCEPT; stdout: ${aiAccept.stdout}\nstderr: ${aiAccept.stderr}`);
@@ -246,11 +291,29 @@ async function run() {
         assert.ok(aiAcceptOut.includes('ACCEPT'), 'ai-run should report the ACCEPT verdict');
 
         const aiSkip = runCli(['ai-run', '-m', 'tinygone:latest', '--verify', '--reference-only'], aiEnv);
-        assert.strictEqual(aiSkip.status, 0,
-            `ai-run should warn-and-continue when verification is skipped; stdout: ${aiSkip.stdout}\nstderr: ${aiSkip.stderr}`);
+        assert.strictEqual(aiSkip.status, 2,
+            `ai-run must fail closed when verification is unavailable; stdout: ${aiSkip.stdout}\nstderr: ${aiSkip.stderr}`);
         const aiSkipOut = stripAnsi(`${aiSkip.stdout}\n${aiSkip.stderr}`);
-        assert.ok(aiSkipOut.includes('Verification skipped'),
-            'ai-run should warn when verification is skipped');
+        assert.ok(aiSkipOut.includes('Verification unavailable'),
+            'ai-run should explain that verification is unavailable');
+        assert.ok(aiSkipOut.includes('fail-closed'),
+            'ai-run should explain its fail-closed default');
+
+        const aiHuge = runCli(['ai-run', '-m', 'tinyhuge:latest', '--verify', '--reference-only'], aiEnv);
+        assert.strictEqual(aiHuge.status, 2,
+            `ai-run must fail closed above the 3 GiB WASM limit; stdout: ${aiHuge.stdout}\nstderr: ${aiHuge.stderr}`);
+        const aiHugeOut = stripAnsi(`${aiHuge.stdout}\n${aiHuge.stderr}`);
+        assert.ok(aiHugeOut.includes('limited to 3 GiB'), '3 GiB failure should explain the WASM limit');
+        assert.ok(aiHugeOut.includes('--allow-unverified'), 'failure should name the explicit override');
+
+        const aiHugeOverride = runCli([
+            'ai-run', '-m', 'tinyhuge:latest', '--verify', '--allow-unverified', '--reference-only'
+        ], aiEnv);
+        assert.strictEqual(aiHugeOverride.status, 0,
+            `explicit override should continue on an unverifiable model; stdout: ${aiHugeOverride.stdout}\nstderr: ${aiHugeOverride.stderr}`);
+        const aiHugeOverrideOut = stripAnsi(`${aiHugeOverride.stdout}\n${aiHugeOverride.stderr}`);
+        assert.ok(aiHugeOverrideOut.includes('Continuing without verification'),
+            'override continuation should be explicit in output');
 
         console.log('verify-gates.test.js: OK');
     } finally {

@@ -144,6 +144,7 @@ function run() {
                 policyPath,
                 '--category',
                 'coding',
+                '--no-registry',
                 '--no-verbose'
             ],
             tempDir,

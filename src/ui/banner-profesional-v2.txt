@@ -31,6 +31,6 @@
  | Install: npm install -g llm-checker                                                                                                              |
  | Run: llm-checker recommend                                                                                                                        |
  |                                                                                                                                                  |
- | github.com/Pavelevich/llm-checker  |  npmjs.com/package/llm-checker                                                                              |
+ | github.com/signerless/llm-checker   |  npmjs.com/package/llm-checker                                                                              |
  |                                                                                                                                                  |
  +--------------------------------------------------------------------------------------------------------------------------------------------------+

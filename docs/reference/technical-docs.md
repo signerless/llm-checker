@@ -553,7 +553,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node-version: [16, 18, 20]
+        node-version: [18, 20, 22]
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3

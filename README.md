@@ -1,6 +1,6 @@
 # LLM Checker
 
-![LLM Checker Animated Logo](https://raw.githubusercontent.com/Pavelevich/llm-checker/main/assets/llm-checker-logo.gif)
+![LLM Checker Animated Logo](https://raw.githubusercontent.com/signerless/llm-checker/main/assets/llm-checker-logo.gif)
 
 **Intelligent Ollama Model Selector**
 
@@ -11,13 +11,13 @@ Deterministic scoring across a packaged **multi-source registry** (Hugging Face 
 [![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
 [![License](https://img.shields.io/badge/License-NPDL--1.0-CC3300?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/discord/1457032977849520374?style=flat-square&color=0066FF&label=Discord)](https://discord.gg/mnmYrA7T)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D16-0066FF?style=flat-square)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-0066FF?style=flat-square)](https://nodejs.org/)
 
 [Start Here](#start-here-2-minutes) •
 [Installation](#installation) •
 [Quick Start](#quick-start) •
 [Calibration Quick Start](#calibration-quick-start-10-minutes) •
-[Docs](https://github.com/Pavelevich/llm-checker/tree/main/docs) •
+[Docs](https://github.com/signerless/llm-checker/tree/main/docs) •
 [Claude MCP](#claude-code-mcp) •
 [Commands](#commands) •
 [Scoring](#scoring-system) •
@@ -43,19 +43,25 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
-| **Zero** | Native Dependencies | Pure JavaScript &mdash; works on any Node.js 16+ system |
+| **Zero** | Native Dependencies | Pure JavaScript &mdash; works on any supported Node.js 18+ system |
 | **Live** | AI Run Metrics | `ai-run` shows response speed in tokens/sec next to model output |
+
+> **ModelVet credit:** The structural verification behind `verify`,
+> `ai-run --verify`, structural policy validation, and the MCP `verify_model` tool is
+> powered by [ModelVet](https://github.com/tetsuo-ai/modelvet), created by
+> [Tetsuo AI](https://github.com/tetsuo-ai). LLM Checker ships its WebAssembly
+> integration under ModelVet's MIT license.
 
 ---
 
 ## Documentation
 
-- [Docs Hub](https://github.com/Pavelevich/llm-checker/tree/main/docs)
-- [Usage Guide](https://github.com/Pavelevich/llm-checker/blob/main/docs/guides/usage-guide.md)
-- [Advanced Usage](https://github.com/Pavelevich/llm-checker/blob/main/docs/guides/advanced-usage.md)
-- [Technical Reference](https://github.com/Pavelevich/llm-checker/blob/main/docs/reference/technical-docs.md)
-- [Changelog](https://github.com/Pavelevich/llm-checker/blob/main/docs/reference/changelog.md)
-- [Calibration Fixtures](https://github.com/Pavelevich/llm-checker/tree/main/docs/fixtures/calibration)
+- [Docs Hub](https://github.com/signerless/llm-checker/tree/main/docs)
+- [Usage Guide](https://github.com/signerless/llm-checker/blob/main/docs/guides/usage-guide.md)
+- [Advanced Usage](https://github.com/signerless/llm-checker/blob/main/docs/guides/advanced-usage.md)
+- [Technical Reference](https://github.com/signerless/llm-checker/blob/main/docs/reference/technical-docs.md)
+- [Changelog](https://github.com/signerless/llm-checker/blob/main/docs/reference/changelog.md)
+- [Calibration Fixtures](https://github.com/signerless/llm-checker/tree/main/docs/fixtures/calibration)
 
 ---
 
@@ -91,7 +97,7 @@ npm install -g llm-checker
 ```
 
 **Requirements:**
-- Node.js 16+ (any version: 16, 18, 20, 22, 24)
+- Node.js 18+ (tested release lines: 18, 20, 22)
 - [Ollama](https://ollama.ai) installed for running models
 
 The package includes a prebuilt model catalog and declares `sql.js` as an optional dependency for SQLite-powered commands. If your package manager skips optional dependencies and database commands report `sql.js` missing, reinstall with optional dependencies enabled:
@@ -136,7 +142,7 @@ llm-checker ai-run --calibrated --category coding --prompt "Refactor this functi
 LLM Checker is published in all primary channels:
 
 - npm (latest, recommended): [`llm-checker@latest`](https://www.npmjs.com/package/llm-checker)
-- GitHub Releases: [Release history](https://github.com/Pavelevich/llm-checker/releases)
+- GitHub Releases: [Release history](https://github.com/signerless/llm-checker/releases)
 - GitHub Packages (legacy mirror, may lag): [`@pavelevich/llm-checker`](https://github.com/users/Pavelevich/packages/npm/package/llm-checker)
 
 ### Important: Use npm for Latest Builds
@@ -287,8 +293,14 @@ llm-checker mcp-setup --client generic   # raw mcpServers JSON for any client
 ```
 
 `--apply` merges the server entry into the client's config file (existing
-content is never clobbered), `--npx` uses `npx llm-checker-mcp` instead of a
-global install, and `--json` prints the structured snippet for scripting.
+content is never clobbered), and `--json` prints the structured snippet for
+scripting. `--npx` avoids a global server install by generating the explicit
+package-qualified command below (the executable is part of `llm-checker`; there
+is no separate `llm-checker-mcp` npm package):
+
+```bash
+npx --yes --package llm-checker llm-checker-mcp
+```
 
 Restart your client and you're done.
 
@@ -306,12 +318,16 @@ Once connected, your assistant can use these tools:
 | `installed` | Rank your already-downloaded Ollama models |
 | `search` | Search the Ollama model catalog with filters |
 | `smart_recommend` | Advanced recommendations using the full scoring engine |
+| `gpu_plan` | Plan safe single/multi-GPU model placement and runtime settings |
+| `verify_context` | Check a local model's practical context limit against available memory |
 | `ollama_plan` | Build a capacity plan for local models with recommended context/parallel/memory settings |
 | `ollama_plan_env` | Return ready-to-paste `export ...` env vars from the recommended or fallback plan profile |
 | `policy_validate` | Validate a policy file against the v1 schema and return structured validation output |
 | `audit_export` | Run policy compliance export (`json`/`csv`/`sarif`/`all`) for `check` or `recommend` flows |
 | `calibrate` | Generate calibration artifacts from a prompt suite with typed MCP inputs |
 | `verify_model` | Structural safety validation of a GGUF/safetensors file (modelvet) — verify-before-load |
+| `amd_guard` | Run AMD/Windows reliability checks and return mitigation guidance |
+| `toolcheck` | Test tool-calling compatibility for local Ollama models |
 
 **Ollama Management:**
 
@@ -400,10 +416,12 @@ llm-checker verify ~/.ollama/models/blobs/sha256-abc123...
 llm-checker verify ./model.safetensors --json
 ```
 
-`verify` runs [modelvet](https://github.com/tetsuo-ai/modelvet) — a structural
-safety validator for GGUF and safetensors files — compiled to WebAssembly and
-shipped inside the npm package, so it stays pure JavaScript with zero native
-dependencies and works offline on every supported platform.
+`verify` is powered by [ModelVet](https://github.com/tetsuo-ai/modelvet), the
+structural safety validator for GGUF and safetensors developed by
+[Tetsuo AI](https://github.com/tetsuo-ai). LLM Checker packages ModelVet as
+WebAssembly and integrates it with the CLI, Ollama verification gates,
+policies, and MCP, keeping verification offline and free of native
+dependencies.
 
 It answers one question before any model loader touches a file: *is this file
 structurally safe to load?* Every file-derived length, count, offset, and
@@ -412,7 +430,7 @@ tensor size is checked with overflow-safe arithmetic, in fixed memory.
 ```
 === Model Verification (modelvet) ===
 File:      ./suspicious.gguf
-Format:    gguf (4.36 GiB)
+Format:    gguf (0.12 GiB)
 Verdict:   REJECT
 Violation: TENSOR_DATA_EXTENT (code 311)
 Offset:    0x1a4f2
@@ -427,6 +445,8 @@ wasm32 memory ceiling; use the native modelvet CLI for those.
 
 The vendored source and rebuild instructions live in
 [`vendor/modelvet/`](vendor/modelvet/README.md).
+License and attribution details are in
+[THIRD_PARTY_NOTICES](https://github.com/signerless/llm-checker/blob/main/THIRD_PARTY_NOTICES).
 
 #### Verification Gates in Ollama Flows
 
@@ -439,14 +459,18 @@ llm-checker installed --verify --json
 
 # Verify the selected model's blob after pull, before running it
 llm-checker ai-run --verify --category coding --prompt "Refactor this function"
+
+# Explicitly continue only if verification is unavailable (never on REJECT)
+llm-checker ai-run --verify --allow-unverified --category coding --prompt "Refactor this function"
 ```
 
 - `installed --verify` adds a per-model verification status (verified /
   REJECTED with the violation name / skipped with reason). Any REJECT exits `1`.
-- `ai-run --verify` refuses to run a model whose blob is REJECTED (exit `1`,
-  with an `ollama rm` hint). Files the WASM verifier cannot handle (over the
-  3 GiB wasm32 ceiling) are warned about and skipped — only an affirmative
-  REJECT blocks the run.
+- `ai-run --verify` is fail-closed: a REJECTED blob exits `1` with an
+  `ollama rm` hint, while a missing/unreadable blob, verifier error, or file
+  above the 3 GiB wasm32 ceiling exits `2` without running the model.
+- `--allow-unverified` is an explicit escape hatch for the no-verdict cases
+  above. It requires `--verify` and can never bypass a ModelVet REJECT.
 - Blob resolution reads the Ollama manifest store (`$OLLAMA_MODELS` or
   `~/.ollama/models`), so no Ollama API changes are needed.
 
@@ -1050,7 +1074,7 @@ llm-checker smart-recommend --use-case reasoning
 ## Development
 
 ```bash
-git clone https://github.com/Pavelevich/llm-checker.git
+git clone https://github.com/signerless/llm-checker.git
 cd llm-checker
 npm install
 node bin/enhanced_cli.js hw-detect
@@ -1089,13 +1113,13 @@ LLM Checker is licensed under **NPDL-1.0** (No Paid Distribution License).
 - Free use, modification, and redistribution are allowed.
 - Selling the software or offering it as a paid hosted/API service is not allowed without a separate commercial license.
 
-See [LICENSE](https://github.com/Pavelevich/llm-checker/blob/main/LICENSE) for full terms.
+See [LICENSE](https://github.com/signerless/llm-checker/blob/main/LICENSE) for full terms.
 
 ---
 
-[GitHub](https://github.com/Pavelevich/llm-checker) •
-[Releases](https://github.com/Pavelevich/llm-checker/releases) •
+[GitHub](https://github.com/signerless/llm-checker) •
+[Releases](https://github.com/signerless/llm-checker/releases) •
 [npm](https://www.npmjs.com/package/llm-checker) •
 [GitHub Packages](https://github.com/users/Pavelevich/packages/npm/package/llm-checker) •
-[Issues](https://github.com/Pavelevich/llm-checker/issues) •
+[Issues](https://github.com/signerless/llm-checker/issues) •
 [Discord](https://discord.gg/mnmYrA7T)
