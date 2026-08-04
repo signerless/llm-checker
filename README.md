@@ -46,6 +46,12 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 | **Zero** | Native Dependencies | Pure JavaScript &mdash; works on any supported Node.js 18+ system |
 | **Live** | AI Run Metrics | `ai-run` shows response speed in tokens/sec next to model output |
 
+> **ModelVet credit:** The structural verification behind `verify`,
+> `ai-run --verify`, structural policy validation, and the MCP `verify_model` tool is
+> powered by [ModelVet](https://github.com/tetsuo-ai/modelvet), created by
+> [Tetsuo AI](https://github.com/tetsuo-ai). LLM Checker ships its WebAssembly
+> integration under ModelVet's MIT license.
+
 ---
 
 ## Documentation
@@ -410,10 +416,12 @@ llm-checker verify ~/.ollama/models/blobs/sha256-abc123...
 llm-checker verify ./model.safetensors --json
 ```
 
-`verify` runs [modelvet](https://github.com/tetsuo-ai/modelvet) — a structural
-safety validator for GGUF and safetensors files — compiled to WebAssembly and
-shipped inside the npm package, so it stays pure JavaScript with zero native
-dependencies and works offline on every supported platform.
+`verify` is powered by [ModelVet](https://github.com/tetsuo-ai/modelvet), the
+structural safety validator for GGUF and safetensors developed by
+[Tetsuo AI](https://github.com/tetsuo-ai). LLM Checker packages ModelVet as
+WebAssembly and integrates it with the CLI, Ollama verification gates,
+policies, and MCP, keeping verification offline and free of native
+dependencies.
 
 It answers one question before any model loader touches a file: *is this file
 structurally safe to load?* Every file-derived length, count, offset, and
@@ -437,6 +445,8 @@ wasm32 memory ceiling; use the native modelvet CLI for those.
 
 The vendored source and rebuild instructions live in
 [`vendor/modelvet/`](vendor/modelvet/README.md).
+License and attribution details are in
+[THIRD_PARTY_NOTICES](https://github.com/signerless/llm-checker/blob/main/THIRD_PARTY_NOTICES).
 
 #### Verification Gates in Ollama Flows
 

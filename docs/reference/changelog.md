@@ -1,6 +1,15 @@
 Changelog
 =========
 
+3.8.1 — ModelVet attribution (2026-08-04)
+-------------------------------------------
+
+- Added prominent README credit for
+  [ModelVet](https://github.com/tetsuo-ai/modelvet) and its creator,
+  [Tetsuo AI](https://github.com/tetsuo-ai), covering the `verify`,
+  `ai-run --verify`, structural policy validation, and MCP `verify_model`
+  integration.
+
 3.8.0 — ModelVet structural validation (2026-08-04)
 -----------------------------------------------------
 
