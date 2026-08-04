@@ -265,9 +265,9 @@ Notes:
 
 ---
 
-## Claude Code MCP
+## MCP Server (Claude, Codex, Grok, Kimi, Cursor, Gemini...)
 
-LLM Checker includes a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server, allowing **Claude Code** and other MCP-compatible AI assistants to analyze your hardware and manage local models directly.
+LLM Checker includes a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server, allowing **any MCP-compatible AI assistant** — Claude Code, OpenAI Codex, Grok, Kimi Code, Cursor, Windsurf, Gemini CLI — to analyze your hardware and manage local models directly.
 
 ### Setup (One Command)
 
@@ -275,27 +275,26 @@ LLM Checker includes a built-in [Model Context Protocol](https://modelcontextpro
 # Install globally first
 npm install -g llm-checker
 
-# Add to Claude Code
-claude mcp add llm-checker -- llm-checker-mcp
+# Print (or apply) the setup for your client
+llm-checker mcp-setup --client claude    # default; claude mcp add ...
+llm-checker mcp-setup --client codex     # ~/.codex/config.toml
+llm-checker mcp-setup --client grok      # ~/.grok/config.toml
+llm-checker mcp-setup --client kimi      # ~/.kimi/mcp.json
+llm-checker mcp-setup --client cursor    # ~/.cursor/mcp.json
+llm-checker mcp-setup --client windsurf  # ~/.codeium/windsurf/mcp_config.json
+llm-checker mcp-setup --client gemini    # ~/.gemini/settings.json
+llm-checker mcp-setup --client generic   # raw mcpServers JSON for any client
 ```
 
-Or generate the exact command directly from the CLI:
+`--apply` merges the server entry into the client's config file (existing
+content is never clobbered), `--npx` uses `npx llm-checker-mcp` instead of a
+global install, and `--json` prints the structured snippet for scripting.
 
-```bash
-llm-checker mcp-setup
-```
-
-Or with npx (no global install needed):
-
-```bash
-claude mcp add llm-checker -- npx llm-checker-mcp
-```
-
-Restart Claude Code and you're done.
+Restart your client and you're done.
 
 ### Available MCP Tools
 
-Once connected, Claude can use these tools:
+Once connected, your assistant can use these tools:
 
 **Core Analysis:**
 
@@ -312,6 +311,7 @@ Once connected, Claude can use these tools:
 | `policy_validate` | Validate a policy file against the v1 schema and return structured validation output |
 | `audit_export` | Run policy compliance export (`json`/`csv`/`sarif`/`all`) for `check` or `recommend` flows |
 | `calibrate` | Generate calibration artifacts from a prompt suite with typed MCP inputs |
+| `verify_model` | Structural safety validation of a GGUF/safetensors file (modelvet) — verify-before-load |
 
 **Ollama Management:**
 
@@ -337,7 +337,7 @@ Once connected, Claude can use these tools:
 
 ### Example Prompts
 
-After setup, you can ask Claude things like:
+After setup, you can ask your assistant things like:
 
 - *"What's the best coding model for my hardware?"*
 - *"Benchmark qwen2.5-coder and show me the tok/s"*
@@ -347,7 +347,9 @@ After setup, you can ask Claude things like:
 - *"Optimize my Ollama config for maximum performance"*
 - *"How much RAM is Ollama using right now?"*
 
-Claude will automatically call the right tools and give you actionable results.
+- *"Verify the blob of the model I just downloaded before running it"*
+
+Your assistant will automatically call the right tools and give you actionable results.
 
 ---
 
@@ -387,8 +389,90 @@ llm-checker search "qwen coder" --json
 | `mcp-setup` | Print/apply Claude MCP setup command and config snippet (`--apply`, `--json`, `--npx`) |
 | `gpu-plan` | Multi-GPU placement advisor with single/pooled model-size envelopes |
 | `verify-context` | Verify practical context-window limits for a local model |
+| `verify <file>` | Structural safety validation of a GGUF/safetensors model file before loading (modelvet, WASM) |
 | `amd-guard` | AMD/Windows reliability guard with mitigation hints |
 | `toolcheck` | Test tool-calling compatibility for local models |
+
+### `verify` — Model File Safety Validation
+
+```bash
+llm-checker verify ~/.ollama/models/blobs/sha256-abc123...
+llm-checker verify ./model.safetensors --json
+```
+
+`verify` runs [modelvet](https://github.com/tetsuo-ai/modelvet) — a structural
+safety validator for GGUF and safetensors files — compiled to WebAssembly and
+shipped inside the npm package, so it stays pure JavaScript with zero native
+dependencies and works offline on every supported platform.
+
+It answers one question before any model loader touches a file: *is this file
+structurally safe to load?* Every file-derived length, count, offset, and
+tensor size is checked with overflow-safe arithmetic, in fixed memory.
+
+```
+=== Model Verification (modelvet) ===
+File:      ./suspicious.gguf
+Format:    gguf (4.36 GiB)
+Verdict:   REJECT
+Violation: TENSOR_DATA_EXTENT (code 311)
+Offset:    0x1a4f2
+```
+
+Exit codes mirror the modelvet CLI contract: `0` = ACCEPT, `1` = REJECT,
+`2` = no verdict (error), so it drops directly into CI gates and scripts.
+
+An ACCEPT verdict is **structural only**: it says nothing about model
+behavior, provenance, or poisoned weights. Files above 3 GiB exceed the
+wasm32 memory ceiling; use the native modelvet CLI for those.
+
+The vendored source and rebuild instructions live in
+[`vendor/modelvet/`](vendor/modelvet/README.md).
+
+#### Verification Gates in Ollama Flows
+
+The same verifier is wired into the Ollama workflows as an opt-in gate:
+
+```bash
+# Verify every installed model's local blob while ranking them
+llm-checker installed --verify
+llm-checker installed --verify --json
+
+# Verify the selected model's blob after pull, before running it
+llm-checker ai-run --verify --category coding --prompt "Refactor this function"
+```
+
+- `installed --verify` adds a per-model verification status (verified /
+  REJECTED with the violation name / skipped with reason). Any REJECT exits `1`.
+- `ai-run --verify` refuses to run a model whose blob is REJECTED (exit `1`,
+  with an `ollama rm` hint). Files the WASM verifier cannot handle (over the
+  3 GiB wasm32 ceiling) are warned about and skipped — only an affirmative
+  REJECT blocks the run.
+- Blob resolution reads the Ollama manifest store (`$OLLAMA_MODELS` or
+  `~/.ollama/models`), so no Ollama API changes are needed.
+
+#### Structural Validation in Policies
+
+Enterprise policies can require modelvet validation with the
+`structural_validation` rule:
+
+```yaml
+rules:
+  structural_validation:
+    enabled: true
+    on_unverifiable: warn   # warn | fail (default warn)
+```
+
+- In `audit` mode a REJECTED local model is reported as a
+  `STRUCTURAL_VALIDATION_FAILED` violation; in `enforce` mode it blocks
+  (non-zero exit). Catalog-only candidates with no local file are reported as
+  `not_applicable`, never as violations.
+- `on_unverifiable: fail` also turns verifier errors (missing WASM artifact,
+  files over 3 GiB, unreadable blobs) into blocking
+  `STRUCTURAL_VALIDATION_UNVERIFIABLE` violations.
+- `audit export` reports (JSON/CSV/SARIF) carry a `verification` field per
+  finding — `{ verdict, violation_code, violation_name, offset }` — using the
+  same "unknown, never omitted" convention as the provenance fields, so
+  downstream parsers stay deterministic.
 
 ### Database Commands
 

@@ -21,10 +21,16 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readdir, stat } from "fs/promises";
 import { readFileSync } from "fs";
+import { createRequire } from "module";
 import http from "http";
 import os from "os";
 
 const exec = promisify(execFile);
+const require = createRequire(import.meta.url);
+// CJS dependency: the modelvet WASM structural verifier for GGUF/safetensors
+// model files (verify-before-load). Loaded via createRequire because this
+// server is ESM and the verifier is CommonJS.
+const modelvet = require("../src/security/modelvet-verifier.js");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -276,6 +282,7 @@ const ALLOWED_CLI_COMMANDS = new Set([
   "calibrate",
   "check",
   "gpu-plan",
+  "verify",
   "verify-context",
   "amd-guard",
   "toolcheck",
@@ -424,6 +431,55 @@ server.tool(
     if (target_tokens) args.push("--target", String(target_tokens));
     const result = await run(args, 90000);
     return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "verify_model",
+  "Structurally verify a local model file (GGUF or safetensors) with the modelvet WASM verifier before any model loader touches it. Returns the full verification report (format, verdict, accepted, violation, violationName, offset, detail, arenaUsed, modelvetVersion, file, sizeBytes). An 'accept' verdict is structural only: it says nothing about model behavior, provenance, or poisoned weights. Verifier/infrastructure errors are returned as { verdict: 'error', reason, code } instead of throwing.",
+  {
+    path: z.string().describe("Path to the model file (.gguf or .safetensors)"),
+    format: z
+      .enum(["auto", "gguf", "safetensors"])
+      .optional()
+      .describe("Force a format instead of content-based detection (default: auto)"),
+  },
+  async ({ path: modelPath, format }) => {
+    try {
+      let report;
+      if (format && format !== "auto") {
+        // verifyFile() always auto-detects; for a forced format mirror its
+        // stat/size guards, then run verifyBuffer() with the explicit format.
+        const fileStat = await stat(modelPath);
+        if (!fileStat.isFile()) {
+          throw new Error(`Not a regular file: ${modelPath}`);
+        }
+        if (fileStat.size > modelvet.MAX_FILE_BYTES) {
+          const err = new Error(
+            `File is ${(fileStat.size / 1024 / 1024 / 1024).toFixed(2)} GiB; the WASM verifier ` +
+              "is limited to 3 GiB (wasm32 memory). Use the native modelvet CLI for larger files."
+          );
+          err.code = "MODELVET_FILE_TOO_LARGE";
+          throw err;
+        }
+        report = await modelvet.verifyBuffer(readFileSync(modelPath), format);
+        report.file = modelPath;
+        report.sizeBytes = fileStat.size;
+      } else {
+        report = await modelvet.verifyFile(modelPath);
+      }
+      return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+    } catch (err) {
+      // Return a structured error payload rather than throwing so MCP clients
+      // can render the failure (missing file, missing WASM artifact, >3GiB
+      // input, arena exhaustion, ...).
+      const payload = {
+        verdict: "error",
+        reason: err.message,
+        code: err.code || "MODELVET_ERROR",
+      };
+      return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    }
   }
 );
 
@@ -1528,6 +1584,7 @@ if (runningAsEntry()) {
 // Exported for unit testing. Importing this module must NOT start the server
 // (see runningAsEntry guard above).
 export {
+  server,
   SERVER_VERSION,
   readPackageVersion,
   tokensPerSecond,
