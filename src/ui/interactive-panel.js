@@ -44,6 +44,7 @@ function getReservedRows(compact = false) {
 
 const PRIMARY_COMMAND_PRIORITY = [
     'check',
+    'verify',
     'help',
     'mcp-setup',
     'recommend',
@@ -58,6 +59,14 @@ const PRIMARY_COMMAND_PRIORITY = [
 ];
 
 const REQUIRED_ARG_PROMPTS = {
+    verify: [
+        {
+            name: 'file',
+            message: 'Model file for `verify` (GGUF or safetensors):',
+            validate: (value) =>
+                value && value.trim() ? true : 'Provide a GGUF or safetensors model file path'
+        }
+    ],
     search: [
         {
             name: 'query',
@@ -66,6 +75,21 @@ const REQUIRED_ARG_PROMPTS = {
         }
     ]
 };
+
+function getRequiredArgPrompts(commandMeta) {
+    return REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
+}
+
+function buildRequiredArgArgs(requiredArgPrompts, answers) {
+    const args = [];
+
+    for (const requiredPrompt of requiredArgPrompts) {
+        const value = String(answers?.[requiredPrompt.name] || '').trim();
+        if (value) args.push(value);
+    }
+
+    return args;
+}
 
 function truncateText(text, maxLength) {
     const value = String(text || '');
@@ -421,7 +445,7 @@ function shouldEnableBannerPulse({
 
 async function collectCommandArgs(commandMeta) {
     const prompts = [];
-    const requiredPrompts = REQUIRED_ARG_PROMPTS[commandMeta.name] || [];
+    const requiredPrompts = getRequiredArgPrompts(commandMeta);
     const requiredOptionPrompts = getRequiredOptionPrompts(commandMeta);
 
     for (const requiredPrompt of requiredPrompts) {
@@ -467,12 +491,7 @@ async function collectCommandArgs(commandMeta) {
     }
 
     const answers = await inquirer.prompt(prompts);
-    const args = [];
-
-    for (const requiredPrompt of requiredPrompts) {
-        const value = String(answers[requiredPrompt.name] || '').trim();
-        if (value) args.push(value);
-    }
+    const args = buildRequiredArgArgs(requiredPrompts, answers);
 
     args.push(...buildRequiredOptionArgs(requiredOptionPrompts, answers));
 
@@ -716,6 +735,8 @@ module.exports = {
     launchInteractivePanel,
     __private: {
         tokenizeArgString,
+        getRequiredArgPrompts,
+        buildRequiredArgArgs,
         getRequiredOptionPrompts,
         buildRequiredOptionArgs,
         normalizeVariadicValue,

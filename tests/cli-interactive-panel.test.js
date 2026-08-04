@@ -3,6 +3,8 @@ const { Command } = require('commander');
 const {
     __private: {
         tokenizeArgString,
+        getRequiredArgPrompts,
+        buildRequiredArgArgs,
         getRequiredOptionPrompts,
         buildRequiredOptionArgs,
         normalizeVariadicValue,
@@ -70,6 +72,35 @@ function run() {
         ['qwen2.5-coder:7b', 'llama3.2:3b', 'mistral:7b']
     );
 
+    const verifyArgPrompts = getRequiredArgPrompts({ name: 'verify' });
+    assert.deepStrictEqual(
+        verifyArgPrompts.map(({ name, message }) => ({ name, message })),
+        [
+            {
+                name: 'file',
+                message: 'Model file for `verify` (GGUF or safetensors):'
+            }
+        ],
+        'verify should declare its required model file prompt'
+    );
+    assert.strictEqual(
+        verifyArgPrompts[0].validate('   '),
+        'Provide a GGUF or safetensors model file path',
+        'verify should reject an empty model file path'
+    );
+    assert.strictEqual(
+        verifyArgPrompts[0].validate('./models/demo.gguf'),
+        true,
+        'verify should accept a model file path'
+    );
+    assert.deepStrictEqual(
+        buildRequiredArgArgs(verifyArgPrompts, {
+            file: '  ./video fixtures/accepted model.gguf  '
+        }),
+        ['./video fixtures/accepted model.gguf'],
+        'verify should pass the prompted file path as one positional CLI argument'
+    );
+
     const calibrateCommand = new Command('calibrate');
     calibrateCommand.requiredOption('--suite <file>', 'Prompt suite path');
     calibrateCommand.requiredOption('--models <identifiers...>', 'Models');
@@ -107,6 +138,7 @@ function run() {
         commands: [
             createMockCommand('recommend', 'Recommend models'),
             createMockCommand('check', 'Check compatibility'),
+            createMockCommand('verify', 'Verify model structure with modelvet'),
             createMockCommand('help', 'Show all commands and how to use them'),
             createMockCommand('search', 'Search models'),
             createMockCommand('sync', 'Sync database')
@@ -118,8 +150,9 @@ function run() {
 
     const primary = buildPrimaryCommands(catalog);
     assert.strictEqual(primary[0].name, 'check', 'primary ordering should prioritize check');
-    assert.strictEqual(primary[1].name, 'help', 'primary ordering should prioritize help');
-    assert.strictEqual(primary[2].name, 'recommend', 'primary ordering should prioritize recommend');
+    assert.strictEqual(primary[1].name, 'verify', 'primary ordering should place verify after check');
+    assert.strictEqual(primary[2].name, 'help', 'primary ordering should prioritize help');
+    assert.strictEqual(primary[3].name, 'recommend', 'primary ordering should prioritize recommend');
 
     const stateClosed = { paletteOpen: false, query: '', selected: 0 };
     const visibleClosed = getVisibleCommands(stateClosed, catalog, primary);
