@@ -2,6 +2,8 @@ function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const { attachStructuralVerification } = require('./structural-validation');
+
 function toLowerString(value) {
     if (value === undefined || value === null) return '';
     return String(value).trim().toLowerCase();
@@ -265,6 +267,33 @@ function applyPolicyExceptions(policy, evaluated) {
     };
 }
 
+function normalizeVerificationForFinding(verification) {
+    if (!isPlainObject(verification)) {
+        return { verdict: 'unknown', reason: 'unknown' };
+    }
+
+    const verdict = toLowerString(verification.verdict) || 'unknown';
+    if (verdict === 'accept' || verdict === 'reject') {
+        return {
+            verdict,
+            violation_code: Number.isInteger(verification.violation_code)
+                ? verification.violation_code
+                : 'unknown',
+            violation_name: toLowerString(verification.violation_name)
+                ? String(verification.violation_name).trim()
+                : 'unknown',
+            offset: Number.isFinite(verification.offset) ? verification.offset : 'unknown'
+        };
+    }
+
+    const reason =
+        verification.reason === undefined || verification.reason === null
+            ? 'unknown'
+            : String(verification.reason).trim() || 'unknown';
+
+    return { verdict, reason };
+}
+
 function flattenFindings(evaluated) {
     const findings = [];
 
@@ -297,6 +326,7 @@ function flattenFindings(evaluated) {
             version: item.version || item?.provenance?.version || 'unknown',
             license: item.license || item?.provenance?.license || 'unknown',
             digest: item.digest || item?.provenance?.digest || 'unknown',
+            verification: normalizeVerificationForFinding(item.verification),
             exception: policyResult.exceptionApplied || null
         };
 
@@ -365,6 +395,30 @@ function evaluatePolicyCandidates(policyEngine, candidates, context = {}, policy
     };
 }
 
+function hasActiveStructuralValidation(policy) {
+    const rules = isPlainObject(policy) ? policy.rules : null;
+    const structural = isPlainObject(rules) ? rules.structural_validation : null;
+    return isPlainObject(structural) && structural.enabled !== false;
+}
+
+/**
+ * Async variant of evaluatePolicyCandidates. When the active policy contains
+ * a rules.structural_validation rule, candidates are first resolved to local
+ * model files and verified with the modelvet structural verifier (lazy, one
+ * verification per file per call), then evaluated synchronously as usual.
+ * Policies without the rule take the exact synchronous path.
+ */
+async function evaluatePolicyCandidatesAsync(policyEngine, candidates, context = {}, policy = null, options = {}) {
+    const activePolicy = isPlainObject(policy) ? policy : policyEngine?.policy;
+    let prepared = Array.isArray(candidates) ? candidates : [];
+
+    if (hasActiveStructuralValidation(activePolicy)) {
+        prepared = await attachStructuralVerification(prepared, options);
+    }
+
+    return evaluatePolicyCandidates(policyEngine, prepared, context, activePolicy);
+}
+
 function getPolicyMode(policy) {
     return policy?.mode === 'enforce' ? 'enforce' : 'audit';
 }
@@ -405,5 +459,6 @@ module.exports = {
     collectCandidatesFromRecommendationData,
     buildPolicyRuntimeContext,
     evaluatePolicyCandidates,
+    evaluatePolicyCandidatesAsync,
     resolvePolicyEnforcement
 };

@@ -55,7 +55,11 @@ const TESTS = [
     { name: 'Policy engine', file: 'policy-engine.test.js', category: 'Policy' },
     { name: 'Policy audit reporter', file: 'policy-audit-reporter.test.js', category: 'Policy' },
     { name: 'Policy end-to-end', file: 'policy-e2e-integration.test.js', category: 'Policy' },
-    { name: 'MCP server robustness', file: 'mcp-server.test.mjs', category: 'MCP' }
+    { name: 'MCP server robustness', file: 'mcp-server.test.mjs', category: 'MCP' },
+    { name: 'MCP multi-client setup + verify_model', file: 'mcp-multiclient.test.mjs', category: 'MCP' },
+    { name: 'modelvet verify command', file: 'modelvet-verify.test.js', category: 'Security' },
+    { name: 'modelvet Ollama verification gates', file: 'verify-gates.test.js', category: 'Security' },
+    { name: 'Policy structural validation', file: 'policy-structural-validation.test.js', category: 'Security' }
 ];
 
 function runSingleTest(test) {
