@@ -19,6 +19,8 @@ class ROCmDetector {
 
     // AMD PCI device IDs for model name resolution
     static AMD_DEVICE_IDS = {
+        // RDNA 3.5 / Strix Halo integrated graphics
+        '1586': { name: 'AMD Radeon 8060S (Strix Halo)', vram: 16, integrated: true },
         // RDNA 4 / Radeon AI PRO
         '7551': { name: 'AMD Radeon AI PRO R9700', vram: 32 },
         '7590': { name: 'AMD Radeon RX 9060 XT', vram: 16 },
@@ -812,19 +814,27 @@ class ROCmDetector {
 
                 // Try to get VRAM from sysfs for this specific device
                 const sysfsVram = this._getVRAMFromSysfsForDevice(deviceId);
+                const memoryProfile = this.resolveGpuMemoryProfile(name, sysfsVram || vram);
 
                 result.gpus.push({
                     index: idx,
                     name: name,
+                    type: memoryProfile.type,
                     memory: {
-                        total: sysfsVram || vram,
-                        free: sysfsVram || vram,
-                        used: 0
+                        total: memoryProfile.total,
+                        free: memoryProfile.total,
+                        used: 0,
+                        dedicated: memoryProfile.dedicated,
+                        shared: memoryProfile.shared
                     },
+                    dedicatedMemory: memoryProfile.dedicated,
+                    sharedMemory: memoryProfile.shared,
+                    unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
                     capabilities: this.getGPUCapabilities(name),
-                    speedCoefficient: this.calculateSpeedCoefficient(name, sysfsVram || vram)
+                    speedCoefficient: this.calculateSpeedCoefficient(name, memoryProfile.total)
                 });
-                result.totalVRAM += sysfsVram || vram;
+                result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : memoryProfile.total;
+                result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
                 idx++;
             }
 
@@ -876,14 +886,27 @@ class ROCmDetector {
                         }
                     }
 
+                    const memoryProfile = this.resolveGpuMemoryProfile(name, vram);
+
                     result.gpus.push({
                         index: idx,
                         name: name,
-                        memory: { total: vram, free: vram, used: 0 },
+                        type: memoryProfile.type,
+                        memory: {
+                            total: memoryProfile.total,
+                            free: memoryProfile.total,
+                            used: 0,
+                            dedicated: memoryProfile.dedicated,
+                            shared: memoryProfile.shared
+                        },
+                        dedicatedMemory: memoryProfile.dedicated,
+                        sharedMemory: memoryProfile.shared,
+                        unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
                         capabilities: this.getGPUCapabilities(name),
-                        speedCoefficient: this.calculateSpeedCoefficient(name, vram)
+                        speedCoefficient: this.calculateSpeedCoefficient(name, memoryProfile.total)
                     });
-                    result.totalVRAM += vram;
+                    result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : memoryProfile.total;
+                    result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
                     idx++;
                 } catch (e) {
                     continue;

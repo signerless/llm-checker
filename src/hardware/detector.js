@@ -155,6 +155,7 @@ class HardwareDetector {
             const hasGenericModel = !originalModel ||
                 modelLower === 'unknown' ||
                 modelLower.includes('nvidia corporation device') ||
+                /(?:amd|ati|advanced micro devices).*\bdevice\s+[0-9a-f]{4}\b/i.test(originalModel) ||
                 /^device\s+[0-9a-f]{4}$/i.test(originalModel);
 
             if (hasGenericModel && gpu.deviceId) {
@@ -514,6 +515,11 @@ class HardwareDetector {
         return (modelLower.includes('intel') && !modelLower.includes('arc')) ||
             (modelLower.includes('amd') && modelLower.includes('graphics') && !modelLower.includes(' rx ')) ||
             (modelLower.includes('radeon') && modelLower.includes('graphics') && !modelLower.includes('rx')) ||
+            modelLower.includes('radeon 8060s') ||
+            modelLower.includes('strix halo') ||
+            modelLower.includes('gfx1150') ||
+            modelLower.includes('gfx1151') ||
+            modelLower.includes('gfx1152') ||
             modelLower.includes('iris') ||
             modelLower.includes('uhd') ||
             modelLower.includes('hd graphics') ||
@@ -560,6 +566,7 @@ class HardwareDetector {
             '1b80': 'NVIDIA GeForce GTX 1080',
 
             // AMD RDNA 3 / RDNA 2
+            '1586': 'AMD Radeon 8060S (Strix Halo)',
             '744c': 'AMD Radeon RX 7900 XTX',
             '7448': 'AMD Radeon RX 7900 XT',
             '7460': 'AMD Radeon RX 7900 GRE',
@@ -626,6 +633,8 @@ class HardwareDetector {
         if (modelLower.includes('rtx 3060')) return 12;
         
         // AMD RX 7000 series
+        if (modelLower.includes('radeon 8060s') || modelLower.includes('strix halo') ||
+            modelLower.includes('gfx1150') || modelLower.includes('gfx1151') || modelLower.includes('gfx1152')) return 16;
         if (modelLower.includes('rx 7900')) return 24;
         if (modelLower.includes('rx 7800')) return 16;
         if (modelLower.includes('rx 7700')) return 12;

@@ -346,7 +346,6 @@ class UnifiedDetector {
         // a small aperture as VRAM and a much larger shared pool for model-fit
         // decisions, so avoid treating the aperture as dedicated VRAM.
         if (
-            ['rocm', 'intel'].includes(primary?.type) &&
             summary.hasIntegratedGPU &&
             !summary.hasDedicatedGPU &&
             summary.integratedSharedMemory > 0
