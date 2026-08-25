@@ -1414,7 +1414,8 @@ class DeterministicModelSelector {
             runtime = 'ollama',
             hardware: providedHardware = null,
             installedModels = null,
-            modelPool = null
+            modelPool = null,
+            includeUncensored = false
         } = options;
         const normalizedRuntime = normalizeMoERuntime(runtime);
         const optimizationObjective = this.normalizeOptimizationObjective(
@@ -1446,7 +1447,7 @@ class DeterministicModelSelector {
         
         // Combine and dedupe models (prefer installed versions)
         const pool = this.combineModels(installed, externalPool);
-        const filtered = this.filterByCategory(pool, category);
+        const filtered = this.filterByCategory(pool, category, { includeUncensored });
         
         if (!silent) {
             console.log(`Evaluating ${filtered.length} models for ${category} category`);
@@ -1527,9 +1528,29 @@ class DeterministicModelSelector {
         return combined;
     }
 
-    filterByCategory(models, category) {
+    isUncensoredModel(model = {}) {
+        const searchable = [
+            model.model_identifier,
+            model.model_name,
+            model.name,
+            model.description,
+            model.specialization,
+            ...(Array.isArray(model.tags) ? model.tags : [])
+        ]
+            .filter(Boolean)
+            .join(' ');
+
+        return /(?:^|[^a-z0-9])(?:uncensored|abliterated|heretic)(?:[^a-z0-9]|$)/i.test(searchable);
+    }
+
+    filterByCategory(models, category, options = {}) {
+        const includeUncensored = options.includeUncensored === true;
         return models.filter(model => {
             if (this.isCloudVariantTag(model.model_identifier || model.name)) {
+                return false;
+            }
+
+            if (!includeUncensored && this.isUncensoredModel(model)) {
                 return false;
             }
 
@@ -2511,7 +2532,8 @@ class DeterministicModelSelector {
                     runtime,
                     hardware: normalizedHardware,
                     installedModels,
-                    modelPool: normalizedPool
+                    modelPool: normalizedPool,
+                    includeUncensored: options.includeUncensored === true
                 });
 
                 recommendations[category] = {

@@ -4359,6 +4359,7 @@ program
     .option('-c, --category <category>', 'Get recommendations for specific category (coding, talking, reading, etc.)')
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
     .option('--runtime <runtime>', 'Runtime target for registry recommendations (auto|ollama|vllm|mlx|llama.cpp|transformers)', 'auto')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--no-registry', 'Use the legacy Ollama catalog recommendation path')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
@@ -4468,7 +4469,8 @@ Calibrated routing examples:
             const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware, {
                 optimizeFor: options.optimize,
                 runtime: options.runtime,
-                registry: options.registry
+                registry: options.registry,
+                includeUncensored: options.includeUncensored === true
             });
 
             if (!intelligentRecommendations) {
@@ -5433,6 +5435,7 @@ program
     .option('--max-params <billion>', 'Maximum parameter count in billions')
     .option('--target-context <tokens>', 'Target context window for scoring')
     .option('--include-gated', 'Include gated/auth-required artifacts')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--pool-limit <n>', 'Maximum registry artifacts to score before ranking', '20000')
     .option('-l, --limit <n>', 'Maximum number of recommendations', '10')
     .option('-j, --json', 'Output as JSON')
@@ -5474,6 +5477,7 @@ program
                 maxParamsB: parsePositiveNumberOption(options.maxParams),
                 targetContext: parsePositiveNumberOption(options.targetContext),
                 localOnly: !options.includeGated,
+                includeUncensored: options.includeUncensored === true,
                 poolLimit: parsePositiveNumberOption(options.poolLimit, 20000),
                 limit: parsePositiveNumberOption(options.limit, 10),
                 hardware
