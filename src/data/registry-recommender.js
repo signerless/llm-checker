@@ -476,7 +476,8 @@ class RegistryRecommender {
                 targetCtx,
                 hardware: selectorHardware,
                 installedModels: [],
-                modelPool
+                modelPool,
+                includeUncensored: options.includeUncensored === true
             })
             : this.scoreAutoRuntimePool({
                 category,
@@ -484,7 +485,8 @@ class RegistryRecommender {
                 targetCtx,
                 optimizeFor: options.optimizeFor || 'balanced',
                 hardware: selectorHardware,
-                modelPool
+                modelPool,
+                includeUncensored: options.includeUncensored === true
             });
 
         // Collapse quant/shard variants to distinct models, then guarantee source
@@ -567,7 +569,7 @@ class RegistryRecommender {
         };
     }
 
-    scoreAutoRuntimePool({ category, limit, targetCtx, optimizeFor, hardware, modelPool }) {
+    scoreAutoRuntimePool({ category, limit, targetCtx, optimizeFor, hardware, modelPool, includeUncensored = false }) {
         const normalizedHardware = this.selector.normalizeHardwareProfile(hardware);
         const objective = this.selector.normalizeOptimizationObjective(optimizeFor);
         const ctx = targetCtx || this.selector.targetContexts[category] || this.selector.targetContexts.general;
@@ -578,7 +580,7 @@ class RegistryRecommender {
         const isUnified = Boolean(normalizedHardware?.gpu?.unified) || normalizedHardware?.gpu?.type === 'apple_silicon';
         const vram = normalizedHardware?.gpu?.vramGB ?? normalizedHardware?.gpu?.vram ?? 0;
         const budget = isUnified ? usableMem : (vram || usableMem);
-        const filtered = this.selector.filterByCategory(modelPool, category);
+        const filtered = this.selector.filterByCategory(modelPool, category, { includeUncensored });
         const candidates = [];
 
         for (const model of filtered) {

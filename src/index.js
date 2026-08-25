@@ -2493,7 +2493,8 @@ class LLMChecker {
                         optimizeFor,
                         limit: 3,
                         poolLimit: options.poolLimit || 20000,
-                        localOnly: options.includeGated ? false : true
+                        localOnly: options.includeGated ? false : true,
+                        includeUncensored: options.includeUncensored === true
                     });
                     const recommendations = registryResult.recommendations;
                     const hasRegistryRecommendations = Object.values(recommendations)
@@ -2546,7 +2547,11 @@ class LLMChecker {
             const recommendations = await this.intelligentRecommender.getBestModelsForHardware(
                 hardware,
                 allModels,
-                { optimizeFor, runtime: fallbackRuntime }
+                {
+                    optimizeFor,
+                    runtime: fallbackRuntime,
+                    includeUncensored: options.includeUncensored === true
+                }
             );
             const summary = this.intelligentRecommender.generateRecommendationSummary(
                 recommendations,
