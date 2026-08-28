@@ -40,6 +40,7 @@ function isAppleSiliconHardware(hardware = {}) {
 function runtimeSupportedOnHardware(runtime = 'ollama', hardware = {}) {
     const normalized = normalizeRuntime(runtime);
     if (normalized === 'mlx') {
+        if (hardware?.cpuOnly) return false;
         return isAppleSiliconHardware(hardware);
     }
     return true;

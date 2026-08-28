@@ -12,6 +12,7 @@ const CPUDetector = require('./backends/cpu-detector');
 const si = require('systeminformation');
 const { execSync } = require('child_process');
 const { normalizePlatform } = require('../utils/platform');
+const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('./cpu-only');
 
 // Recent GPUs whose PCI device id is not yet resolved to a model name by the
 // distro pci.ids database (so lspci / systeminformation report them as a bare
@@ -32,7 +33,7 @@ const PCI_GPU_MAP = {
 };
 
 class UnifiedDetector {
-    constructor() {
+    constructor(options = {}) {
         this.backends = {
             metal: new AppleSiliconDetector(),
             cuda: new CUDADetector(),
@@ -44,12 +45,27 @@ class UnifiedDetector {
         this.cache = null;
         this.cacheTime = 0;
         this.cacheExpiry = 5 * 60 * 1000;  // 5 minutes
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
+    }
+
+    setCpuOnly(enabled = true) {
+        const nextValue = resolveCpuOnlyMode(enabled);
+        if (nextValue !== this.cpuOnly) {
+            this.cpuOnly = nextValue;
+            this.cache = null;
+            this.cacheTime = 0;
+        }
+        return this;
     }
 
     /**
      * Detect all available hardware and select the best backend
      */
-    async detect() {
+    async detect(options = {}) {
+        if (options && typeof options === 'object' && Object.prototype.hasOwnProperty.call(options, 'cpuOnly')) {
+            this.setCpuOnly(options.cpuOnly);
+        }
+
         if (this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
             return this.cache;
         }
@@ -172,10 +188,17 @@ class UnifiedDetector {
         // Generate fingerprint
         result.fingerprint = this.generateFingerprint(result);
 
-        this.cache = result;
+        const effectiveResult = this.cpuOnly
+            ? applyCpuOnlyOverride(result, { cpuOnly: true, source: 'detector' })
+            : result;
+        if (this.cpuOnly) {
+            effectiveResult.fingerprint = `${this.backends.cpu.getFingerprint()}-cpu-only`;
+        }
+
+        this.cache = effectiveResult;
         this.cacheTime = Date.now();
 
-        return result;
+        return effectiveResult;
     }
 
     /**

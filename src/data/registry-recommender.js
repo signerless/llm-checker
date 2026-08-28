@@ -1,5 +1,7 @@
 const ModelDatabase = require('./model-database');
 const DeterministicModelSelector = require('../models/deterministic-selector');
+const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
+const { runtimeSupportedOnHardware } = require('../runtime/runtime-support');
 
 function toArray(value) {
     return Array.isArray(value) ? value : [];
@@ -361,7 +363,14 @@ function candidateToRecommendation(candidate) {
     };
 }
 
-function normalizeHardwareForSelector(hardware = {}) {
+function normalizeHardwareForSelector(hardware = {}, options = {}) {
+    hardware = applyCpuOnlyOverride(hardware, {
+        ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? { cpuOnly: options.cpuOnly }
+            : {}),
+        source: 'registry-recommender'
+    });
+
     if (hardware.memory?.totalGB && hardware.gpu && hardware.acceleration) {
         return hardware;
     }
@@ -378,25 +387,30 @@ function normalizeHardwareForSelector(hardware = {}) {
     const isRocm = bestBackend === 'rocm';
 
     return {
+        ...hardware,
         cpu: {
+            ...cpuInfo,
             architecture: cpuInfo.architecture || process.arch,
             cores: Number(cpuCores.logical || cpuCores.physical || cpuInfo.cores || 4),
             model: cpuInfo.brand || summary.cpuModel || ''
         },
         gpu: {
+            ...(hardware.gpu || {}),
             type: isMetal ? 'apple_silicon' : (isCuda ? 'nvidia' : (isRocm ? 'amd' : 'cpu_only')),
             model: gpuModel,
             vramGB: totalVRAM,
             totalVRAM,
-            gpuCount: Math.max(1, Number(summary.gpuCount || 1)),
+            gpuCount: hardware.cpuOnly ? 0 : Math.max(1, Number(summary.gpuCount || 1)),
             unified: Boolean(isMetal || (summary.hasIntegratedGPU && !summary.hasDedicatedGPU)),
-            isMultiGPU: Boolean(summary.isMultiGPU)
+            isMultiGPU: hardware.cpuOnly ? false : Boolean(summary.isMultiGPU)
         },
         memory: {
+            ...(hardware.memory || {}),
             totalGB: systemRAM,
             total: systemRAM
         },
         acceleration: {
+            ...(hardware.acceleration || {}),
             supports_metal: isMetal,
             supports_cuda: isCuda,
             supports_rocm: isRocm
@@ -432,7 +446,17 @@ class RegistryRecommender {
 
     async selectCategory(options = {}) {
         const category = options.category || 'general';
-        const runtime = options.runtime || 'auto';
+        const selectorHardware = normalizeHardwareForSelector(options.hardware || {}, {
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {})
+        });
+        const requestedRuntime = options.runtime || 'auto';
+        const requestedRuntimeName = String(requestedRuntime).toLowerCase();
+        const runtime = !['auto', 'all', '*'].includes(requestedRuntimeName) &&
+            !runtimeSupportedOnHardware(requestedRuntime, selectorHardware)
+            ? 'ollama'
+            : requestedRuntime;
         const runtimeFilter = ['auto', 'all', '*'].includes(String(runtime).toLowerCase()) ? undefined : runtime;
         const limit = Number(options.limit) > 0 ? Number(options.limit) : 10;
         const poolLimit = Number(options.poolLimit) > 0 ? Number(options.poolLimit) : 20000;
@@ -451,7 +475,6 @@ class RegistryRecommender {
         });
         const modelPool = dedupeRecommendationPool(rows.map(artifactToSelectorModel).filter(Boolean));
 
-        const selectorHardware = normalizeHardwareForSelector(options.hardware || {});
         const normalizedRuntime = runtimeFilter || 'auto';
 
         // No registry artifacts matched the filters: return an empty result rather
@@ -484,6 +507,9 @@ class RegistryRecommender {
                 optimizeFor: options.optimizeFor || 'balanced',
                 runtime: runtimeFilter,
                 targetCtx,
+                ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                    ? { cpuOnly: options.cpuOnly }
+                    : {}),
                 hardware: selectorHardware,
                 installedModels: [],
                 modelPool,
@@ -494,6 +520,9 @@ class RegistryRecommender {
                 limit: rankWindow,
                 targetCtx,
                 optimizeFor: options.optimizeFor || 'balanced',
+                ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                    ? { cpuOnly: options.cpuOnly }
+                    : {}),
                 hardware: selectorHardware,
                 modelPool,
                 includeUncensored: options.includeUncensored === true
@@ -543,7 +572,8 @@ class RegistryRecommender {
                     ].filter(Boolean).join('|'));
                 }
                 const normalizedHardware = this.selector.normalizeHardwareProfile(
-                    normalizeHardwareForSelector(hardware || {})
+                    normalizeHardwareForSelector(hardware || {}, options),
+                    options
                 );
                 recommendations[category] = {
                     tier: this.selector.mapHardwareTier(normalizedHardware),
@@ -579,8 +609,20 @@ class RegistryRecommender {
         };
     }
 
-    scoreAutoRuntimePool({ category, limit, targetCtx, optimizeFor, hardware, modelPool, includeUncensored = false }) {
-        const normalizedHardware = this.selector.normalizeHardwareProfile(hardware);
+    scoreAutoRuntimePool({
+        category,
+        limit,
+        targetCtx,
+        optimizeFor,
+        hardware,
+        modelPool,
+        cpuOnly,
+        includeUncensored = false
+    }) {
+        const normalizedHardware = this.selector.normalizeHardwareProfile(
+            hardware,
+            cpuOnly === undefined ? {} : { cpuOnly }
+        );
         const objective = this.selector.normalizeOptimizationObjective(optimizeFor);
         const ctx = targetCtx || this.selector.targetContexts[category] || this.selector.targetContexts.general;
         const totalMem = normalizedHardware?.memory?.totalGB ?? normalizedHardware?.memory?.total ?? 8;
@@ -594,11 +636,19 @@ class RegistryRecommender {
         const candidates = [];
 
         for (const model of filtered) {
-            const runtime = model.preferredRuntime || choosePreferredRuntime(
+            const preferredRuntime = model.preferredRuntime || choosePreferredRuntime(
                 model.artifact?.runtime_support,
                 model.artifact?.format,
                 model.source
             );
+            const runtimeCandidates = [
+                preferredRuntime,
+                ...toArray(model.artifact?.runtime_support)
+            ].filter((runtime, index, values) => runtime && values.indexOf(runtime) === index);
+            const runtime = runtimeCandidates.find((candidateRuntime) =>
+                runtimeSupportedOnHardware(candidateRuntime, normalizedHardware)
+            );
+            if (!runtime) continue;
             const candidate = this.selector.evaluateModel(
                 model,
                 normalizedHardware,

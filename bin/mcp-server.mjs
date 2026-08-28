@@ -31,6 +31,7 @@ const require = createRequire(import.meta.url);
 // model files (verify-before-load). Loaded via createRequire because this
 // server is ESM and the verifier is CommonJS.
 const modelvet = require("../src/security/modelvet-verifier.js");
+const { resolveCpuOnlyMode } = require("../src/hardware/cpu-only.js");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -131,6 +132,26 @@ function tryParseJSON(text) {
   } catch {
     return null;
   }
+}
+
+function buildOllamaGenerationPayload(body = {}, cpuOnly = resolveCpuOnlyMode()) {
+  if (!cpuOnly) return body;
+  return {
+    ...body,
+    options: {
+      ...(body.options || {}),
+      num_gpu: 0,
+    },
+  };
+}
+
+function applyCpuOnlyOptimizationEnv(envVars = {}, cpuOnly = resolveCpuOnlyMode()) {
+  if (!cpuOnly) return envVars;
+  return {
+    ...envVars,
+    OLLAMA_NUM_GPU: "0",
+    OLLAMA_FLASH_ATTENTION: "0",
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -910,7 +931,11 @@ server.tool(
   },
   async ({ model, prompt }) => {
     try {
-      const data = await ollamaAPI("/api/generate", { model, prompt, stream: false }, 300000);
+      const data = await ollamaAPI(
+        "/api/generate",
+        buildOllamaGenerationPayload({ model, prompt, stream: false }),
+        300000
+      );
       const tokPerSec = formatTokPerSec(tokensPerSecond(data.eval_count, data.eval_duration));
       const result = [
         `MODEL: ${model}`,
@@ -957,6 +982,7 @@ server.tool(
       const hwJsonText = await run(["hw-detect", "--json"]);
       const hwJson = tryParseJSON(hwJsonText);
       const { tier, vramGB } = mapHardwareJson(hwJson || {});
+      const cpuOnly = Boolean(hwJson?.cpuOnly) || resolveCpuOnlyMode();
 
       const totalMem = os.totalmem();
       const freeMem = os.freemem();
@@ -999,14 +1025,14 @@ server.tool(
       if (totalGB >= 32) keepAlive = "15m";
       if (totalGB >= 64) keepAlive = "30m";
 
-      const envVars = {
+      const envVars = applyCpuOnlyOptimizationEnv({
         OLLAMA_NUM_GPU: String(numGPU),
         OLLAMA_NUM_PARALLEL: String(numParallel),
         OLLAMA_MAX_LOADED_MODELS: String(maxLoaded),
         OLLAMA_FLASH_ATTENTION: flashAttn,
         OLLAMA_KEEP_ALIVE: keepAlive,
         OLLAMA_NUM_CTX: String(ctxSize),
-      };
+      }, cpuOnly);
 
       // Shell export commands
       const exportLines = Object.entries(envVars)
@@ -1023,12 +1049,13 @@ server.tool(
         `====================================`,
         `Hardware: ${cpuCount} cores, ${totalGB}GB total RAM, ${freeGB}GB free`,
         `Platform: ${platform} | Tier: ${tier}${vramGB !== null ? ` | VRAM: ${vramGB}GB` : ""}`,
+        `Execution mode: ${cpuOnly ? "CPU-only (GPU disabled)" : "automatic"}`,
         ``,
         `RECOMMENDED ENVIRONMENT VARIABLES:`,
         `----------------------------------`,
         ...Object.entries(envVars).map(([k, v]) => {
           const desc = {
-            OLLAMA_NUM_GPU: "GPU layers (999 = all layers offloaded to GPU)",
+            OLLAMA_NUM_GPU: "GPU layers (0 = CPU-only, 999 = all layers offloaded to GPU)",
             OLLAMA_NUM_PARALLEL: "Concurrent request slots",
             OLLAMA_MAX_LOADED_MODELS: "Models kept in memory simultaneously",
             OLLAMA_FLASH_ATTENTION: "Flash attention for faster inference",
@@ -1084,7 +1111,7 @@ server.tool(
       for (let i = 0; i < iterations; i++) {
         const data = await ollamaAPI(
           "/api/generate",
-          { model, prompt: benchPrompt, stream: false },
+          buildOllamaGenerationPayload({ model, prompt: benchPrompt, stream: false }),
           300000
         );
 
@@ -1172,8 +1199,16 @@ server.tool(
     try {
       // M3: run sequentially so the two models do not contend for GPU/RAM.
       // Each measurement is taken while the other model is not executing.
-      const resultA = await ollamaAPI("/api/generate", { model: model_a, prompt: testPrompt, stream: false }, 300000);
-      const resultB = await ollamaAPI("/api/generate", { model: model_b, prompt: testPrompt, stream: false }, 300000);
+      const resultA = await ollamaAPI(
+        "/api/generate",
+        buildOllamaGenerationPayload({ model: model_a, prompt: testPrompt, stream: false }),
+        300000
+      );
+      const resultB = await ollamaAPI(
+        "/api/generate",
+        buildOllamaGenerationPayload({ model: model_b, prompt: testPrompt, stream: false }),
+        300000
+      );
 
       function metrics(data) {
         const evalTokens = data.eval_count || 0;
@@ -1606,6 +1641,8 @@ export {
   tokensPerSecond,
   formatTokPerSec,
   mapHardwareJson,
+  buildOllamaGenerationPayload,
+  applyCpuOnlyOptimizationEnv,
   detectFrameworkMarker,
   FRAMEWORK_MARKERS,
   canonicalPath,
