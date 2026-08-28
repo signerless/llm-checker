@@ -35,34 +35,127 @@ function parseModelSizeGB(value) {
     return amount * 0.55;
 }
 
-function flattenGPUs(hardware = {}) {
-    const gpus = [];
-    const backends = hardware.backends || {};
+function inferGPUInventoryType(gpu = {}, backend = '') {
+    const explicitType = String(gpu.type || '').toLowerCase();
+    if (explicitType === 'integrated' || explicitType === 'dedicated') return explicitType;
+    if (backend === 'metal') return 'integrated';
 
-    for (const [backend, data] of Object.entries(backends)) {
-        if (!data || !data.available || !data.info) continue;
+    const name = String(gpu.name || gpu.model || '').toLowerCase();
+    const dedicatedPattern = /(geforce|\brtx\b|\bgtx\b|radeon\s*(?:\(tm\))?\s*rx|\brx\s?\d|quadro|tesla|instinct|\barc\s*a\d|a\d{3,}|h100|h200|l40)/i;
+    if (dedicatedPattern.test(name)) return 'dedicated';
 
-        if (Array.isArray(data.info.gpus) && data.info.gpus.length > 0) {
-            for (const gpu of data.info.gpus) {
-                gpus.push({
-                    backend,
-                    name: gpu.name || `${backend.toUpperCase()} GPU`,
-                    vramGB: gpu.memory?.total || 0,
-                    speedCoefficient: gpu.speedCoefficient || 0
-                });
-            }
-            continue;
-        }
+    const integratedPattern = /(intel|iris|uhd|hd graphics|radeon.*graphics|\b\d{3,4}m\b|vega|apple|tegra|jetson)/i;
+    return integratedPattern.test(name) ? 'integrated' : 'dedicated';
+}
 
-        // Apple Metal detector reports a single GPU differently.
-        if (backend === 'metal') {
-            gpus.push({
+function getGPUModelMatchKey(name) {
+    const lower = String(name || '').toLowerCase();
+    if (!lower) return '';
+
+    // Dedicated backends and systeminformation often describe the same card
+    // differently (for example "RTX 3090" vs "GA102 [GeForce RTX 3090]").
+    const familyMatch = lower.match(/\b(rtx|gtx|rx|arc)\s*[- ]?([a-z]?\d{3,4})\b/);
+    if (familyMatch) return `${familyMatch[1]}${familyMatch[2]}`;
+
+    const acceleratorMatch = lower.match(/\b(a\d{3,4}|h\d{3,4}|l\d{2}s?|mi\d{2,4}x?)\b/);
+    if (acceleratorMatch) return acceleratorMatch[1];
+
+    const bracketPciId = lower.match(/\[[0-9a-f]{4}:([0-9a-f]{4})\]/);
+    if (bracketPciId) return `pci:${bracketPciId[1]}`;
+    const barePciId = lower.match(/\bdevice\s+([0-9a-f]{4})\b/);
+    if (barePciId) return `pci:${barePciId[1]}`;
+
+    return lower
+        .replace(/nvidia|amd|ati|intel|corporation|geforce|radeon|graphics/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getGPUCrossBackendKeys(gpu = {}, backend = '') {
+    const keys = new Set();
+    const type = inferGPUInventoryType(gpu, backend);
+
+    for (const uuid of [gpu.uuid, gpu.gpuUuid, gpu.gpuUUID]) {
+        const normalized = String(uuid || '').trim().toLowerCase();
+        if (normalized) keys.add(`uuid:${normalized}`);
+    }
+
+    for (const address of [gpu.pciBus, gpu.busAddress, gpu.pcie?.busId, gpu.pcie?.busAddress]) {
+        const raw = String(address || '').trim().toLowerCase();
+        const normalized = raw.match(/([0-9a-f]{2}:[0-9a-f]{2}\.[0-7])$/)?.[1] || raw;
+        if (normalized) keys.add(`pci-bus:${normalized}`);
+    }
+
+    const modelKey = getGPUModelMatchKey(gpu.name || gpu.model);
+    if (modelKey) keys.add(`model:${modelKey}|${type}`);
+
+    return keys;
+}
+
+function getBackendGPUEntries(backend, data) {
+    if (!data || !data.available || !data.info) return [];
+
+    if (Array.isArray(data.info.gpus) && data.info.gpus.length > 0) {
+        return data.info.gpus.map((gpu) => ({
+            backend,
+            source: gpu,
+            flattened: {
                 backend,
-                name: data.info.chip || 'Apple Silicon GPU',
-                vramGB: data.info.memory?.unified || 0,
+                name: gpu.name || `${backend.toUpperCase()} GPU`,
+                vramGB: gpu.memory?.total || 0,
+                speedCoefficient: gpu.speedCoefficient || 0
+            }
+        }));
+    }
+
+    // Apple Metal detector reports a single GPU differently.
+    if (backend === 'metal') {
+        const source = {
+            name: data.info.chip || 'Apple Silicon GPU',
+            type: 'integrated',
+            memory: { total: data.info.memory?.unified || 0 }
+        };
+        return [{
+            backend,
+            source,
+            flattened: {
+                backend,
+                name: source.name,
+                vramGB: source.memory.total,
                 speedCoefficient: data.info.speedCoefficient || 0
-            });
+            }
+        }];
+    }
+
+    return [];
+}
+
+function flattenGPUs(hardware = {}) {
+    const backends = hardware.backends || {};
+    const entries = Object.entries(backends)
+        .flatMap(([backend, data]) => getBackendGPUEntries(backend, data));
+    const specializedKeys = new Set();
+
+    // Dedicated detector output is authoritative. Preserve every entry inside
+    // each specialized backend so two real, identical GPUs remain two devices;
+    // use those identities only to suppress duplicate generic inventory views.
+    for (const entry of entries) {
+        if (entry.backend === 'generic') continue;
+        for (const key of getGPUCrossBackendKeys(entry.source, entry.backend)) {
+            specializedKeys.add(key);
         }
+    }
+
+    const gpus = [];
+    for (const entry of entries) {
+        if (entry.backend === 'generic') {
+            const isDuplicate = Array.from(getGPUCrossBackendKeys(entry.source, entry.backend))
+                .some((key) => specializedKeys.has(key));
+            if (isDuplicate) continue;
+        }
+
+        gpus.push(entry.flattened);
     }
 
     return gpus;
