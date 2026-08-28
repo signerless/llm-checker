@@ -161,6 +161,7 @@ function calculateMemoryFactor(modelSizeB, availableInferenceMemoryGB) {
 }
 
 function estimateTokenSpeedFromHardware(hardware = {}, options = {}) {
+    const cpuOnly = Boolean(hardware.cpuOnly);
     const cpuModel = String(hardware.cpu?.brand || hardware.cpu?.model || '');
     const gpuModel = String(hardware.gpu?.model || '');
     const architecture = String(hardware.cpu?.architecture || '');
@@ -190,8 +191,8 @@ function estimateTokenSpeedFromHardware(hardware = {}, options = {}) {
         )
     );
 
-    const appleSilicon = detectAppleSilicon(architecture, cpuModel, gpuModel);
-    const integrated = detectIntegratedGpu(hardware, gpuModel);
+    const appleSilicon = !cpuOnly && detectAppleSilicon(architecture, cpuModel, gpuModel);
+    const integrated = !cpuOnly && detectIntegratedGpu(hardware, gpuModel);
     const dedicatedGPU = detectDedicatedGpu(hardware, integrated, appleSilicon, vramGB);
 
     let baselineTPS7B;

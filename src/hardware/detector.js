@@ -1,14 +1,18 @@
 const si = require('systeminformation');
 const UnifiedDetector = require('./unified-detector');
 const { normalizePlatform } = require('../utils/platform');
+const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('./cpu-only');
 
 class HardwareDetector {
-    constructor() {
+    constructor(options = {}) {
         this.cache = null;
         this.cacheExpiry = 5 * 60 * 1000;
         this.cacheTime = 0;
-        this.unifiedDetector = new UnifiedDetector();
+        // Keep the canonical detector unprojected here. HardwareDetector applies
+        // CPU-only after enrichment so the real GPU remains available as diagnostics.
+        this.unifiedDetector = options.unifiedDetector || new UnifiedDetector({ cpuOnly: false });
         this._simulatedHardware = null;
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
     }
 
     setSimulatedHardware(hardwareObject) {
@@ -19,14 +23,37 @@ class HardwareDetector {
         this._simulatedHardware = null;
     }
 
-    async getSystemInfo(forceFresh = false) {
+    setCpuOnly(enabled = true) {
+        this.cpuOnly = resolveCpuOnlyMode(enabled);
+        return this;
+    }
+
+    applyExecutionMode(hardware, explicitCpuOnly) {
+        const cpuOnly = explicitCpuOnly === undefined
+            ? this.cpuOnly
+            : resolveCpuOnlyMode(explicitCpuOnly);
+        return cpuOnly
+            ? applyCpuOnlyOverride(hardware, { cpuOnly: true, source: 'hardware-detector' })
+            : hardware;
+    }
+
+    async getSystemInfo(forceFresh = false, options = {}) {
+        if (forceFresh && typeof forceFresh === 'object') {
+            options = forceFresh;
+            forceFresh = false;
+        }
+        if (!options || typeof options !== 'object') options = {};
+        const explicitCpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? options.cpuOnly
+            : undefined;
+
         // Return simulated hardware if set (bypasses real detection)
         if (this._simulatedHardware) {
-            return this._simulatedHardware;
+            return this.applyExecutionMode(this._simulatedHardware, explicitCpuOnly);
         }
 
         if (!forceFresh && this.cache && (Date.now() - this.cacheTime < this.cacheExpiry)) {
-            return this.cache;
+            return this.applyExecutionMode(this.cache, explicitCpuOnly);
         }
 
         try {
@@ -52,7 +79,7 @@ class HardwareDetector {
             this.cache = systemInfo;
             this.cacheTime = Date.now();
 
-            return systemInfo;
+            return this.applyExecutionMode(systemInfo, explicitCpuOnly);
         } catch (error) {
             throw new Error(`Failed to detect hardware: ${error.message}`);
         }

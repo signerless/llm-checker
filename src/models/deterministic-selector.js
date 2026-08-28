@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('../hardware/cpu-only');
 const { spawn } = require('child_process');
 const OllamaClient = require('../ollama/client');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
@@ -22,10 +23,13 @@ const {
 } = require('./moe-assumptions');
 
 class DeterministicModelSelector {
-    constructor() {
+    constructor(options = {}) {
+        this.hasExplicitCpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly');
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
+        this.activeCpuOnly = this.cpuOnly;
         this.catalogPath = path.join(__dirname, 'catalog.json');
         this.benchCachePath = path.join(os.homedir(), '.llm-checker', 'bench.json');
-        this.ollamaClient = new OllamaClient();
+        this.ollamaClient = options.ollamaClient || new OllamaClient({ cpuOnly: this.cpuOnly });
         this.ollamaCachePaths = [
             path.join(os.homedir(), '.llm-checker', 'cache', 'ollama', 'ollama-detailed-models.json'),
             path.join(__dirname, '../ollama/.cache/ollama-detailed-models.json')
@@ -174,7 +178,18 @@ class DeterministicModelSelector {
      * - gpu.vramGB
      * - acceleration.supports_*
      */
-    normalizeHardwareProfile(input = {}) {
+    normalizeHardwareProfile(input = {}, options = {}) {
+        const hasExplicitCpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly');
+        const hasInputCpuOnly = Object.prototype.hasOwnProperty.call(input, 'cpuOnly');
+        const effectiveCpuOnly = hasExplicitCpuOnly
+            ? resolveCpuOnlyMode(options.cpuOnly)
+            : (hasInputCpuOnly ? resolveCpuOnlyMode(input.cpuOnly) : this.cpuOnly);
+        const shouldExposeCpuOnlyMode = hasExplicitCpuOnly || hasInputCpuOnly ||
+            this.hasExplicitCpuOnly || effectiveCpuOnly;
+        input = applyCpuOnlyOverride(input, {
+            cpuOnly: effectiveCpuOnly,
+            source: 'deterministic-selector'
+        });
         const toNumber = (value) => {
             if (typeof value === 'number' && Number.isFinite(value)) return value;
             if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
@@ -277,6 +292,7 @@ class DeterministicModelSelector {
 
         return {
             ...input,
+            ...(shouldExposeCpuOnlyMode ? { cpuOnly: effectiveCpuOnly } : {}),
             cpu: {
                 ...cpu,
                 architecture: cpu.architecture || cpu.arch || process.arch || 'x86_64',
@@ -1435,8 +1451,16 @@ class DeterministicModelSelector {
         }
         
         // Phase 0: Gather data
-        const detectedHardware = providedHardware || await this.getHardware();
-        const hardware = this.normalizeHardwareProfile(detectedHardware);
+        const rawHardware = providedHardware || await this.getHardware();
+        const hardware = this.normalizeHardwareProfile(rawHardware, {
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {})
+        });
+        this.activeCpuOnly = Boolean(hardware.cpuOnly);
+        if (typeof this.ollamaClient.setCpuOnly === 'function') {
+            this.ollamaClient.setCpuOnly(this.activeCpuOnly);
+        }
         const installed = Array.isArray(installedModels) ? installedModels : await this.getInstalledModels();
         const externalPool = Array.isArray(modelPool) && modelPool.length > 0
             ? (modelPool.some(model => typeof model?.paramsB === 'number' && model?.model_identifier)
@@ -1898,10 +1922,12 @@ class DeterministicModelSelector {
 
     estimateSpeedProfile(hardware, model, quant, category, runtime = 'ollama') {
         // Determine backend
+        const cpuArchitecture = String(hardware.cpu?.architecture || '').toLowerCase();
+        const isArmCpu = /(?:arm64|aarch64|apple\s+silicon)/.test(cpuArchitecture);
         let backend = 'cpu_x86';
         if (hardware.acceleration.supports_metal) backend = 'metal';
         else if (hardware.acceleration.supports_cuda) backend = 'cuda';
-        else if (hardware.cpu.architecture === 'arm64') backend = 'cpu_arm';
+        else if (isArmCpu) backend = 'cpu_arm';
         
         // Base speed calculation
         const K = this.backendK[backend];
@@ -2237,6 +2263,10 @@ class DeterministicModelSelector {
     // ============================================================================
 
     async runQuickProbes(candidates, hardware, category) {
+        this.activeCpuOnly = Boolean(hardware?.cpuOnly);
+        if (typeof this.ollamaClient.setCpuOnly === 'function') {
+            this.ollamaClient.setCpuOnly(this.activeCpuOnly);
+        }
         // Load cached results
         const cache = this.loadBenchCache();
         const hardwareFingerprint = this.getHardwareFingerprint(hardware);
@@ -2287,7 +2317,8 @@ class DeterministicModelSelector {
 
         const result = await this.ollamaClient.generate(modelId, prompt, {
             generationOptions: {
-                num_predict: targetTokens
+                num_predict: targetTokens,
+                ...(this.activeCpuOnly ? { num_gpu: 0 } : {})
             }
         });
 
@@ -2357,7 +2388,10 @@ class DeterministicModelSelector {
     }
 
     getHardwareFingerprint(hardware) {
-        return `${hardware.cpu.architecture}_${hardware.cpu.cores}c_${hardware.memory.totalGB}gb_${hardware.gpu.type}`;
+        const executionMode = hardware.cpuOnly
+            ? 'cpu-only'
+            : (hardware.summary?.bestBackend || hardware.gpu.type || 'cpu');
+        return `${hardware.cpu.architecture}_${hardware.cpu.cores}c_${hardware.memory.totalGB}gb_${executionMode}`;
     }
 
     // ============================================================================
@@ -2513,7 +2547,11 @@ class DeterministicModelSelector {
         const recommendations = {};
         const normalizedPool = this.normalizeExternalModels(Array.isArray(allModels) ? allModels : []);
         const installedModels = await this.getInstalledModels();
-        const normalizedHardware = this.normalizeHardwareProfile(hardware || await this.getHardware());
+        const normalizedHardware = this.normalizeHardwareProfile(hardware || await this.getHardware(), {
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {})
+        });
         const runtime = normalizeMoERuntime(options.runtime || 'ollama');
         const optimizationObjective = this.normalizeOptimizationObjective(
             options.optimizeFor || options.optimize || options.objective
@@ -2527,6 +2565,9 @@ class DeterministicModelSelector {
                     silent: true,
                     optimizeFor: optimizationObjective,
                     runtime,
+                    ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                        ? { cpuOnly: options.cpuOnly }
+                        : {}),
                     hardware: normalizedHardware,
                     installedModels,
                     modelPool: normalizedPool,

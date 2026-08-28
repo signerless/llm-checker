@@ -18,6 +18,7 @@ const { getLogger } = require('../src/utils/logger');
 const fs = require('fs');
 const path = require('path');
 const { normalizePlatform, isTermuxEnvironment } = require('../src/utils/platform');
+const { resolveCpuOnlyMode } = require('../src/hardware/cpu-only');
 const {
     SUPPORTED_RUNTIMES,
     normalizeRuntime,
@@ -95,6 +96,17 @@ function displayRecommendationCommandNote(command) {
     if (!note) return;
     console.log(chalk.gray(`Recommendation mode: ${note}`));
     console.log('');
+}
+
+function getCpuOnlyCommandMode(options = {}) {
+    return resolveCpuOnlyMode(options.cpuOnly ? true : undefined);
+}
+
+function displayCpuOnlyModeNotice(cpuOnly, simulated = false) {
+    if (!cpuOnly) return;
+    const source = simulated ? 'Simulated CPU and RAM are retained; simulated GPU is diagnostic only.' : 'Detected GPU inventory is diagnostic only.';
+    console.log(chalk.yellow.bold('\n  CPU-ONLY MODE: GPU acceleration and VRAM are disabled.'));
+    console.log(chalk.gray(`  ${source}\n`));
 }
 
 // Function to search Ollama models by use case
@@ -1378,27 +1390,41 @@ function getOllamaCommand(modelName) {
 }
 
 function displaySystemInfo(hardware, analysis) {
+    const cpuOnly = Boolean(hardware.cpuOnly);
     const cpuColor = hardware.cpu.cores >= 8 ? chalk.green : hardware.cpu.cores >= 4 ? chalk.yellow : chalk.red;
     const ramColor = hardware.memory.total >= 32 ? chalk.green : hardware.memory.total >= 16 ? chalk.yellow : chalk.red;
-    const gpuColor = hardware.gpu.dedicated ? chalk.green : chalk.hex('#FFA500');
-    const integratedList = formatGpuInventoryList(hardware.gpu.integratedGpuModels || hardware.summary?.integratedGpuModels);
-    const dedicatedList = formatGpuInventoryList(hardware.gpu.dedicatedGpuModels || hardware.summary?.dedicatedGpuModels);
+    const gpuColor = cpuOnly ? chalk.gray : (hardware.gpu.dedicated ? chalk.green : chalk.hex('#FFA500'));
+    const integratedInventory = cpuOnly
+        ? hardware.detectedGpu?.integratedGpuModels
+        : (hardware.gpu.integratedGpuModels || hardware.summary?.integratedGpuModels);
+    const dedicatedInventory = cpuOnly
+        ? hardware.detectedGpu?.dedicatedGpuModels
+        : (hardware.gpu.dedicatedGpuModels || hardware.summary?.dedicatedGpuModels);
+    const integratedList = formatGpuInventoryList(integratedInventory);
+    const dedicatedList = formatGpuInventoryList(dedicatedInventory);
     const integratedSharedMemory = hardware.gpu.sharedMemory || hardware.summary?.integratedSharedMemory || 0;
-    const vramDisplay = !hardware.gpu.dedicated && integratedSharedMemory > 0
+    const vramDisplay = cpuOnly
+        ? 'Disabled (CPU-only)'
+        : (!hardware.gpu.dedicated && integratedSharedMemory > 0
         ? `${integratedSharedMemory}GB shared`
         : (hardware.gpu.vram === 0 && hardware.gpu.model && hardware.gpu.model.toLowerCase().includes('apple')
             ? 'Unified Memory'
-            : `${hardware.gpu.vram || 'N/A'}GB`);
+            : `${hardware.gpu.vram || 'N/A'}GB`));
+    const gpuDisplay = cpuOnly ? 'Disabled by CPU-only mode' : (hardware.gpu.model || 'Not detected');
+    const gpuTypeSuffix = cpuOnly
+        ? ''
+        : (hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)'));
+    const inventorySuffix = cpuOnly ? ' (diagnostic)' : '';
 
     const lines = [
         `${chalk.cyan('CPU:')} ${cpuColor(hardware.cpu.brand)} ${chalk.gray(`(${hardware.cpu.cores} cores, ${hardware.cpu.speed}GHz)`)}`,
         `${chalk.cyan('Architecture:')} ${hardware.cpu.architecture}`,
         `${chalk.cyan('RAM:')} ${ramColor(hardware.memory.total + 'GB')}`,
-        `${chalk.cyan('GPU:')} ${gpuColor(hardware.gpu.model || 'Not detected')}`,
+        `${chalk.cyan('GPU:')} ${gpuColor(gpuDisplay)}`,
         `${chalk.cyan('Backend:')} ${chalk.white(getBackendLabelForDisplay(hardware))}`,
-        `${chalk.cyan('VRAM:')} ${vramDisplay}${hardware.gpu.dedicated ? chalk.green(' (Dedicated)') : chalk.hex('#FFA500')(' (Integrated)')}`,
-        `${chalk.cyan('Dedicated GPUs:')} ${chalk.green(dedicatedList)}`,
-        `${chalk.cyan('Integrated GPUs:')} ${chalk.hex('#FFA500')(integratedList)}`,
+        `${chalk.cyan('VRAM:')} ${vramDisplay}${gpuTypeSuffix}`,
+        `${chalk.cyan(`Dedicated GPUs${inventorySuffix}:`)} ${chalk.green(dedicatedList)}`,
+        `${chalk.cyan(`Integrated GPUs${inventorySuffix}:`)} ${chalk.hex('#FFA500')(integratedList)}`,
     ];
 
     const tier = analysis.summary.hardwareTier?.replace(/_/g, ' ').toUpperCase() || getHardwareTierForDisplay(hardware);
@@ -3750,6 +3776,7 @@ program
     .option('--show-ollama-analysis', 'Show detailed Ollama model analysis')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--cpu-only', 'Force CPU/RAM execution even when a GPU is detected')
     .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
     .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
     .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
@@ -3765,8 +3792,12 @@ Enterprise policy examples:
 Hardware simulation:
   $ llm-checker check --simulate list
   $ llm-checker check --simulate rtx4090
+  $ llm-checker check --simulate rtx4090 --cpu-only
   $ llm-checker check --simulate m4pro24 --use-case coding
   $ llm-checker check --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
+
+CPU-only precedence:
+  - --cpu-only keeps the selected real/simulated CPU and RAM, but disables its GPU for fit and scoring
 
 Policy scope:
   - Evaluates all compatible and marginal candidates discovered during analysis
@@ -3779,7 +3810,8 @@ Policy scope:
         try {
             // Use verbose progress unless explicitly disabled
             const verboseEnabled = options.verbose !== false;
-            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            const cpuOnly = getCpuOnlyCommandMode(options);
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled, cpuOnly });
             const policyConfig = options.policy ? loadPolicyConfiguration(options.policy) : null;
 
             // Handle hardware simulation (preset profile or custom flags)
@@ -3831,6 +3863,7 @@ Policy scope:
                 checker.setSimulatedHardware(simulatedHardware);
                 console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
             }
+            displayCpuOnlyModeNotice(cpuOnly, checker.isSimulated);
 
             // If verbose is disabled, show simple loading message
             if (!verboseEnabled) {
@@ -3891,7 +3924,8 @@ Policy scope:
                 maxSize: maxSize,
                 minSize: minSize,
                 runtime: selectedRuntime,
-                includeUncensored: options.includeUncensored === true
+                includeUncensored: options.includeUncensored === true,
+                cpuOnly
             });
 
             if (!verboseEnabled) {
@@ -4379,6 +4413,7 @@ program
     .option('--no-verbose', 'Disable step-by-step progress display')
     .option('--policy <file>', 'Evaluate recommendations against a policy file')
     .option('--simulate <profile>', 'Simulate a hardware profile instead of detecting real hardware (use "list" to see profiles)')
+    .option('--cpu-only', 'Force CPU/RAM execution even when a GPU is detected')
     .option('--gpu <model>', 'Custom GPU model for simulation (e.g., "RTX 5060", "RX 7800 XT")')
     .option('--ram <gb>', 'Custom RAM in GB for simulation (e.g., 32)')
     .option('--cpu <model>', 'Custom CPU model for simulation (e.g., "AMD Ryzen 7 5700X")')
@@ -4397,8 +4432,12 @@ Enterprise policy examples:
 
 Hardware simulation:
   $ llm-checker recommend --simulate rtx4090
+  $ llm-checker recommend --simulate rtx4090 --cpu-only
   $ llm-checker recommend --simulate m4pro24 --category coding
   $ llm-checker recommend --gpu "RTX 5060" --ram 32 --cpu "AMD Ryzen 7 5700X"
+
+CPU-only precedence:
+  - --cpu-only keeps the selected real/simulated CPU and RAM, but disables its GPU for fit and scoring
 
 Registry/runtime examples:
   $ llm-checker recommend --runtime auto --category coding
@@ -4416,7 +4455,8 @@ Calibrated routing examples:
         displayRecommendationCommandNote('recommend');
         try {
             const verboseEnabled = options.verbose !== false;
-            const checker = new (getLLMChecker())({ verbose: verboseEnabled });
+            const cpuOnly = getCpuOnlyCommandMode(options);
+            const checker = new (getLLMChecker())({ verbose: verboseEnabled, cpuOnly });
 
             // Handle hardware simulation (preset profile or custom flags)
             const hasCustomHwFlags = options.gpu || options.ram || options.cpu || options.vram;
@@ -4467,6 +4507,7 @@ Calibrated routing examples:
                 checker.setSimulatedHardware(simulatedHardware);
                 console.log(chalk.magenta.bold(`\n  SIMULATION MODE: ${displayLabel}\n`));
             }
+            displayCpuOnlyModeNotice(cpuOnly, checker.isSimulated);
 
             const routingPreference = resolveRoutingPolicyPreference({
                 policyOption: options.policy,
@@ -4481,11 +4522,24 @@ Calibrated routing examples:
             }
 
             const hardware = await checker.getSystemInfo();
+            let recommendationRuntime = options.runtime;
+            const requestedRuntimeName = String(options.runtime || 'auto').toLowerCase();
+            if (
+                !['auto', 'all', '*'].includes(requestedRuntimeName) &&
+                !runtimeSupportedOnHardware(options.runtime, hardware)
+            ) {
+                const runtimeLabel = getRuntimeDisplayName(options.runtime);
+                console.log(chalk.yellow(
+                    `${runtimeLabel} is not compatible with CPU-only/current hardware; using Ollama instead.`
+                ));
+                recommendationRuntime = 'ollama';
+            }
             const intelligentRecommendations = await checker.generateIntelligentRecommendations(hardware, {
                 optimizeFor: options.optimize,
-                runtime: options.runtime,
+                runtime: recommendationRuntime,
                 registry: options.registry,
-                includeUncensored: options.includeUncensored === true
+                includeUncensored: options.includeUncensored === true,
+                cpuOnly
             });
 
             if (!intelligentRecommendations) {
@@ -4951,6 +5005,7 @@ program
     .option('-w, --weight <number>', 'AI weight (0.0-1.0, default 0.3)', '0.3')
     .option('-m, --models <list>', 'Restrict evaluation to these models (comma-separated)')
     .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
+    .option('--cpu-only', 'Force CPU/RAM execution even when a GPU is detected')
     .action(async (options) => {
         showAsciiArt('ai-check');
         // Check if Ollama is installed first
@@ -4959,9 +5014,10 @@ program
         const AICheckSelector = require('../src/models/ai-check-selector');
         
         try {
+            const cpuOnly = getCpuOnlyCommandMode(options);
             const spinner = ora('AI-Check Mode: Meta-evaluation in progress...').start();
             
-            const aiCheckSelector = new AICheckSelector();
+            const aiCheckSelector = new AICheckSelector({ cpuOnly });
             
             // Validate numeric options up front: bad input (e.g. --weight abc, --top
             // foo) used to flow through as NaN, which survived the downstream clamp
@@ -4988,10 +5044,12 @@ program
                 evaluator: options.evaluator,
                 weight,
                 models: options.models || process.env.LLM_CHECKER_AI_CHECK_MODELS || undefined,
+                cpuOnly,
                 includeUncensored: options.includeUncensored === true
             };
 
             spinner.stop();
+            displayCpuOnlyModeNotice(cpuOnly);
             
             const result = await aiCheckSelector.aiCheck(checkOptions);
             
@@ -5021,6 +5079,7 @@ program
     .option('--benchmark', 'Run a short local speed test before launching')
     .option('--reference-only', 'Show model choice and speed reference without launching Ollama')
     .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
+    .option('--cpu-only', 'Force CPU/RAM model selection even when a GPU is detected')
     .option('--verify', 'Verify the selected model blob with modelvet before running (fails closed unless ACCEPT)')
     .option('--allow-unverified', 'Continue only when --verify cannot produce a verdict; never bypasses REJECT')
     .action(async (options) => {
@@ -5035,16 +5094,18 @@ program
         const AIModelSelector = require('../src/ai/model-selector');
         
         try {
+            const cpuOnly = getCpuOnlyCommandMode(options);
+            displayCpuOnlyModeNotice(cpuOnly);
             const spinner = ora('Selecting best model and launching...').start();
             
-            const aiSelector = new AIModelSelector();
-            const checker = new (getLLMChecker())();
-            const systemInfo = await checker.getSystemInfo();
+            const aiSelector = new AIModelSelector({ cpuOnly });
+            const checker = new (getLLMChecker())({ cpuOnly });
+            const systemInfo = await checker.getSystemInfo({ cpuOnly });
             let ollamaClient = null;
             const getOllamaClient = () => {
                 if (!ollamaClient) {
                     const OllamaClient = require('../src/ollama/client');
-                    ollamaClient = new OllamaClient();
+                    ollamaClient = new OllamaClient({ cpuOnly });
                 }
                 return ollamaClient;
             };
@@ -5099,9 +5160,10 @@ program
                 cpu_cores: systemInfo.cpu?.cores || 4,
                 cpu_freq_max: systemInfo.cpu?.speed || 3.0,
                 total_ram_gb: systemInfo.memory?.total || 8,
-                gpu_vram_gb: systemInfo.gpu?.vram || 0,
-                gpu_model_normalized: systemInfo.gpu?.model || 
+                gpu_vram_gb: cpuOnly ? 0 : (systemInfo.gpu?.vram || 0),
+                gpu_model_normalized: cpuOnly ? 'cpu_only' : (systemInfo.gpu?.model ||
                     (systemInfo.cpu?.manufacturer === 'Apple' ? 'apple_silicon' : 'cpu_only')
+                )
             };
 
             const taskHint = normalizeTaskName(options.category || inferTaskFromPrompt(options.prompt));
@@ -5127,7 +5189,8 @@ program
                 }
                 result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint, {
                     silent: true,
-                    includeUncensored: options.includeUncensored === true
+                    includeUncensored: options.includeUncensored === true,
+                    cpuOnly
                 });
             }
             
@@ -5480,6 +5543,7 @@ program
     .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--pool-limit <n>', 'Maximum registry artifacts to score before ranking', '20000')
     .option('-l, --limit <n>', 'Maximum number of recommendations', '10')
+    .option('--cpu-only', 'Force CPU/RAM execution even when a GPU is detected')
     .option('-j, --json', 'Output as JSON')
     .action(async (query = '', options) => {
         try {
@@ -5501,9 +5565,10 @@ program
         const spinner = options.json ? null : ora('Scoring registry artifacts...').start();
 
         try {
+            const cpuOnly = getCpuOnlyCommandMode(options);
             await recommender.initialize();
 
-            const detector = new UnifiedDetector();
+            const detector = new UnifiedDetector({ cpuOnly });
             const hardware = await detector.detect();
             const category = normalizeTaskName(options.category || 'general');
             const result = await recommender.recommend({
@@ -5522,6 +5587,7 @@ program
                 includeUncensored: options.includeUncensored === true,
                 poolLimit: parsePositiveNumberOption(options.poolLimit, 20000),
                 limit: parsePositiveNumberOption(options.limit, 10),
+                cpuOnly,
                 hardware
             });
 
@@ -5539,6 +5605,16 @@ program
                     `Scored ${result.total_evaluated} candidates from ${result.total_artifacts} registry artifacts`
                 );
             }
+            const requestedRuntime = String(options.runtime || 'auto').toLowerCase();
+            if (
+                !['auto', 'all', '*'].includes(requestedRuntime) &&
+                String(result.runtime || '').toLowerCase() !== requestedRuntime
+            ) {
+                console.log(chalk.yellow(
+                    `${getRuntimeDisplayName(options.runtime)} is not compatible with CPU-only/current hardware; using ${getRuntimeDisplayName(result.runtime)} instead.`
+                ));
+            }
+            displayCpuOnlyModeNotice(cpuOnly);
 
             if (result.recommendations.length === 0) {
                 console.log(chalk.yellow('No registry recommendations found for those filters.'));
@@ -5746,6 +5822,7 @@ program
     .option('--include-vision', 'Include vision/multimodal models')
     .option('--include-embeddings', 'Include embedding models')
     .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
+    .option('--cpu-only', 'Force CPU/RAM execution even when a GPU is detected')
     .option('-j, --json', 'Output as JSON')
     .addHelpText(
         'after',
@@ -5767,8 +5844,9 @@ Recommendation engine note:
         const spinner = options.json ? null : ora('Analyzing hardware and models...').start();
 
         try {
+            const cpuOnly = getCpuOnlyCommandMode(options);
             // Detect hardware
-            const detector = new UnifiedDetector();
+            const detector = new UnifiedDetector({ cpuOnly });
             const hardware = await detector.detect();
 
             if (spinner) spinner.text = 'Loading model database...';
@@ -5790,7 +5868,7 @@ Recommendation engine note:
             if (spinner) spinner.text = `Scoring ${variants.length} model variants...`;
 
             // Get intelligent recommendations
-            const selector = new IntelligentSelector({ detector });
+            const selector = new IntelligentSelector({ detector, cpuOnly });
             const recommendations = await selector.recommend(variants, {
                 useCase: options.useCase,
                 targetTPS: parseInt(options.targetTps) || 20,
@@ -5798,6 +5876,7 @@ Recommendation engine note:
                 includeVision: options.includeVision,
                 includeEmbeddings: options.includeEmbeddings,
                 includeUncensored: options.includeUncensored === true,
+                cpuOnly,
                 limit: parseInt(options.limit)
             });
 
@@ -5809,6 +5888,7 @@ Recommendation engine note:
             }
 
             if (spinner) spinner.succeed('Analysis complete!');
+            displayCpuOnlyModeNotice(cpuOnly);
 
             // Display hardware info
             console.log(chalk.blue.bold('\n=== Hardware Analysis ==='));
@@ -5899,6 +5979,7 @@ program
     .command('gpu-plan')
     .description('Multi-GPU placement advisor with safe model-size envelopes')
     .option('--model-size <gb>', 'Validate a target model size (e.g. 14 or 14GB)')
+    .option('--cpu-only', 'Force a CPU/RAM plan and ignore detected GPU capacity')
     .option('-j, --json', 'Output as JSON')
     .action(async (options) => {
         if (!options.json) showAsciiArt('hw-detect');
@@ -5908,7 +5989,8 @@ program
             const UnifiedDetector = require('../src/hardware/unified-detector');
             const { buildGpuPlan } = require('../src/commands/roadmap-tools');
 
-            const detector = new UnifiedDetector();
+            const cpuOnly = getCpuOnlyCommandMode(options);
+            const detector = new UnifiedDetector({ cpuOnly });
             const hardware = await detector.detect();
 
             const modelSizeGB = options.modelSize !== undefined ? parseFloat(options.modelSize) : null;
@@ -5916,7 +5998,7 @@ program
                 throw new Error('Invalid --model-size value. Use a positive number (GB).');
             }
 
-            const plan = buildGpuPlan(hardware, { modelSizeGB });
+            const plan = buildGpuPlan(hardware, { modelSizeGB, cpuOnly });
 
             if (options.json) {
                 console.log(JSON.stringify(plan, null, 2));
@@ -5924,13 +6006,18 @@ program
             }
 
             if (spinner) spinner.succeed('GPU placement plan ready');
+            displayCpuOnlyModeNotice(cpuOnly);
 
             console.log(chalk.blue.bold('\n=== Multi-GPU Placement Plan ==='));
             console.log(`Backend: ${chalk.cyan((plan.backend || 'cpu').toUpperCase())}`);
             console.log(`Detected GPUs: ${chalk.white(plan.gpuCount)}`);
             console.log(`Total VRAM/Unified: ${chalk.green(`${plan.totalVRAM}GB`)}`);
-            console.log(`Single-GPU safe envelope: ${chalk.yellow(`${plan.singleMaxModelGB}GB`)}`);
-            console.log(`Pooled safe envelope: ${chalk.yellow(`${plan.pooledMaxModelGB}GB`)}`);
+            if (plan.cpuOnly) {
+                console.log(`CPU/RAM safe envelope: ${chalk.yellow(`${plan.cpuMaxModelGB}GB`)}`);
+            } else {
+                console.log(`Single-GPU safe envelope: ${chalk.yellow(`${plan.singleMaxModelGB}GB`)}`);
+                console.log(`Pooled safe envelope: ${chalk.yellow(`${plan.pooledMaxModelGB}GB`)}`);
+            }
             console.log(`Strategy: ${chalk.cyan(plan.strategy)} (${plan.strategyReason})`);
 
             if (plan.gpus.length > 0) {
@@ -5951,10 +6038,15 @@ program
 
             if (plan.fit) {
                 const fit = plan.fit;
-                const status = fit.fitsSingleGPU || fit.fitsPooled ? chalk.green('[OK]') : chalk.red('[FAIL]');
+                const fitsActiveMode = plan.cpuOnly ? fit.fitsCPU : (fit.fitsSingleGPU || fit.fitsPooled);
+                const status = fitsActiveMode ? chalk.green('[OK]') : chalk.red('[FAIL]');
                 console.log(`${status} Target model ${fit.modelSizeGB}GB`);
-                console.log(`   Fits single GPU: ${fit.fitsSingleGPU ? 'yes' : 'no'}`);
-                console.log(`   Fits pooled setup: ${fit.fitsPooled ? 'yes' : 'no'}`);
+                if (plan.cpuOnly) {
+                    console.log(`   Fits CPU/RAM budget: ${fit.fitsCPU ? 'yes' : 'no'}`);
+                } else {
+                    console.log(`   Fits single GPU: ${fit.fitsSingleGPU ? 'yes' : 'no'}`);
+                    console.log(`   Fits pooled setup: ${fit.fitsPooled ? 'yes' : 'no'}`);
+                }
             }
 
             console.log(chalk.blue.bold('\nRecommended env:'));
@@ -6361,6 +6453,7 @@ program
 program
     .command('hw-detect')
     .description('Detect and display detailed hardware capabilities')
+    .option('--cpu-only', 'Force CPU/RAM execution while retaining GPU inventory as diagnostics')
     .option('-j, --json', 'Output as JSON')
     .action(async (options) => {
         if (!options.json) showAsciiArt('hw-detect');
@@ -6369,7 +6462,8 @@ program
         const spinner = options.json ? null : ora('Detecting hardware...').start();
 
         try {
-            const detector = new UnifiedDetector();
+            const cpuOnly = getCpuOnlyCommandMode(options);
+            const detector = new UnifiedDetector({ cpuOnly });
             const hardware = await detector.detect();
 
             if (options.json) {
@@ -6378,6 +6472,7 @@ program
             }
 
             if (spinner) spinner.succeed('Hardware detected!');
+            displayCpuOnlyModeNotice(cpuOnly);
 
             console.log(chalk.blue.bold('\n=== Hardware Detection ===\n'));
 
@@ -6390,8 +6485,15 @@ program
             if (hardware.summary.runtimeBackend && hardware.summary.runtimeBackend !== hardware.summary.bestBackend) {
                 console.log(`  Runtime assist: ${chalk.green(hardware.summary.runtimeBackendName || hardware.summary.runtimeBackend)}`);
             }
-            console.log(`  Dedicated GPUs: ${chalk.green(formatGpuInventoryList(hardware.summary.dedicatedGpuModels))}`);
-            console.log(`  Integrated GPUs: ${chalk.hex('#FFA500')(formatGpuInventoryList(hardware.summary.integratedGpuModels))}`);
+            const inventorySummary = hardware.cpuOnly && hardware.detectedGpu
+                ? {
+                    dedicatedGpuModels: hardware.detectedGpu.dedicatedGpuModels || [],
+                    integratedGpuModels: hardware.detectedGpu.integratedGpuModels || []
+                }
+                : hardware.summary;
+            const inventoryLabel = hardware.cpuOnly ? ' (diagnostic)' : '';
+            console.log(`  Dedicated GPUs${inventoryLabel}: ${chalk.green(formatGpuInventoryList(inventorySummary.dedicatedGpuModels))}`);
+            console.log(`  Integrated GPUs${inventoryLabel}: ${chalk.hex('#FFA500')(formatGpuInventoryList(inventorySummary.integratedGpuModels))}`);
             if (hardware.summary.hasIntegratedGPU && hardware.summary.bestBackend === 'cpu') {
                 const assistMessage = hardware.summary.runtimeBackend && hardware.summary.runtimeBackend !== hardware.summary.bestBackend
                     ? `Integrated/shared-memory GPU detected, runtime may use ${hardware.summary.runtimeBackendName || hardware.summary.runtimeBackend} acceleration`

@@ -12,6 +12,7 @@ const { MULTI_OBJECTIVE_WEIGHTS } = require('../models/scoring-config');
 const { normalizePlatform } = require('../utils/platform');
 const { rankModels } = require('../models/scoring-core');
 const { filterModelsBySafety } = require('../models/model-safety');
+const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
 
 class MultiObjectiveSelector {
     constructor(options = {}) {
@@ -67,12 +68,22 @@ class MultiObjectiveSelector {
             return { compatible: [], marginal: [], incompatible: [] };
         }
 
+        const effectiveHardware = applyCpuOnlyOverride(hardware, {
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {}),
+            source: 'multi-objective-selector'
+        });
+
         let ranking;
         try {
-            ranking = await this.rankModels(eligibleModels, hardware, {
+            ranking = await this.rankModels(eligibleModels, effectiveHardware, {
                 category,
                 topN: eligibleModels.length,
-                includeUncensored: options.includeUncensored === true
+                includeUncensored: options.includeUncensored === true,
+                ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                    ? { cpuOnly: options.cpuOnly }
+                    : {})
             });
         } catch (error) {
             ranking = null;
@@ -81,7 +92,7 @@ class MultiObjectiveSelector {
         // Defensive fallback: if the unified core is unavailable for any reason,
         // fall back to the legacy multi-objective ranking so `check` still works.
         if (!ranking || !Array.isArray(ranking.candidates)) {
-            return this.selectBestModelsLegacy(hardware, eligibleModels, category, topK);
+            return this.selectBestModelsLegacy(effectiveHardware, eligibleModels, category, topK);
         }
 
         const scoredModels = [];
@@ -90,7 +101,12 @@ class MultiObjectiveSelector {
             const source = candidate?.meta?.__source;
             if (!source) continue;
             rankedSources.add(source);
-            scoredModels.push(this.mapCoreCandidateToMultiObjective(candidate, source, hardware, category));
+            scoredModels.push(this.mapCoreCandidateToMultiObjective(
+                candidate,
+                source,
+                effectiveHardware,
+                category
+            ));
         }
 
         // Models the canonical core dropped (category filter / budget) are not
@@ -231,6 +247,13 @@ class MultiObjectiveSelector {
     }
 
     getAvailableModelMemoryGB(hardware, fallbackRatio = 0.7) {
+        if (hardware?.cpuOnly) {
+            const effectiveMemory = Number(hardware?.summary?.effectiveMemory);
+            if (Number.isFinite(effectiveMemory) && effectiveMemory > 0) {
+                return effectiveMemory;
+            }
+        }
+
         const ramGB = Number(hardware?.memory?.total ?? hardware?.memory?.totalGB ?? 0) || 0;
         const vramGB = Number(
             hardware?.gpu?.vram ??
@@ -473,6 +496,21 @@ class MultiObjectiveSelector {
     }
 
     getHardwareTier(hardware) {
+        if (hardware?.cpuOnly) {
+            const canonicalTier = String(hardware?.summary?.hardwareTier || 'ultra_low');
+            const cpuOnlyTierMap = {
+                ultra_high: 'ultra_high',
+                very_high: 'ultra_high',
+                high: 'high',
+                medium_high: 'medium',
+                medium: 'medium',
+                medium_low: 'low',
+                low: 'low',
+                ultra_low: 'ultra_low'
+            };
+            return cpuOnlyTierMap[canonicalTier] || 'ultra_low';
+        }
+
         // Use the same advanced scoring algorithm for consistency
         const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
         
@@ -993,7 +1031,8 @@ class MultiObjectiveSelector {
 
     estimateTTFB(hardware, model) {
         const sizeGB = this.parseModelSize(model.size);
-        const loadTime = sizeGB * (hardware.gpu ? 50 : 100); // ms per GB
+        const usesGpu = !hardware?.cpuOnly && Boolean(hardware.gpu);
+        const loadTime = sizeGB * (usesGpu ? 50 : 100); // ms per GB
         return Math.max(200, loadTime);
     }
 

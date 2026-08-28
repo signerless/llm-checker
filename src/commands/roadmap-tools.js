@@ -6,6 +6,12 @@
  * - toolcheck
  */
 
+const {
+    applyCpuOnlyOverride,
+    getCpuOnlyMaxModelSize,
+    resolveCpuOnlyMode
+} = require('../hardware/cpu-only');
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
@@ -163,8 +169,14 @@ function flattenGPUs(hardware = {}) {
 
 function buildGpuPlan(hardware = {}, options = {}) {
     const modelSizeGB = parseModelSizeGB(options.modelSizeGB);
-    const summary = hardware.summary || {};
-    const gpus = flattenGPUs(hardware).sort((a, b) => {
+    const cpuOnly = Boolean(hardware.cpuOnly) || resolveCpuOnlyMode(
+        Object.prototype.hasOwnProperty.call(options, 'cpuOnly') ? options.cpuOnly : undefined
+    );
+    const effectiveHardware = cpuOnly
+        ? applyCpuOnlyOverride(hardware, { cpuOnly: true, source: 'gpu-plan' })
+        : hardware;
+    const summary = effectiveHardware.summary || {};
+    const gpus = (cpuOnly ? [] : flattenGPUs(effectiveHardware)).sort((a, b) => {
         if (b.vramGB !== a.vramGB) return b.vramGB - a.vramGB;
         return b.speedCoefficient - a.speedCoefficient;
     });
@@ -175,12 +187,16 @@ function buildGpuPlan(hardware = {}, options = {}) {
     const strongestVRAM = strongest ? strongest.vramGB : 0;
     const pooledMaxModelGB = clamp(totalVRAM - 2, 0, Number.MAX_SAFE_INTEGER);
     const singleMaxModelGB = clamp(strongestVRAM - 2, 0, Number.MAX_SAFE_INTEGER);
+    const cpuMaxModelGB = cpuOnly ? getCpuOnlyMaxModelSize(effectiveHardware) : 0;
     const backend = summary.bestBackend || 'cpu';
 
     let strategy = 'cpu_fallback';
     let strategyReason = 'No compatible GPU backend detected.';
 
-    if (gpuCount === 1) {
+    if (cpuOnly) {
+        strategy = 'cpu_only';
+        strategyReason = 'CPU-only override active; detected GPU inventory is ignored and model fit uses system RAM.';
+    } else if (gpuCount === 1) {
         strategy = 'single_gpu';
         strategyReason = `One ${backend.toUpperCase()} GPU detected; keep model weights on a single device.`;
     } else if (gpuCount > 1) {
@@ -199,11 +215,17 @@ function buildGpuPlan(hardware = {}, options = {}) {
     const fit = modelSizeGB === null ? null : {
         modelSizeGB,
         fitsSingleGPU: modelSizeGB <= singleMaxModelGB,
-        fitsPooled: modelSizeGB <= pooledMaxModelGB
+        fitsPooled: modelSizeGB <= pooledMaxModelGB,
+        ...(cpuOnly ? { fitsCPU: modelSizeGB <= cpuMaxModelGB } : {})
     };
 
     const recommendations = [];
-    if (gpuCount > 1) {
+    if (cpuOnly) {
+        recommendations.push(
+            `Keep model payload <= ${round1(cpuMaxModelGB)}GB for the active CPU/RAM budget.`,
+            'Detected GPUs are diagnostic only while CPU-only mode is active.'
+        );
+    } else if (gpuCount > 1) {
         recommendations.push(
             `Prefer model sizes <= ${round1(singleMaxModelGB)}GB for deterministic single-GPU residency.`,
             `Pooled envelope is ~${round1(pooledMaxModelGB)}GB if scheduling spreads the load.`
@@ -216,17 +238,22 @@ function buildGpuPlan(hardware = {}, options = {}) {
 
     return {
         backend,
+        cpuOnly,
+        memoryType: cpuOnly ? 'system_ram' : 'vram',
+        memoryBudgetGB: cpuOnly ? round1(summary.effectiveMemory || 0) : totalVRAM,
         gpuCount,
         gpus,
         totalVRAM,
         strongestGPU: strongest,
         singleMaxModelGB: round1(singleMaxModelGB),
         pooledMaxModelGB: round1(pooledMaxModelGB),
+        cpuMaxModelGB: round1(cpuMaxModelGB),
         strategy,
         strategyReason,
         env,
         fit,
-        recommendations
+        recommendations,
+        detectedGpu: cpuOnly ? effectiveHardware.detectedGpu : undefined
     };
 }
 
