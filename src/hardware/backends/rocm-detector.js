@@ -20,7 +20,10 @@ class ROCmDetector {
     // AMD PCI device IDs for model name resolution
     static AMD_DEVICE_IDS = {
         // RDNA 3.5 / Strix Halo integrated graphics
-        '1586': { name: 'AMD Radeon 8060S (Strix Halo)', vram: 16, integrated: true },
+        // Device 1586 is shared by Radeon Graphics, 8050S, and 8060S SKUs.
+        // Keep the PCI-only fallback family-neutral unless another source reports
+        // a specific marketing name.
+        '1586': { name: 'AMD Radeon Graphics (Strix Halo)', vram: 16, integrated: true },
         // RDNA 4 / Radeon AI PRO
         '7551': { name: 'AMD Radeon AI PRO R9700', vram: 32 },
         '7590': { name: 'AMD Radeon RX 9060 XT', vram: 16 },
@@ -609,13 +612,27 @@ class ROCmDetector {
 
         if (nameLower.includes('integrated') || nameLower.includes('apu')) return true;
         if (nameLower.includes('radeon graphics') && !nameLower.includes('rx')) return true;
-        if (nameLower.includes('radeon 8060s') || nameLower.includes('radeon 890m') ||
+        if (nameLower.includes('radeon 8050s') || nameLower.includes('radeon 8060s') ||
+            nameLower.includes('strix halo') || nameLower.includes('radeon 890m') ||
             nameLower.includes('radeon 880m') || nameLower.includes('radeon 780m') ||
             nameLower.includes('radeon 680m')) return true;
         if (nameLower.includes('gfx1150') || nameLower.includes('gfx1151') || nameLower.includes('gfx1152')) return true;
         if (nameLower.includes('gfx1103') || nameLower.includes('gfx1035')) return true;
 
         return false;
+    }
+
+    getReportedStrixHaloModel(name = '') {
+        const value = String(name || '');
+        const has8050S = /\bradeon(?:\(tm\))?\s+8050s\b/i.test(value);
+        const has8060S = /\bradeon(?:\(tm\))?\s+8060s\b/i.test(value);
+
+        // Some pci.ids versions list both possible SKUs for device 1586. That
+        // is not enough information to choose one, so retain the family name.
+        if (has8050S === has8060S) return null;
+        return has8050S
+            ? 'AMD Radeon 8050S Graphics (Strix Halo)'
+            : 'AMD Radeon 8060S Graphics (Strix Halo)';
     }
 
     applyIntegratedVramHeuristic(name, vramGB) {
@@ -809,7 +826,11 @@ class ROCmDetector {
                     lspciName = nameMatch[1].trim();
                 }
 
-                const name = deviceInfo?.name || this._resolveAMDModelName(lspciName, deviceId) || `AMD GPU (${deviceId})`;
+                const reportedStrixModel = deviceId === '1586'
+                    ? this.getReportedStrixHaloModel(line)
+                    : null;
+                const name = reportedStrixModel || deviceInfo?.name ||
+                    this._resolveAMDModelName(lspciName, deviceId) || `AMD GPU (${deviceId})`;
                 const vram = deviceInfo?.vram || this.estimateVRAMFromModel(name);
 
                 // Try to get VRAM from sysfs for this specific device
@@ -1063,7 +1084,8 @@ class ROCmDetector {
 
         // Known integrated/APU labels where ROCm can report small dedicated aperture
         if (nameLower.includes('gfx1151') || nameLower.includes('gfx1150') || nameLower.includes('gfx1152')) return 16;
-        if (nameLower.includes('radeon 8060s')) return 16;
+        if (nameLower.includes('radeon 8050s') || nameLower.includes('radeon 8060s') ||
+            nameLower.includes('strix halo')) return 16;
         if (nameLower.includes('radeon 890m')) return 16;
         if (nameLower.includes('radeon 880m')) return 12;
         if (nameLower.includes('radeon 780m')) return 8;
@@ -1143,6 +1165,8 @@ class ROCmDetector {
             ['rx 9060 xt', 170],
             ['rx 9060', 150],
             ['radeon 8060s', 160],
+            ['radeon 8050s', 150],
+            ['strix halo', 150],
             ['gfx1151', 160],
             ['gfx1150', 150],
             ['gfx1152', 150],
