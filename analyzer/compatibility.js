@@ -280,12 +280,12 @@ class CompatibilityAnalyzer {
 
         switch (arch) {
             case 'Apple Silicon':
-                if (model.frameworks?.includes('llama.cpp')) {
+                if (!hardware.cpuOnly && model.frameworks?.includes('llama.cpp')) {
                     analysis.factor = this.ollamaOptimizations.hardwareOptimizations['Apple Silicon'].metalBonus;
                     analysis.notes.push('Apple Silicon with Metal acceleration');
                 }
 
-                if (model.requirements?.vram === 0) {
+                if (!hardware.cpuOnly && model.requirements?.vram === 0) {
                     analysis.factor *= this.ollamaOptimizations.hardwareOptimizations['Apple Silicon'].unifiedMemoryBonus;
                     analysis.notes.push('🔄 Unified memory architecture advantage');
                 }
@@ -395,7 +395,7 @@ class CompatibilityAnalyzer {
             analysis.recommendations.push('Enable GPU acceleration in Ollama');
         }
 
-        if (hardware.cpu.architecture === 'Apple Silicon') {
+        if (!hardware.cpuOnly && hardware.cpu.architecture === 'Apple Silicon') {
             analysis.recommendations.push('Ollama will use Metal acceleration automatically');
         }
 
@@ -469,7 +469,7 @@ class CompatibilityAnalyzer {
             recommendations.push('💾 Upgrade to 16GB+ RAM for better compatibility');
         }
 
-        if (!hardware.gpu.dedicated && hardware.memory.total >= 16) {
+        if (!hardware.cpuOnly && !hardware.gpu.dedicated && hardware.memory.total >= 16) {
             recommendations.push('🎮 Consider dedicated GPU for significant speedup');
         }
 
@@ -510,7 +510,7 @@ class CompatibilityAnalyzer {
         if (options.includeOllamaOptimizations !== false) {
             recommendations.push('Install Ollama for easy model management');
 
-            if (hardware.cpu.architecture === 'Apple Silicon') {
+            if (!hardware.cpuOnly && hardware.cpu.architecture === 'Apple Silicon') {
                 recommendations.push('Ollama will use Metal acceleration automatically');
             }
 

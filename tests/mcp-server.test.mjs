@@ -19,6 +19,8 @@ import {
   tokensPerSecond,
   formatTokPerSec,
   mapHardwareJson,
+  buildOllamaGenerationPayload,
+  applyCpuOnlyOptimizationEnv,
   detectFrameworkMarker,
   FRAMEWORK_MARKERS,
   ALLOWED_CLI_COMMANDS,
@@ -113,6 +115,26 @@ try {
   // VRAM-derived fallback when effectiveMemory is absent.
   const vramOnly = mapHardwareJson({ summary: { totalVRAM: 12 } });
   assert.strictEqual(vramOnly.maxGB, 10, `maxGB must be 10 (12 - 2) when only totalVRAM present, got ${vramOnly.maxGB}`);
+
+  const gpuPayload = { model: "tiny:1b", options: { temperature: 0.2, num_gpu: 99 } };
+  assert.strictEqual(
+    buildOllamaGenerationPayload(gpuPayload, false),
+    gpuPayload,
+    "normal MCP generation must preserve the original payload"
+  );
+  assert.deepStrictEqual(
+    buildOllamaGenerationPayload(gpuPayload, true),
+    { model: "tiny:1b", options: { temperature: 0.2, num_gpu: 0 } },
+    "CPU-only MCP generation must force num_gpu=0 without dropping other options"
+  );
+  assert.deepStrictEqual(
+    applyCpuOnlyOptimizationEnv(
+      { OLLAMA_NUM_GPU: "999", OLLAMA_FLASH_ATTENTION: "1", OLLAMA_NUM_PARALLEL: "2" },
+      true
+    ),
+    { OLLAMA_NUM_GPU: "0", OLLAMA_FLASH_ATTENTION: "0", OLLAMA_NUM_PARALLEL: "2" },
+    "MCP optimization must not recommend GPU layers or Flash Attention in CPU-only mode"
+  );
 
   // (d) M7: framework detector must recognize ".github" as "GitHub Actions"
   // (regression for the dotfile-skip-before-detection bug).
