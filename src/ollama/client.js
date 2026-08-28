@@ -1,7 +1,12 @@
 const fetch = require('../utils/fetch');
+const { resolveCpuOnlyMode } = require('../hardware/cpu-only');
 
 class OllamaClient {
-    constructor(baseURL = null) {
+    constructor(baseURL = null, options = {}) {
+        if (baseURL && typeof baseURL === 'object') {
+            options = baseURL;
+            baseURL = options.baseURL || null;
+        }
         // Support OLLAMA_HOST environment variable (standard Ollama configuration)
         // Also support OLLAMA_BASE_URL and OLLAMA_URL for backwards compatibility
         this.preferredBaseURL = this.normalizeBaseURL(
@@ -13,6 +18,18 @@ class OllamaClient {
         this.lastCheck = 0;
         this.cacheTimeout = 30000;
         this._pendingCheck = null;
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
+    }
+
+    setCpuOnly(enabled = true) {
+        this.cpuOnly = resolveCpuOnlyMode(enabled);
+        return this;
+    }
+
+    getGenerationOptions(options = {}) {
+        return this.cpuOnly
+            ? { ...options, num_gpu: 0 }
+            : options;
     }
 
     isWildcardBindHost(hostname) {
@@ -546,8 +563,9 @@ class OllamaClient {
 
         if (keepAlive) payload.keep_alive = keepAlive;
         if (format) payload.format = format;
-        if (generationOptions && Object.keys(generationOptions).length > 0) {
-            payload.options = generationOptions;
+        const effectiveGenerationOptions = this.getGenerationOptions(generationOptions);
+        if (effectiveGenerationOptions && Object.keys(effectiveGenerationOptions).length > 0) {
+            payload.options = effectiveGenerationOptions;
         }
 
         const startTime = Date.now();
@@ -671,8 +689,9 @@ class OllamaClient {
         if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
         if (format) payload.format = format;
         if (keepAlive) payload.keep_alive = keepAlive;
-        if (generationOptions && Object.keys(generationOptions).length > 0) {
-            payload.options = generationOptions;
+        const effectiveGenerationOptions = this.getGenerationOptions(generationOptions);
+        if (effectiveGenerationOptions && Object.keys(effectiveGenerationOptions).length > 0) {
+            payload.options = effectiveGenerationOptions;
         }
 
         try {
@@ -722,8 +741,9 @@ class OllamaClient {
         if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
         if (format) payload.format = format;
         if (keepAlive) payload.keep_alive = keepAlive;
-        if (generationOptions && Object.keys(generationOptions).length > 0) {
-            payload.options = generationOptions;
+        const effectiveGenerationOptions = this.getGenerationOptions(generationOptions);
+        if (effectiveGenerationOptions && Object.keys(effectiveGenerationOptions).length > 0) {
+            payload.options = effectiveGenerationOptions;
         }
 
         const startTime = Date.now();

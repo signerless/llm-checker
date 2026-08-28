@@ -13,6 +13,7 @@ const TESTS = [
     { name: 'Hardware simulation scoring', file: 'hardware-simulation-tests.js', category: 'Hardware' },
     { name: 'Hardware detector regression', file: 'hardware-detector-regression.js', category: 'Hardware' },
     { name: 'Hardware tier consistency', file: 'hardware-tier-consistency.test.js', category: 'Hardware' },
+    { name: 'CPU-only execution mode', file: 'cpu-only-mode.test.js', category: 'Hardware' },
     { name: 'ROCm VRAM parsing regression', file: 'rocm-vram-parsing.test.js', category: 'Hardware' },
     { name: 'High-end / multi-GPU VRAM detection', file: 'hardware-vram-highend.test.js', category: 'Hardware' },
     { name: 'CPU detector Windows fallback', file: 'cpu-detector-windows-fallback.test.js', category: 'Hardware' },

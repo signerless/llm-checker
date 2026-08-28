@@ -11,6 +11,7 @@ const VerboseProgress = require('./utils/verbose-progress');
 const SpeculativeDecodingEstimator = require('./models/speculative-decoding-estimator');
 const {
     normalizeRuntime,
+    runtimeSupportedOnHardware,
     getRuntimePullCommand,
     getRuntimeRunCommand
 } = require('./runtime/runtime-support');
@@ -20,6 +21,7 @@ const {
 } = require('./provenance/model-provenance');
 const { normalizePlatform } = require('./utils/platform');
 const { filterModelsBySafety } = require('./models/model-safety');
+const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('./hardware/cpu-only');
 
 function filterOllamaIntegrationBySafety(integration = {}, options = {}) {
     const includeUncensored = options.includeUncensored === true;
@@ -50,14 +52,15 @@ function normalizeRecommendationRuntime(runtime = 'auto') {
 
 class LLMChecker {
     constructor(options = {}) {
-        this.hardwareDetector = new HardwareDetector();
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
+        this.hardwareDetector = options.hardwareDetector || new HardwareDetector({ cpuOnly: this.cpuOnly });
         this.expandedModelsDatabase = new ExpandedModelsDatabase();
         this.intelligentRecommender = new DeterministicModelSelector();
         this.ollamaScraper = new OllamaNativeScraper();
         this.compatibilityAnalyzer = new CompatibilityAnalyzer();
         this.performanceAnalyzer = new PerformanceAnalyzer();
         this.speculativeDecodingEstimator = new SpeculativeDecodingEstimator();
-        this.ollamaClient = new OllamaClient();
+        this.ollamaClient = new OllamaClient({ cpuOnly: this.cpuOnly });
         this.logger = getLogger().createChild('LLMChecker');
         this.verbose = options.verbose !== false; // Default to verbose unless explicitly disabled
         this.progress = null; // Will be initialized when needed
@@ -74,11 +77,27 @@ class LLMChecker {
         this._isSimulated = false;
     }
 
+    setCpuOnly(enabled = true) {
+        this.cpuOnly = resolveCpuOnlyMode(enabled);
+        if (typeof this.hardwareDetector.setCpuOnly === 'function') {
+            this.hardwareDetector.setCpuOnly(this.cpuOnly);
+        }
+        if (typeof this.ollamaClient.setCpuOnly === 'function') {
+            this.ollamaClient.setCpuOnly(this.cpuOnly);
+        }
+        return this;
+    }
+
     get isSimulated() {
         return this._isSimulated;
     }
 
     async analyze(options = {}) {
+        const effectiveCpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? resolveCpuOnlyMode(options.cpuOnly)
+            : this.cpuOnly;
+        options = { ...options, cpuOnly: effectiveCpuOnly };
+
         // Initialize verbose progress if enabled
         if (this.verbose && !this.progress) {
             this.progress = VerboseProgress.create(true);
@@ -97,7 +116,9 @@ class LLMChecker {
                 this.progress.step('System Detection', detectionLabel);
             }
             
-            const hardware = await this.hardwareDetector.getSystemInfo();
+            const hardware = await this.hardwareDetector.getSystemInfo(false, {
+                cpuOnly: effectiveCpuOnly
+            });
             this.logger.info('Hardware detected', { hardware });
 
             // Detect platform and route to appropriate logic (use hardware OS for simulation support)
@@ -311,7 +332,10 @@ class LLMChecker {
         const recommendations = await this.generateIntelligentRecommendations(hardware, {
             optimizeFor: options.optimizeFor || options.optimize,
             runtime: options.runtime,
-            includeUncensored: options.includeUncensored === true
+            includeUncensored: options.includeUncensored === true,
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {})
         });
         const intelligentRecommendations = recommendations;
 
@@ -348,7 +372,7 @@ class LLMChecker {
 
     async analyzeWithPlatformSpecificHeuristics(hardware, staticModels, ollamaIntegration, platform, options = {}) {
         // Use different analysis approaches based on platform
-        if (platform === 'apple_silicon') {
+        if (platform === 'apple_silicon' && !hardware.cpuOnly) {
             return await this.analyzeWithAppleSiliconHeuristics(hardware, staticModels, ollamaIntegration, options);
         } else {
             return await this.analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration, options);
@@ -356,6 +380,15 @@ class LLMChecker {
     }
 
     async analyzeWithAppleSiliconHeuristics(hardware, staticModels, ollamaIntegration, options = {}) {
+        if (hardware.cpuOnly) {
+            return await this.analyzeWithMathematicalHeuristics(
+                hardware,
+                staticModels,
+                ollamaIntegration,
+                options
+            );
+        }
+
         // Apple Silicon specific analysis - more optimistic for unified memory
         this.logger.info('Using Apple Silicon specific heuristics');
         
@@ -366,7 +399,10 @@ class LLMChecker {
         // Use the specified use case, default to 'general'
         const useCase = options.useCase || 'general';
         const results = await selector.selectBestModels(hardware, staticModels, useCase, 100, {
-            includeUncensored: options.includeUncensored === true
+            includeUncensored: options.includeUncensored === true,
+            ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                ? { cpuOnly: options.cpuOnly }
+                : {})
         });
         
         // Apple Silicon specific post-processing - make more models compatible
@@ -630,7 +666,12 @@ class LLMChecker {
                 allUniqueModels,
                 'general',
                 50, // Top 50 modelos
-                { includeUncensored: options.includeUncensored === true }
+                {
+                    includeUncensored: options.includeUncensored === true,
+                    ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                        ? { cpuOnly: options.cpuOnly }
+                        : {})
+                }
             );
             
             this.logger.info(`Multi-objective analysis completed: ${multiObjectiveResult.compatible.length} compatible, ${multiObjectiveResult.marginal.length} marginal`);
@@ -2462,8 +2503,8 @@ class LLMChecker {
         return await this.integrateOllamaModels(await this.getSystemInfo(), []);
     }
 
-    async getSystemInfo() {
-        return await this.hardwareDetector.getSystemInfo();
+    async getSystemInfo(options = {}) {
+        return await this.hardwareDetector.getSystemInfo(false, options);
     }
 
     getAllModels() {
@@ -2517,7 +2558,19 @@ class LLMChecker {
     async generateIntelligentRecommendations(hardware, options = {}) {
         try {
             this.logger.info('Generating intelligent recommendations...');
-            const selectedRuntime = normalizeRecommendationRuntime(options.runtime || 'auto');
+            hardware = applyCpuOnlyOverride(hardware, {
+                cpuOnly: Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                    ? options.cpuOnly
+                    : this.cpuOnly,
+                source: 'llm-checker'
+            });
+            let selectedRuntime = normalizeRecommendationRuntime(options.runtime || 'auto');
+            if (selectedRuntime !== 'auto' && !runtimeSupportedOnHardware(selectedRuntime, hardware)) {
+                this.logger.warn(
+                    `${selectedRuntime} is not compatible with the active hardware mode; falling back to Ollama`
+                );
+                selectedRuntime = 'ollama';
+            }
             const optimizeFor = options.optimizeFor || options.optimize || 'balanced';
 
             if (options.registry !== false) {
@@ -2530,6 +2583,9 @@ class LLMChecker {
                     const registryResult = await registryRecommender.getBestModelsForHardware(hardware, {
                         runtime: selectedRuntime,
                         optimizeFor,
+                        cpuOnly: Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                            ? options.cpuOnly
+                            : this.cpuOnly,
                         limit: 3,
                         poolLimit: options.poolLimit || 20000,
                         localOnly: options.includeGated ? false : true,
@@ -2589,7 +2645,10 @@ class LLMChecker {
                 {
                     optimizeFor,
                     runtime: fallbackRuntime,
-                    includeUncensored: options.includeUncensored === true
+                    includeUncensored: options.includeUncensored === true,
+                    cpuOnly: Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+                        ? options.cpuOnly
+                        : this.cpuOnly
                 }
             );
             const summary = this.intelligentRecommender.generateRecommendationSummary(

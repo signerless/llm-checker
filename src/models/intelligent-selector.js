@@ -12,6 +12,11 @@ const PolicyManager = require('../policy/policy-manager');
 const PolicyEngine = require('../policy/policy-engine');
 const { rankModels } = require('./scoring-core');
 const { filterModelsBySafety } = require('./model-safety');
+const {
+    applyCpuOnlyOverride,
+    getCpuOnlyMaxModelSize,
+    resolveCpuOnlyMode
+} = require('../hardware/cpu-only');
 
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -19,8 +24,9 @@ function isPlainObject(value) {
 
 class IntelligentSelector {
     constructor(options = {}) {
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
         this.scoring = new ScoringEngine(options.scoring || {});
-        this.detector = options.detector || new UnifiedDetector();
+        this.detector = options.detector || new UnifiedDetector({ cpuOnly: this.cpuOnly });
         this.database = options.database || null;
         this.policyManager = options.policyManager || new PolicyManager();
         this.policyEngine = options.policyEngine || null;
@@ -62,9 +68,21 @@ class IntelligentSelector {
     async recommend(variants, options = {}) {
         // Merge with defaults
         const opts = { ...this.defaults, ...options };
+        const cpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? resolveCpuOnlyMode(options.cpuOnly)
+            : this.cpuOnly;
+        opts.cpuOnly = cpuOnly;
 
         // Ensure hardware is detected
-        const hardware = await this.detector.detect();
+        // Pass the per-call mode into the detector so an explicit false can
+        // invalidate a cached CPU-only projection and restore the real GPU
+        // profile. Applying the projection after detection cannot reconstruct
+        // accelerator data that was already removed.
+        const rawHardware = await this.detector.detect({ cpuOnly });
+        const hardware = applyCpuOnlyOverride(rawHardware, {
+            cpuOnly,
+            source: 'intelligent-selector'
+        });
 
         // Apply filters
         const filtered = this.applyFilters(variants, opts, hardware);
@@ -106,9 +124,11 @@ class IntelligentSelector {
             categories,
             all: scoredWithPolicy.slice(0, opts.limit),
             hardware: {
-                description: this.detector.getHardwareDescription(),
-                tier: this.detector.getHardwareTier(),
-                maxSize: this.detector.getMaxModelSize(),
+                description: hardware.cpuOnly
+                    ? `${hardware.summary.cpuModel || hardware.cpu?.brand || 'CPU'} (${Math.round(hardware.summary.systemRAM)}GB RAM, forced CPU-only)`
+                    : this.detector.getHardwareDescription(),
+                tier: hardware.cpuOnly ? hardware.summary.hardwareTier : this.detector.getHardwareTier(),
+                maxSize: hardware.cpuOnly ? getCpuOnlyMaxModelSize(hardware) : this.detector.getMaxModelSize(),
                 backend: hardware.summary.bestBackend,
                 runtimeBackend: hardware.summary.runtimeBackend || hardware.summary.bestBackend
             },
@@ -150,6 +170,9 @@ class IntelligentSelector {
                     optimizeFor: opts.optimizeFor || opts.optimize || 'balanced',
                     runtime: opts.runtime || 'ollama',
                     includeUncensored: opts.includeUncensored === true,
+                    ...(Object.prototype.hasOwnProperty.call(opts, 'cpuOnly')
+                        ? { cpuOnly: opts.cpuOnly }
+                        : {}),
                     topN: scored.length
                 }
             );
@@ -279,7 +302,10 @@ class IntelligentSelector {
         });
 
         // Size filters
-        const maxSize = opts.maxSize || this.detector.getMaxModelSize() + 2;
+        const detectedMaxSize = hardware.cpuOnly
+            ? getCpuOnlyMaxModelSize(hardware)
+            : this.detector.getMaxModelSize();
+        const maxSize = opts.maxSize || detectedMaxSize + 2;
         const minSize = opts.minSize || 0;
 
         filtered = filtered.filter(v => {

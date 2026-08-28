@@ -2,12 +2,35 @@ const path = require('path');
 const fs = require('fs');
 const IntelligentModelSelector = require('./intelligent-selector');
 const { filterModelsBySafety } = require('../models/model-safety');
+const { resolveCpuOnlyMode } = require('../hardware/cpu-only');
 
 class AIModelSelector {
-    constructor() {
+    constructor(options = {}) {
         this.aiSelectorPath = path.join(__dirname, '../../ml-model/js');
         this.isAvailable = this.checkAvailability();
         this.intelligentSelector = new IntelligentModelSelector();
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
+    }
+
+    normalizeSystemSpecs(systemSpecs = null, options = {}) {
+        const cpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? resolveCpuOnlyMode(options.cpuOnly)
+            : this.cpuOnly;
+        const normalized = systemSpecs || {
+            total_ram_gb: 8,
+            gpu_vram_gb: 0,
+            cpu_cores: 4,
+            gpu_model_normalized: 'cpu_only'
+        };
+
+        if (!cpuOnly) return normalized;
+
+        return {
+            ...normalized,
+            cpu_only: true,
+            gpu_vram_gb: 0,
+            gpu_model_normalized: 'cpu_only'
+        };
     }
 
     checkAvailability() {
@@ -37,6 +60,7 @@ class AIModelSelector {
     async selectBestModel(candidateModels, systemSpecs = null, userPreference = 'general', options = {}) {
         const log = options.silent ? () => {} : console.log;
         const warn = options.silent ? () => {} : console.warn;
+        systemSpecs = this.normalizeSystemSpecs(systemSpecs, options);
         candidateModels = filterModelsBySafety(candidateModels, {
             includeUncensored: options.includeUncensored === true
         });
@@ -227,6 +251,7 @@ class AIModelSelector {
     fallbackSelection(candidateModels, systemSpecs = null, options = {}) {
         const log = options.silent ? () => {} : console.log;
         const warn = options.silent ? () => {} : console.warn;
+        systemSpecs = this.normalizeSystemSpecs(systemSpecs, options);
         candidateModels = filterModelsBySafety(candidateModels, {
             includeUncensored: options.includeUncensored === true
         });
@@ -235,15 +260,6 @@ class AIModelSelector {
                 'No eligible models remain after the default safety filter. ' +
                 'Re-run with --include-uncensored to opt in.'
             );
-        }
-
-        if (!systemSpecs) {
-            systemSpecs = {
-                total_ram_gb: 8,
-                gpu_vram_gb: 0,
-                cpu_cores: 4,
-                gpu_model_normalized: 'cpu_only'
-            };
         }
 
         log('🔄 Using fallback heuristic selection...');

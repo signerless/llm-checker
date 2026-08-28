@@ -716,6 +716,26 @@ This makes integrated GPUs visible even when the selected runtime backend is sti
 llm-checker recommend
 ```
 
+### Force CPU-only execution
+
+Use `--cpu-only` when system RAM and CPU are a better fit than the detected GPU. The flag is available on `check`, `recommend`, `ai-check`, `ai-run`, `registry-recommend`, `smart-recommend`, `gpu-plan`, and `hw-detect`:
+
+```bash
+llm-checker recommend --cpu-only --category coding
+llm-checker gpu-plan --cpu-only --model-size 14GB
+llm-checker hw-detect --cpu-only
+```
+
+CPU-only mode still detects GPUs and reports them as diagnostic inventory, but sets active VRAM to zero, selects the CPU backend, and bases fit, tier, scoring, and planning on the detected CPU plus 70% of system RAM. It can also be enabled for all commands in a shell:
+
+```bash
+export LLM_CHECKER_CPU_ONLY=1
+```
+
+Accelerator-only runtimes are excluded in this mode. In particular, `--runtime mlx` falls back to Ollama, while `--runtime auto` only considers runtimes compatible with the CPU-only hardware projection.
+
+With hardware simulation, the simulated profile is resolved first and the CPU-only override is applied second. For example, `check --simulate rtx4090 --cpu-only` keeps that profile's simulated CPU and RAM while treating its RTX 4090 as diagnostic only. Programmatic callers can pass `{ cpuOnly: false }` explicitly to override an enabled environment variable.
+
 As of the scoring unification (#96), `check`, `recommend`, and `smart-recommend`
 all derive their ranking from **one canonical scoring core**
 (`DeterministicModelSelector` via `src/models/scoring-core.js`), so identical

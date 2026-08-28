@@ -296,6 +296,9 @@ async function rankModels(models, hardware, options = {}) {
         silent: true,
         optimizeFor: options.optimizeFor || options.optimize || options.objective || 'balanced',
         runtime: options.runtime || 'ollama',
+        ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? { cpuOnly: options.cpuOnly }
+            : {}),
         hardware: hardware || undefined,
         installedModels: [],
         modelPool: pool,

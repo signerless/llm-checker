@@ -14,12 +14,14 @@ const fs = require('fs');
 const path = require('path');
 const { evaluateFineTuningSupport } = require('./fine-tuning-support');
 const { filterModelsBySafety } = require('./model-safety');
+const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('../hardware/cpu-only');
 
 class AICheckSelector {
     constructor(options = {}) {
+        this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
         this.deterministicSelector = options.deterministicSelector || new DeterministicModelSelector();
-        this.hardwareDetector = options.hardwareDetector || new HardwareDetector();
-        this.ollamaClient = options.ollamaClient || new OllamaClient();
+        this.hardwareDetector = options.hardwareDetector || new HardwareDetector({ cpuOnly: this.cpuOnly });
+        this.ollamaClient = options.ollamaClient || new OllamaClient({ cpuOnly: this.cpuOnly });
         this.ollamaScraper = options.ollamaScraper || new OllamaNativeScraper();
         this.cachePath = path.join(require('os').homedir(), '.llm-checker', 'ai-check-cache.json');
         
@@ -93,21 +95,31 @@ Respond with JSON only, no additional text.`;
      * discarded GPUs which the unified detector had already found (notably the
      * Windows RX 7900 XTX reported in issue #106).
      */
-    async getDetectedHardwareProfile() {
-        const detected = await this.hardwareDetector.getSystemInfo();
+    async getDetectedHardwareProfile(options = {}) {
+        const cpuOnly = Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
+            ? resolveCpuOnlyMode(options.cpuOnly)
+            : this.cpuOnly;
+        const rawDetected = await this.hardwareDetector.getSystemInfo(false, { cpuOnly });
+        const detected = applyCpuOnlyOverride(rawDetected, {
+            cpuOnly,
+            source: 'ai-check'
+        });
         const summary = detected?.summary || {};
         const bestBackend = String(summary.bestBackend || '').toLowerCase();
         const runtimeBackend = String(summary.runtimeBackend || '').toLowerCase();
 
-        const normalized = this.deterministicSelector.normalizeHardwareProfile({
-            ...detected,
-            acceleration: {
-                supports_metal: bestBackend === 'metal' || runtimeBackend === 'metal',
-                supports_cuda: bestBackend === 'cuda' || runtimeBackend === 'cuda',
-                supports_rocm: bestBackend === 'rocm' || runtimeBackend === 'rocm',
-                supports_vulkan: runtimeBackend === 'vulkan'
-            }
-        });
+        const normalized = this.deterministicSelector.normalizeHardwareProfile(
+            {
+                ...detected,
+                acceleration: {
+                    supports_metal: bestBackend === 'metal' || runtimeBackend === 'metal',
+                    supports_cuda: bestBackend === 'cuda' || runtimeBackend === 'cuda',
+                    supports_rocm: bestBackend === 'rocm' || runtimeBackend === 'rocm',
+                    supports_vulkan: runtimeBackend === 'vulkan'
+                }
+            },
+            { cpuOnly }
+        );
 
         return {
             ...normalized,
@@ -133,7 +145,7 @@ Respond with JSON only, no additional text.`;
 
         // Phase 1: Detect hardware through the canonical detector used by the
         // rest of the CLI, then load all available models.
-        const hardware = await this.getDetectedHardwareProfile();
+        const hardware = await this.getDetectedHardwareProfile(options);
         
         // Use the same synced database that recommend/check use.
         const ollamaData = await this.loadModelDatabase();
@@ -435,6 +447,7 @@ Respond with JSON only, no additional text.`;
         
         return {
             hardware: {
+                cpuOnly: Boolean(hardware.cpuOnly),
                 backend: hardware.acceleration.supports_metal ? 'metal' : 
                         hardware.acceleration.supports_cuda ? 'cuda' : 'cpu',
                 usableMemGB: Math.round(hardware.usableMemGB * 10) / 10,
@@ -488,12 +501,20 @@ Return JSON with this structure:
   ]
 }`;
 
+        const hasPayloadMode = Object.prototype.hasOwnProperty.call(payload.hardware || {}, 'cpuOnly');
+        const cpuOnly = hasPayloadMode
+            ? resolveCpuOnlyMode(payload.hardware.cpuOnly)
+            : this.cpuOnly;
+        if (typeof this.ollamaClient.setCpuOnly === 'function') {
+            this.ollamaClient.setCpuOnly(cpuOnly);
+        }
         const requestBody = {
             model: modelId,
             stream: false,
             options: {
                 temperature: 0.1,
-                num_ctx: 4096
+                num_ctx: 4096,
+                ...(cpuOnly ? { num_gpu: 0 } : {})
             },
             messages: [
                 { role: 'system', content: this.systemPrompt },

@@ -31,6 +31,10 @@ class SpeculativeDecodingEstimator {
             return null;
         }
 
+        if (!runtimeSupportedOnHardware(selectedRuntime, hardware)) {
+            return null;
+        }
+
         const targetParams = this.extractParams(model);
         if (!targetParams || targetParams < 2) {
             return {
