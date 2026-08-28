@@ -24,6 +24,9 @@ const PCI_GPU_MAP = {
     '2f04': { family: 'rtx5070', type: 'dedicated', name: 'NVIDIA GeForce RTX 5070' },
     '2c02': { family: 'rtx5080', type: 'dedicated', name: 'NVIDIA GeForce RTX 5080' },
     '2b85': { family: 'rtx5090', type: 'dedicated', name: 'NVIDIA GeForce RTX 5090' },
+    // AMD Strix Halo. PCI id 1586 is shared by Radeon Graphics, 8050S, and
+    // 8060S SKUs, so do not invent a specific SKU from the id alone.
+    '1586': { family: 'amd-strix-halo-igpu', type: 'integrated', name: 'AMD Radeon Graphics (Strix Halo)' },
     // AMD Raphael / Granite Ridge desktop iGPU (Ryzen 7000/9000 non-G)
     '13c0': { family: 'amd-raphael-igpu', type: 'integrated', name: 'AMD Radeon Graphics (Raphael)' }
 };
@@ -663,7 +666,7 @@ class UnifiedDetector {
                 // Resolve recent cards that the runtime could only report as a bare
                 // "Device <id>" so they get a real name and correct integrated flag.
                 const mapped = this.resolveMappedGpu(name) || this.resolveMappedGpu(controller?.deviceId);
-                if (mapped) name = mapped.name;
+                if (mapped && !this.isSpecificStrixHaloModel(name)) name = mapped.name;
 
                 const isIntegrated = mapped ? mapped.type === 'integrated' : this.isIntegratedGPUModel(name);
                 let vram = isIntegrated
@@ -781,7 +784,7 @@ class UnifiedDetector {
             // If the card could not be resolved to a real model, give it a stable,
             // readable name that carries the PCI id so it dedupes across sources.
             const meaningful = name.replace(/\b(?:nvidia|amd|ati|intel|device|graphics|gpu|controller)\b/gi, '').replace(/[^a-z0-9]/gi, '').trim();
-            if (mapped) {
+            if (mapped && !this.isSpecificStrixHaloModel(name)) {
                 name = mapped.name;
             } else if (!meaningful) {
                 name = pciId ? `${vendorLabel} Device ${pciId.toUpperCase()}` : `${vendorLabel} GPU`;
@@ -850,6 +853,8 @@ class UnifiedDetector {
         }
 
         return (
+            this.isSpecificStrixHaloModel(lower) ||
+            lower.includes('strix halo') ||
             lower.includes('intel') ||
             lower.includes('iris') ||
             lower.includes('uhd') ||
@@ -860,6 +865,13 @@ class UnifiedDetector {
             lower.includes('vega') ||
             lower.includes('apple')
         );
+    }
+
+    isSpecificStrixHaloModel(model) {
+        const value = String(model || '');
+        const has8050S = /\bradeon(?:\(tm\))?\s+8050s\b/i.test(value);
+        const has8060S = /\bradeon(?:\(tm\))?\s+8060s\b/i.test(value);
+        return has8050S !== has8060S;
     }
 
     estimateFallbackVRAM(model) {
@@ -902,6 +914,13 @@ class UnifiedDetector {
         const lower = String(name || '').toLowerCase();
         if (!lower) return '';
 
+        if (
+            lower.includes('strix halo') ||
+            /\bradeon(?:\(tm\))?\s+80(?:50|60)s\b/i.test(lower)
+        ) {
+            return 'amd-strix-halo-igpu';
+        }
+
         const familyMatch = lower.match(/\b(rtx|gtx|rx|arc)\s*([0-9]{3,4})\b/);
         if (familyMatch) {
             return `${familyMatch[1]}${familyMatch[2]}`;
@@ -933,6 +952,8 @@ class UnifiedDetector {
         const value = String(text || '');
         const bracket = value.match(/\[[0-9a-f]{4}:([0-9a-f]{4})\]/i);
         if (bracket) return bracket[1].toLowerCase();
+        const vendorDevice = value.match(/(?:^|\b)[0-9a-f]{4}:([0-9a-f]{4})\b/i);
+        if (vendorDevice) return vendorDevice[1].toLowerCase();
         const bare = value.match(/\bdevice\s+([0-9a-f]{4})\b/i);
         if (bare) return bare[1].toLowerCase();
         return null;
