@@ -61,10 +61,164 @@ class RoadmapToolsTestSuite {
         };
 
         const plan = buildGpuPlan(hardware, { modelSizeGB: 20 });
-        this.assert(plan.gpuCount === 2, 'multi-gpu count detected');
+        this.assert(plan.gpuCount === 2, 'two identical GPUs in one backend remain two devices');
+        this.assert(plan.totalVRAM === 48, 'same-backend multi-GPU VRAM remains pooled');
         this.assert(plan.strategy === 'distributed', 'multi-gpu strategy is distributed');
         this.assert(plan.fit.fitsPooled === true, '20GB target fits pooled envelope');
         this.assert(plan.env.OLLAMA_SCHED_SPREAD === '1', 'spread scheduling enabled for multi-gpu');
+    }
+
+    testGpuPlanDeduplicatesCudaGenericAlias() {
+        this.log('\n--- buildGpuPlan CUDA/generic deduplication ---');
+        const hardware = {
+            summary: { bestBackend: 'cuda', effectiveMemory: 24 },
+            backends: {
+                cuda: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            index: 0,
+                            name: 'NVIDIA GeForce RTX 3090',
+                            uuid: 'GPU-822c0482-9be5-example',
+                            memory: { total: 24 },
+                            speedCoefficient: 200
+                        }]
+                    }
+                },
+                generic: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            name: 'GA102 [GeForce RTX 3090]',
+                            vendor: 'NVIDIA',
+                            type: 'dedicated',
+                            memory: { total: 24 }
+                        }]
+                    }
+                }
+            }
+        };
+
+        const plan = buildGpuPlan(hardware, { modelSizeGB: 16 });
+        this.assert(plan.gpuCount === 1, 'CUDA and generic aliases collapse to one physical GPU');
+        this.assert(plan.gpus[0]?.backend === 'cuda', 'specialized CUDA entry wins over generic fallback');
+        this.assert(plan.totalVRAM === 24, 'duplicate generic VRAM is not pooled twice');
+        this.assert(plan.singleMaxModelGB === 22, 'single-GPU safe envelope remains 22GB');
+        this.assert(plan.pooledMaxModelGB === 22, 'pooled envelope remains 22GB for one GPU');
+        this.assert(plan.strategy === 'single_gpu', 'deduplicated host uses single-GPU strategy');
+        this.assert(plan.env.OLLAMA_SCHED_SPREAD === '0', 'spread scheduling stays disabled');
+        this.assert(plan.env.OLLAMA_NUM_PARALLEL === '1', 'single-GPU parallel recommendation stays at one');
+        this.assert(plan.env.OLLAMA_MAX_LOADED_MODELS === '1', 'single-GPU loaded-model limit stays at one');
+    }
+
+    testGpuPlanPreservesDistinctGenericIgpu() {
+        this.log('\n--- buildGpuPlan distinct generic iGPU ---');
+        const hardware = {
+            summary: { bestBackend: 'cuda', effectiveMemory: 24 },
+            backends: {
+                generic: {
+                    available: true,
+                    info: {
+                        gpus: [
+                            {
+                                name: 'GA102 [GeForce RTX 3090]',
+                                vendor: 'NVIDIA',
+                                type: 'dedicated',
+                                memory: { total: 24 }
+                            },
+                            {
+                                name: 'Intel Iris Xe Graphics',
+                                vendor: 'Intel',
+                                type: 'integrated',
+                                memory: { total: 8 }
+                            }
+                        ]
+                    }
+                },
+                cuda: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            name: 'NVIDIA GeForce RTX 3090',
+                            memory: { total: 24 },
+                            speedCoefficient: 200
+                        }]
+                    }
+                }
+            }
+        };
+
+        const plan = buildGpuPlan(hardware);
+        this.assert(plan.gpuCount === 2, 'distinct generic iGPU remains visible beside CUDA GPU');
+        this.assert(
+            plan.gpus.filter((gpu) => gpu.name.includes('RTX 3090')).length === 1,
+            'generic copy of CUDA GPU is still removed on a hybrid host'
+        );
+        this.assert(
+            plan.gpus.some((gpu) => gpu.backend === 'generic' && gpu.name.includes('Iris Xe')),
+            'distinct integrated GPU is preserved'
+        );
+    }
+
+    testGpuPlanPreservesGenericOnlyInventory() {
+        this.log('\n--- buildGpuPlan generic-only inventory ---');
+        const hardware = {
+            summary: { bestBackend: 'cpu', effectiveMemory: 32 },
+            backends: {
+                generic: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            name: 'AMD Radeon RX 7800 XT',
+                            vendor: 'AMD',
+                            type: 'dedicated',
+                            memory: { total: 16 }
+                        }]
+                    }
+                }
+            }
+        };
+
+        const plan = buildGpuPlan(hardware);
+        this.assert(plan.gpuCount === 1, 'generic-only GPU inventory is retained');
+        this.assert(plan.gpus[0]?.backend === 'generic', 'generic-only entry keeps its backend label');
+        this.assert(plan.totalVRAM === 16, 'generic-only VRAM remains available to the plan');
+    }
+
+    testGpuPlanDeduplicatesRocmGenericAlias() {
+        this.log('\n--- buildGpuPlan ROCm/generic deduplication ---');
+        const hardware = {
+            summary: { bestBackend: 'rocm', effectiveMemory: 24 },
+            backends: {
+                rocm: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            name: 'AMD Radeon RX 7900 XTX',
+                            memory: { total: 24 },
+                            speedCoefficient: 180
+                        }]
+                    }
+                },
+                generic: {
+                    available: true,
+                    info: {
+                        gpus: [{
+                            name: 'Navi 31 [Radeon RX 7900 XTX]',
+                            vendor: 'AMD',
+                            type: 'dedicated',
+                            memory: { total: 24 }
+                        }]
+                    }
+                }
+            }
+        };
+
+        const plan = buildGpuPlan(hardware);
+        this.assert(plan.gpuCount === 1, 'ROCm and generic aliases collapse to one physical GPU');
+        this.assert(plan.gpus[0]?.backend === 'rocm', 'specialized ROCm entry wins over generic fallback');
+        this.assert(plan.totalVRAM === 24, 'ROCm VRAM is not double-counted');
+        this.assert(plan.strategy === 'single_gpu', 'deduplicated ROCm host uses single-GPU strategy');
     }
 
     testContextVerification() {
@@ -136,6 +290,10 @@ class RoadmapToolsTestSuite {
 
         this.testParseModelSize();
         this.testGpuPlan();
+        this.testGpuPlanDeduplicatesCudaGenericAlias();
+        this.testGpuPlanPreservesDistinctGenericIgpu();
+        this.testGpuPlanPreservesGenericOnlyInventory();
+        this.testGpuPlanDeduplicatesRocmGenericAlias();
         this.testContextVerification();
         this.testAmdGuard();
         this.testToolcheckEvaluation();
