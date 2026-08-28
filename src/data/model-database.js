@@ -636,10 +636,16 @@ class ModelDatabase {
                 s.name as source_name,
                 s.base_url as source_base_url,
                 r.display_name as repo_display_name,
-                r.url as repo_url
+                r.url as repo_url,
+                r.tags as repo_tags,
+                r.tasks as repo_tasks,
+                r.modalities as repo_modalities,
+                r.metadata as repo_metadata,
+                m.description as repo_description
             FROM model_artifacts a
             JOIN registry_sources s ON s.id = a.source_id
             JOIN registry_repos r ON r.id = a.repo_key
+            LEFT JOIN models m ON a.source_id = 'ollama' AND m.id = a.canonical_model_id
             WHERE 1=1
         `;
         const params = [];
@@ -710,7 +716,11 @@ class ModelDatabase {
             runtime_support: this.parseJson(row.runtime_support, []),
             tasks: this.parseJson(row.tasks, []),
             modalities: this.parseJson(row.modalities, ['text']),
-            metadata: this.parseJson(row.metadata, {})
+            metadata: this.parseJson(row.metadata, {}),
+            repo_tags: this.parseJson(row.repo_tags, []),
+            repo_tasks: this.parseJson(row.repo_tasks, []),
+            repo_modalities: this.parseJson(row.repo_modalities, ['text']),
+            repo_metadata: this.parseJson(row.repo_metadata, {})
         }));
     }
 
@@ -929,7 +939,7 @@ class ModelDatabase {
      */
     getVariantsForHardware(maxSizeGB, filters = {}) {
         let sql = `
-            SELECT v.*, m.name as model_name, m.family, m.pulls, m.capabilities, m.type
+            SELECT v.*, m.name as model_name, m.family, m.pulls, m.capabilities, m.type, m.description
             FROM variants v
             JOIN models m ON v.model_id = m.id
             WHERE v.size_gb <= ?

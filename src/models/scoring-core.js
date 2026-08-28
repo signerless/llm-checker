@@ -232,6 +232,7 @@ function normalizeToDeterministic(model = {}) {
     return {
         // Canonical deterministic fields (pass `alreadyNormalized` branch).
         name: identifier,
+        model_name: model.model_name || model.name || identifier,
         model_identifier: identifier,
         family: model.family || canonicalSelector.extractFamily(String(identifier)),
         paramsB,
@@ -240,6 +241,9 @@ function normalizeToDeterministic(model = {}) {
         sizeGB,
         modalities,
         tags,
+        sourceTags: Array.isArray(model.sourceTags) ? model.sourceTags : [],
+        description: model.description || '',
+        detailed_description: model.detailed_description || '',
         installed: Boolean(model.installed || model.isOllamaInstalled),
         pulls: toFiniteNumber(model.pulls) ?? toFiniteNumber(model.actual_pulls) ?? 0,
         availableQuantizations: [quant],
@@ -294,7 +298,8 @@ async function rankModels(models, hardware, options = {}) {
         runtime: options.runtime || 'ollama',
         hardware: hardware || undefined,
         installedModels: [],
-        modelPool: pool
+        modelPool: pool,
+        includeUncensored: options.includeUncensored === true
     });
 
     return result;

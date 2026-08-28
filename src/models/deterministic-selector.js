@@ -11,6 +11,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const OllamaClient = require('../ollama/client');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
+const { filterModelsBySafety, isUncensoredModel } = require('./model-safety');
 const {
     parseBillionsValue: parseMoEBillionsValue,
     parsePositiveNumber: parseMoEPositiveNumber,
@@ -813,6 +814,7 @@ class DeterministicModelSelector {
 
             return {
                 name: variantTag,
+                model_name: ollamaModel.model_name || baseIdentifier,
                 family: this.extractFamily(baseIdentifier),
                 paramsB,
                 isMoE: Boolean(moeMetadata.isMoE),
@@ -830,6 +832,9 @@ class DeterministicModelSelector {
                 sizeGB: variantSizeGB,
                 modalities,
                 tags: modelTags,
+                sourceTags: Array.isArray(ollamaModel.tags) ? ollamaModel.tags : [],
+                description: ollamaModel.description || '',
+                detailed_description: ollamaModel.detailed_description || '',
                 model_identifier: variantTag,
                 last_updated: ollamaModel.last_updated || ollamaModel.lastUpdated || '',
                 updated_at: ollamaModel.updated_at || ollamaModel.updatedAt || '',
@@ -1414,7 +1419,8 @@ class DeterministicModelSelector {
             runtime = 'ollama',
             hardware: providedHardware = null,
             installedModels = null,
-            modelPool = null
+            modelPool = null,
+            includeUncensored = false
         } = options;
         const normalizedRuntime = normalizeMoERuntime(runtime);
         const optimizationObjective = this.normalizeOptimizationObjective(
@@ -1446,7 +1452,10 @@ class DeterministicModelSelector {
         
         // Combine and dedupe models (prefer installed versions)
         const pool = this.combineModels(installed, externalPool);
-        const filtered = this.filterByCategory(pool, category);
+        const filtered = this.filterByCategory(pool, category, {
+            includeUncensored,
+            referenceModels: externalPool
+        });
         
         if (!silent) {
             console.log(`Evaluating ${filtered.length} models for ${category} category`);
@@ -1527,8 +1536,17 @@ class DeterministicModelSelector {
         return combined;
     }
 
-    filterByCategory(models, category) {
-        return models.filter(model => {
+    isUncensoredModel(model = {}) {
+        return isUncensoredModel(model);
+    }
+
+    filterByCategory(models, category, options = {}) {
+        const includeUncensored = options.includeUncensored === true;
+        const eligibleModels = filterModelsBySafety(models, {
+            includeUncensored,
+            referenceModels: options.referenceModels
+        });
+        return eligibleModels.filter(model => {
             if (this.isCloudVariantTag(model.model_identifier || model.name)) {
                 return false;
             }
@@ -2511,7 +2529,8 @@ class DeterministicModelSelector {
                     runtime,
                     hardware: normalizedHardware,
                     installedModels,
-                    modelPool: normalizedPool
+                    modelPool: normalizedPool,
+                    includeUncensored: options.includeUncensored === true
                 });
 
                 recommendations[category] = {

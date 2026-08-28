@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { evaluateFineTuningSupport } = require('./fine-tuning-support');
+const { filterModelsBySafety } = require('./model-safety');
 
 class AICheckSelector {
     constructor(options = {}) {
@@ -124,7 +125,8 @@ Respond with JSON only, no additional text.`;
             ctx,
             evaluator = 'auto',
             weight = 0.3,
-            silent = false
+            silent = false,
+            includeUncensored = false
         } = options;
 
         const chalk = require('chalk');
@@ -164,6 +166,8 @@ Respond with JSON only, no additional text.`;
                 console.log(chalk.cyan('│') + ` ${categoryModels.length} models match ${category} category`);
             }
         }
+
+        categoryModels = filterModelsBySafety(categoryModels, { includeUncensored });
         
         // Evaluate each model using deterministic scoring
         for (const ollamaModel of categoryModels) {
@@ -216,9 +220,19 @@ Respond with JSON only, no additional text.`;
         console.log(chalk.magenta('╰'));
         
         // Phase 2: Pick evaluator model
-        const evaluatorModel = evaluator === 'auto' ? 
-            await this.pickEvaluatorModel(hardware) : 
-            evaluator;
+        const explicitEvaluatorEligible = evaluator === 'auto' || filterModelsBySafety([evaluator], {
+            includeUncensored,
+            referenceModels: allOllamaModels
+        }).length > 0;
+        if (!explicitEvaluatorEligible) {
+            throw new Error('The requested evaluator is uncensored, abliterated, or heretic. Re-run with --include-uncensored to opt in.');
+        }
+        const evaluatorModel = evaluator === 'auto'
+            ? await this.pickEvaluatorModel(hardware, {
+                includeUncensored,
+                catalogModels: allOllamaModels
+            })
+            : evaluator;
 
         if (!evaluatorModel) {
             console.log('\n' + chalk.red.bold(' ❌ NO EVALUATOR AVAILABLE '));
@@ -344,7 +358,7 @@ Respond with JSON only, no additional text.`;
     /**
      * Pick the best installed evaluator model
      */
-    async pickEvaluatorModel(hardware) {
+    async pickEvaluatorModel(hardware, options = {}) {
         try {
             const installedModels = await this.deterministicSelector.getInstalledModels();
             
@@ -353,7 +367,11 @@ Respond with JSON only, no additional text.`;
             }
 
             // Filter for text-only models that can be used as evaluators
-            const candidates = installedModels.filter(model => {
+            const eligibleModels = filterModelsBySafety(installedModels, {
+                includeUncensored: options.includeUncensored === true,
+                referenceModels: options.catalogModels
+            });
+            const candidates = eligibleModels.filter(model => {
                 const isTextOnly = !model.modalities.includes('vision');
                 const isReasonableSize = model.paramsB >= 0.5; // At least 0.5B
                 const notEmbedding = !model.tags.includes('embedding');

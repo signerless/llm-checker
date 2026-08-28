@@ -328,6 +328,7 @@ function normalizeHuggingFaceModel(model) {
         metadata: {
             pipeline_tag: model.pipeline_tag || '',
             library_name: model.library_name || '',
+            description: model.description || model.cardData?.description || '',
             cardData: model.cardData || null
         }
     };
@@ -439,7 +440,8 @@ function normalizeGpt4AllEntry(entry) {
             metadata: {
                 ramrequired: entry.ramrequired || null,
                 type: entry.type || null,
-                md5sum: entry.md5sum || null
+                md5sum: entry.md5sum || null,
+                description: entry.description || ''
             }
         }],
         artifacts: [{
@@ -516,7 +518,8 @@ function normalizeOllamaRows(model, variant) {
             last_modified: model.last_updated || '',
             metadata: {
                 tags_count: model.tags_count || 0,
-                source_updated_at: model.updated_at || ''
+                source_updated_at: model.updated_at || '',
+                description: model.description || ''
             }
         }],
         artifacts: [{
@@ -548,7 +551,8 @@ function normalizeOllamaRows(model, variant) {
             metadata: {
                 input_types: variant.input_types || '["text"]',
                 is_moe: Boolean(variant.is_moe),
-                expert_count: variant.expert_count || null
+                expert_count: variant.expert_count || null,
+                description: model.description || ''
             }
         }]
     };
