@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const IntelligentModelSelector = require('./intelligent-selector');
+const { filterModelsBySafety } = require('../models/model-safety');
 
 class AIModelSelector {
     constructor() {
@@ -36,6 +37,15 @@ class AIModelSelector {
     async selectBestModel(candidateModels, systemSpecs = null, userPreference = 'general', options = {}) {
         const log = options.silent ? () => {} : console.log;
         const warn = options.silent ? () => {} : console.warn;
+        candidateModels = filterModelsBySafety(candidateModels, {
+            includeUncensored: options.includeUncensored === true
+        });
+        if (candidateModels.length === 0) {
+            throw new Error(
+                'No eligible models remain after the default safety filter. ' +
+                'Re-run with --include-uncensored to opt in.'
+            );
+        }
 
         try {
             // Para ai-run: usar TODOS los modelos de la base de datos para encontrar el mejor
@@ -44,7 +54,20 @@ class AIModelSelector {
             
             // Obtener todos los modelos de la base de datos de Ollama
             const allModelData = await this.loadModelDatabase();
-            const allAvailableModels = allModelData.models || [];
+            const catalogModels = allModelData.models || [];
+            candidateModels = filterModelsBySafety(candidateModels, {
+                includeUncensored: options.includeUncensored === true,
+                referenceModels: catalogModels
+            });
+            if (candidateModels.length === 0) {
+                throw new Error(
+                    'No eligible models remain after the default safety filter. ' +
+                    'Re-run with --include-uncensored to opt in.'
+                );
+            }
+            const allAvailableModels = filterModelsBySafety(catalogModels, {
+                includeUncensored: options.includeUncensored === true
+            });
             
             log(`Evaluating against ${allAvailableModels.length} models from database`);
             
@@ -112,6 +135,10 @@ class AIModelSelector {
                 };
             }
         } catch (error) {
+            // A catalog description/tag can establish that an otherwise neutral
+            // local identifier is restricted. Do not let later local/ONNX
+            // fallbacks reintroduce a pool that was deliberately emptied.
+            if (candidateModels.length === 0) throw error;
             warn(`Comprehensive database selection failed: ${error.message}`);
             
             // Fallback al método anterior con solo modelos locales
@@ -200,6 +227,15 @@ class AIModelSelector {
     fallbackSelection(candidateModels, systemSpecs = null, options = {}) {
         const log = options.silent ? () => {} : console.log;
         const warn = options.silent ? () => {} : console.warn;
+        candidateModels = filterModelsBySafety(candidateModels, {
+            includeUncensored: options.includeUncensored === true
+        });
+        if (candidateModels.length === 0) {
+            throw new Error(
+                'No eligible models remain after the default safety filter. ' +
+                'Re-run with --include-uncensored to opt in.'
+            );
+        }
 
         if (!systemSpecs) {
             systemSpecs = {

@@ -26,6 +26,7 @@ const {
     getRuntimeCommandSet
 } = require('../src/runtime/runtime-support');
 const { evaluateFineTuningSupport } = require('../src/models/fine-tuning-support');
+const { filterModelsBySafety } = require('../src/models/model-safety');
 const { CalibrationManager } = require('../src/calibration/calibration-manager');
 const { SUPPORTED_CALIBRATION_OBJECTIVES } = require('../src/calibration/schemas');
 const {
@@ -499,7 +500,15 @@ async function executeRegistrySearch(query = '', options = {}) {
             localOnly: Boolean(options.localOnly),
             limit: parsePositiveNumberOption(options.limit, 20)
         };
-        const results = database.searchModelArtifacts(query, filters);
+        const databaseFilters = options.enforceDefaultSafety === true
+            ? { ...filters, limit: undefined }
+            : filters;
+        const rawResults = database.searchModelArtifacts(query, databaseFilters);
+        const results = options.enforceDefaultSafety === true
+            ? filterModelsBySafety(rawResults, {
+                includeUncensored: options.includeUncensored === true
+            }).slice(0, filters.limit)
+            : rawResults;
         const stats = database.getRegistryStats();
 
         if (options.json) {
@@ -3471,6 +3480,7 @@ auditCommand
     .option('--optimize <profile>', 'Optimization profile for recommend mode (balanced|speed|quality|context|coding)', 'balanced')
     .option('--runtime <runtime>', 'Runtime for check/recommend mode (auto|ollama|vllm|mlx|llama.cpp|transformers)', 'auto')
     .option('--include-cloud', 'Include cloud models in check-mode analysis')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--max-size <size>', 'Maximum model size for check mode (e.g., "24B" or "12GB")')
     .option('--min-size <size>', 'Minimum model size for check mode (e.g., "3B" or "2GB")')
     .option('-l, --limit <number>', 'Model analysis limit for check mode', '25')
@@ -3516,7 +3526,8 @@ auditCommand
                     limit: Number.parseInt(options.limit, 10) || 25,
                     maxSize,
                     minSize,
-                    runtime: selectedRuntime
+                    runtime: selectedRuntime,
+                    includeUncensored: options.includeUncensored === true
                 });
 
                 runtimeBackend = selectedRuntime;
@@ -3524,7 +3535,8 @@ auditCommand
             } else {
                 recommendationResult = await checker.generateIntelligentRecommendations(hardware, {
                     optimizeFor: options.optimize,
-                    runtime: options.runtime
+                    runtime: options.runtime,
+                    includeUncensored: options.includeUncensored === true
                 });
                 if (!recommendationResult) {
                     throw new Error('Unable to generate recommendation data for policy audit export.');
@@ -3560,7 +3572,8 @@ auditCommand
                     use_case: selectedCommand === 'check' ? normalizeUseCaseInput(options.useCase) : null,
                     category: selectedCommand === 'recommend' ? options.category || null : null,
                     optimize: selectedCommand === 'recommend' ? options.optimize || 'balanced' : null,
-                    include_cloud: Boolean(options.includeCloud)
+                    include_cloud: Boolean(options.includeCloud),
+                    include_uncensored: options.includeUncensored === true
                 },
                 hardware
             });
@@ -3729,6 +3742,7 @@ program
     .option('--max-size <size>', 'Maximum model size to consider (e.g., "30B" or "30GB")')
     .option('--min-size <size>', 'Minimum model size to consider (e.g., "7B" or "7GB")')
     .option('--include-cloud', 'Include cloud models in analysis')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--ollama-only', 'Only show models available in Ollama')
     .option('--runtime <runtime>', `Inference runtime (${SUPPORTED_RUNTIMES.join('|')})`, 'ollama')
     .option('--policy <file>', 'Evaluate candidate models against a policy file')
@@ -3876,7 +3890,8 @@ Policy scope:
                 limit: parseInt(options.limit) || 10,
                 maxSize: maxSize,
                 minSize: minSize,
-                runtime: selectedRuntime
+                runtime: selectedRuntime,
+                includeUncensored: options.includeUncensored === true
             });
 
             if (!verboseEnabled) {
@@ -4539,6 +4554,7 @@ program
     .option('--vram <gb>', 'Override GPU VRAM in GB (auto-detected from GPU model if omitted)')
     .option('-u, --use-case <case>', 'Specify use case', 'general')
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--limit <number>', 'Number of compatible models to show (default: 1)', '1')
     .option('--no-verbose', 'Disable step-by-step progress display')
     .addHelpText(
@@ -4684,7 +4700,8 @@ Custom hardware:
             const analysis = await checker.analyze({
                 useCase: normalizeUseCase(options.useCase),
                 limit: parseInt(options.limit) || 10,
-                runtime: 'ollama'
+                runtime: 'ollama',
+                includeUncensored: options.includeUncensored === true
             });
 
             if (!verboseEnabled) {
@@ -4725,13 +4742,17 @@ program
     .option('--format <format>', 'Registry artifact format: gguf, safetensors, mlx, ollama')
     .option('--runtime <runtime>', 'Registry runtime: auto, ollama, llama.cpp, transformers, vllm, mlx')
     .option('--limit <number>', 'Limit number of results (default: 50)', '50')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--full', 'Show full details including variants and tags')
     .option('--json', 'Output in JSON format')
     .action(async (options) => {
         // Registry mode: list the packaged multi-source registry instead of the
         // Ollama-only catalog.
         if (options.registry || options.source) {
-            await executeRegistrySearch('', options);
+            await executeRegistrySearch('', {
+                ...options,
+                enforceDefaultSafety: true
+            });
             return;
         }
         if (!options.json) showAsciiArt('list-models');
@@ -4747,8 +4768,10 @@ program
                 return;
             }
 
-            let models = data.models;
-            let originalCount = models.length;
+            const originalCount = data.models.length;
+            let models = filterModelsBySafety(data.models, {
+                includeUncensored: options.includeUncensored === true
+            });
 
             // Aplicar filtros
             if (options.category) {
@@ -4927,6 +4950,7 @@ program
     .option('-e, --evaluator <model>', 'Evaluator model (auto for best available)', 'auto')
     .option('-w, --weight <number>', 'AI weight (0.0-1.0, default 0.3)', '0.3')
     .option('-m, --models <list>', 'Restrict evaluation to these models (comma-separated)')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .action(async (options) => {
         showAsciiArt('ai-check');
         // Check if Ollama is installed first
@@ -4963,7 +4987,8 @@ program
                 ctx,
                 evaluator: options.evaluator,
                 weight,
-                models: options.models || process.env.LLM_CHECKER_AI_CHECK_MODELS || undefined
+                models: options.models || process.env.LLM_CHECKER_AI_CHECK_MODELS || undefined,
+                includeUncensored: options.includeUncensored === true
             };
 
             spinner.stop();
@@ -4995,6 +5020,7 @@ program
     )
     .option('--benchmark', 'Run a short local speed test before launching')
     .option('--reference-only', 'Show model choice and speed reference without launching Ollama')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('--verify', 'Verify the selected model blob with modelvet before running (fails closed unless ACCEPT)')
     .option('--allow-unverified', 'Continue only when --verify cannot produce a verdict; never bypasses REJECT')
     .action(async (options) => {
@@ -5058,6 +5084,15 @@ program
             candidateModels = Array.isArray(candidateModels)
                 ? candidateModels.filter((model) => typeof model === 'string' && model.trim().length > 0)
                 : [];
+            candidateModels = filterModelsBySafety(candidateModels, {
+                includeUncensored: options.includeUncensored === true
+            });
+            if (candidateModels.length === 0) {
+                throw new Error(
+                    'No eligible local models remain after the default safety filter. ' +
+                    'Re-run with --include-uncensored to opt in.'
+                );
+            }
             
             // AI selection
             const systemSpecs = {
@@ -5090,7 +5125,10 @@ program
                         )}) are not installed locally. Falling back to AI selector.`
                     );
                 }
-                result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint, { silent: true });
+                result = await aiSelector.selectBestModel(candidateModels, systemSpecs, taskHint, {
+                    silent: true,
+                    includeUncensored: options.includeUncensored === true
+                });
             }
             
             spinner.succeed(`Selected ${chalk.green.bold(result.bestModel)} (${result.method}, ${Math.round(result.confidence * 100)}% confidence)`);
@@ -5415,10 +5453,14 @@ program
     .option('--min-params <billion>', 'Minimum parameter count in billions')
     .option('--max-params <billion>', 'Maximum parameter count in billions')
     .option('--local-only', 'Exclude gated/auth-required artifacts')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('-l, --limit <n>', 'Maximum number of results', '20')
     .option('-j, --json', 'Output as JSON')
     .action(async (query = '', options) => {
-        await executeRegistrySearch(query, options);
+        await executeRegistrySearch(query, {
+            ...options,
+            enforceDefaultSafety: true
+        });
     });
 
 program
@@ -5559,12 +5601,16 @@ program
     .option('--runtime <runtime>', 'Registry runtime: auto, ollama, llama.cpp, transformers, vllm, mlx')
     .option('--min-params <billion>', 'Minimum parameter count in billions (registry mode)')
     .option('--max-params <billion>', 'Maximum parameter count in billions (registry mode)')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('-j, --json', 'Output as JSON')
     .action(async (query, options) => {
         // Registry mode: search the packaged multi-source registry (HF + Ollama +
         // GPT4All) instead of the Ollama-only catalog.
         if (options.registry || options.source) {
-            await executeRegistrySearch(query, options);
+            await executeRegistrySearch(query, {
+                ...options,
+                enforceDefaultSafety: true
+            });
             return;
         }
         if (!options.json) showAsciiArt('search');
@@ -5626,7 +5672,8 @@ program
 
             const recommendations = await selector.recommend(searchResults, {
                 useCase: options.useCase,
-                limit: parseInt(options.limit)
+                limit: parseInt(options.limit),
+                includeUncensored: options.includeUncensored === true
             });
 
             syncManager.close();
@@ -5698,6 +5745,7 @@ program
     .option('--target-context <n>', 'Target context length', '8192')
     .option('--include-vision', 'Include vision/multimodal models')
     .option('--include-embeddings', 'Include embedding models')
+    .option('--include-uncensored', 'Explicitly include uncensored, abliterated, or heretic models')
     .option('-j, --json', 'Output as JSON')
     .addHelpText(
         'after',
@@ -5749,6 +5797,7 @@ Recommendation engine note:
                 targetContext: parseInt(options.targetContext) || 8192,
                 includeVision: options.includeVision,
                 includeEmbeddings: options.includeEmbeddings,
+                includeUncensored: options.includeUncensored === true,
                 limit: parseInt(options.limit)
             });
 

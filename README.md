@@ -135,6 +135,11 @@ If you already calibrated routing:
 llm-checker ai-run --calibrated --category coding --prompt "Refactor this function"
 ```
 
+Recommendation and auto-selection commands exclude models labelled
+`uncensored`, `abliterated`, or `heretic` by default. Experienced users can opt
+in explicitly with `--include-uncensored`; the same flag is required by
+`ai-run` before one of those installed models can be selected or launched.
+
 ---
 
 ## Distribution

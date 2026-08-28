@@ -163,12 +163,19 @@ function artifactToSelectorModel(row) {
     const preferredRuntime = choosePreferredRuntime(runtimeSupport, row.format, row.source_id);
     const tasks = toArray(row.tasks);
     const modalities = toArray(row.modalities);
+    const repoTags = toArray(row.repo_tags);
+    const repoTasks = toArray(row.repo_tasks);
+    const repoMetadata = row.repo_metadata && typeof row.repo_metadata === 'object' ? row.repo_metadata : {};
+    const artifactMetadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const description = row.repo_description || repoMetadata.description || artifactMetadata.description || '';
     const tags = [
         row.source_id,
         row.format,
         quant,
         ...runtimeSupport,
-        ...tasks
+        ...tasks,
+        ...repoTags,
+        ...repoTasks
     ]
         .filter(Boolean)
         .map((tag) => String(tag).toLowerCase());
@@ -185,6 +192,7 @@ function artifactToSelectorModel(row) {
 
     return {
         name: displayName,
+        model_name: displayName,
         model_identifier: identifier,
         family: inferFamily(`${displayName} ${identifier}`),
         paramsB,
@@ -195,6 +203,8 @@ function artifactToSelectorModel(row) {
         sizeByQuant,
         ctxMax: Number(row.context_length) > 0 ? Number(row.context_length) : 4096,
         tags,
+        repoTags,
+        description,
         modalities: modalities.length > 0 ? modalities : ['text'],
         pulls: Number(row.downloads) || 0,
         source: row.source_id,

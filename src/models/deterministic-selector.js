@@ -11,6 +11,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const OllamaClient = require('../ollama/client');
 const { DETERMINISTIC_WEIGHTS } = require('./scoring-config');
+const { filterModelsBySafety, isUncensoredModel } = require('./model-safety');
 const {
     parseBillionsValue: parseMoEBillionsValue,
     parsePositiveNumber: parseMoEPositiveNumber,
@@ -813,6 +814,7 @@ class DeterministicModelSelector {
 
             return {
                 name: variantTag,
+                model_name: ollamaModel.model_name || baseIdentifier,
                 family: this.extractFamily(baseIdentifier),
                 paramsB,
                 isMoE: Boolean(moeMetadata.isMoE),
@@ -830,6 +832,9 @@ class DeterministicModelSelector {
                 sizeGB: variantSizeGB,
                 modalities,
                 tags: modelTags,
+                sourceTags: Array.isArray(ollamaModel.tags) ? ollamaModel.tags : [],
+                description: ollamaModel.description || '',
+                detailed_description: ollamaModel.detailed_description || '',
                 model_identifier: variantTag,
                 last_updated: ollamaModel.last_updated || ollamaModel.lastUpdated || '',
                 updated_at: ollamaModel.updated_at || ollamaModel.updatedAt || '',
@@ -1447,7 +1452,10 @@ class DeterministicModelSelector {
         
         // Combine and dedupe models (prefer installed versions)
         const pool = this.combineModels(installed, externalPool);
-        const filtered = this.filterByCategory(pool, category, { includeUncensored });
+        const filtered = this.filterByCategory(pool, category, {
+            includeUncensored,
+            referenceModels: externalPool
+        });
         
         if (!silent) {
             console.log(`Evaluating ${filtered.length} models for ${category} category`);
@@ -1529,28 +1537,17 @@ class DeterministicModelSelector {
     }
 
     isUncensoredModel(model = {}) {
-        const searchable = [
-            model.model_identifier,
-            model.model_name,
-            model.name,
-            model.description,
-            model.specialization,
-            ...(Array.isArray(model.tags) ? model.tags : [])
-        ]
-            .filter(Boolean)
-            .join(' ');
-
-        return /(?:^|[^a-z0-9])(?:uncensored|abliterated|heretic)(?:[^a-z0-9]|$)/i.test(searchable);
+        return isUncensoredModel(model);
     }
 
     filterByCategory(models, category, options = {}) {
         const includeUncensored = options.includeUncensored === true;
-        return models.filter(model => {
+        const eligibleModels = filterModelsBySafety(models, {
+            includeUncensored,
+            referenceModels: options.referenceModels
+        });
+        return eligibleModels.filter(model => {
             if (this.isCloudVariantTag(model.model_identifier || model.name)) {
-                return false;
-            }
-
-            if (!includeUncensored && this.isUncensoredModel(model)) {
                 return false;
             }
 
