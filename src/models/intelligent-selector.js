@@ -11,6 +11,7 @@ const UnifiedDetector = require('../hardware/unified-detector');
 const PolicyManager = require('../policy/policy-manager');
 const PolicyEngine = require('../policy/policy-engine');
 const { rankModels } = require('./scoring-core');
+const { filterModelsBySafety } = require('./model-safety');
 
 function isPlainObject(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -38,6 +39,7 @@ class IntelligentSelector {
             excludeFamilies: [],
             includeVision: false,
             includeEmbeddings: false,
+            includeUncensored: false,
             policyFile: this.defaultPolicyFile,
             limit: 10
         };
@@ -147,6 +149,7 @@ class IntelligentSelector {
                     category: opts.useCase || 'general',
                     optimizeFor: opts.optimizeFor || opts.optimize || 'balanced',
                     runtime: opts.runtime || 'ollama',
+                    includeUncensored: opts.includeUncensored === true,
                     topN: scored.length
                 }
             );
@@ -267,7 +270,13 @@ class IntelligentSelector {
      * Apply filters to variant list
      */
     applyFilters(variants, opts, hardware) {
-        let filtered = [...variants];
+        // Apply the default-safety policy before any scorer sees the pool. The
+        // unified ranker intentionally keeps non-ranked rows as a defensive
+        // fallback, so filtering only inside that ranker would allow restricted
+        // models to reappear in `all` or specialized top picks.
+        let filtered = filterModelsBySafety(variants, {
+            includeUncensored: opts.includeUncensored === true
+        });
 
         // Size filters
         const maxSize = opts.maxSize || this.detector.getMaxModelSize() + 2;

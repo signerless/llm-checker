@@ -11,9 +11,11 @@
 const { MULTI_OBJECTIVE_WEIGHTS } = require('../models/scoring-config');
 const { normalizePlatform } = require('../utils/platform');
 const { rankModels } = require('../models/scoring-core');
+const { filterModelsBySafety } = require('../models/model-safety');
 
 class MultiObjectiveSelector {
-    constructor() {
+    constructor(options = {}) {
+        this.rankModels = options.rankModels || rankModels;
         // Performance weights from centralized config
         this.categoryWeights = MULTI_OBJECTIVE_WEIGHTS;
 
@@ -56,15 +58,22 @@ class MultiObjectiveSelector {
      * and `reasoning`, so downstream `check` rendering and the regression test
      * (which calls `estimateModelParams` on the returned object) keep working.
      */
-    async selectBestModels(hardware, models, category = 'general', topK = 10) {
+    async selectBestModels(hardware, models, category = 'general', topK = 10, options = {}) {
         const inputModels = Array.isArray(models) ? models.filter(Boolean) : [];
-        if (inputModels.length === 0) {
+        const eligibleModels = filterModelsBySafety(inputModels, {
+            includeUncensored: options.includeUncensored === true
+        });
+        if (eligibleModels.length === 0) {
             return { compatible: [], marginal: [], incompatible: [] };
         }
 
         let ranking;
         try {
-            ranking = await rankModels(inputModels, hardware, { category, topN: inputModels.length });
+            ranking = await this.rankModels(eligibleModels, hardware, {
+                category,
+                topN: eligibleModels.length,
+                includeUncensored: options.includeUncensored === true
+            });
         } catch (error) {
             ranking = null;
         }
@@ -72,7 +81,7 @@ class MultiObjectiveSelector {
         // Defensive fallback: if the unified core is unavailable for any reason,
         // fall back to the legacy multi-objective ranking so `check` still works.
         if (!ranking || !Array.isArray(ranking.candidates)) {
-            return this.selectBestModelsLegacy(hardware, inputModels, category, topK);
+            return this.selectBestModelsLegacy(hardware, eligibleModels, category, topK);
         }
 
         const scoredModels = [];
@@ -87,7 +96,7 @@ class MultiObjectiveSelector {
         // Models the canonical core dropped (category filter / budget) are not
         // viable on this hardware for this use case -> treat as incompatible,
         // mirroring the previous hard-filter semantics.
-        const incompatibleExtras = inputModels
+        const incompatibleExtras = eligibleModels
             .filter((model) => !rankedSources.has(model))
             .map((model) => ({
                 ...model,

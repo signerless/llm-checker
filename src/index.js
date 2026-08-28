@@ -19,6 +19,23 @@ const {
     attachProvenanceToCollection
 } = require('./provenance/model-provenance');
 const { normalizePlatform } = require('./utils/platform');
+const { filterModelsBySafety } = require('./models/model-safety');
+
+function filterOllamaIntegrationBySafety(integration = {}, options = {}) {
+    const includeUncensored = options.includeUncensored === true;
+    const referenceModels = Array.isArray(options.referenceModels) ? options.referenceModels : [];
+    return {
+        ...integration,
+        compatibleOllamaModels: filterModelsBySafety(integration.compatibleOllamaModels, {
+            includeUncensored,
+            referenceModels
+        }),
+        recommendedPulls: filterModelsBySafety(integration.recommendedPulls, {
+            includeUncensored,
+            referenceModels
+        })
+    };
+}
 
 function normalizeRecommendationRuntime(runtime = 'auto') {
     const normalized = String(runtime || 'auto').trim().toLowerCase();
@@ -181,7 +198,10 @@ class LLMChecker {
             this.progress.step('Model Analysis', 'Loading base model definitions...');
         }
         
-        let models = this.expandedModelsDatabase.getAllModels();
+        const allStaticModels = this.expandedModelsDatabase.getAllModels();
+        let models = filterModelsBySafety(allStaticModels, {
+            includeUncensored: options.includeUncensored === true
+        });
         
         if (this.progress) {
             this.progress.found(`Loaded ${models.length} base models`);
@@ -193,7 +213,11 @@ class LLMChecker {
             this.progress.step('Ollama Integration', 'Connecting to Ollama and checking installed models...');
         }
         
-        const ollamaIntegration = await this.integrateOllamaModels(hardware, models);
+        const rawOllamaIntegration = await this.integrateOllamaModels(hardware, models);
+        const ollamaIntegration = filterOllamaIntegrationBySafety(rawOllamaIntegration, {
+            includeUncensored: options.includeUncensored === true,
+            referenceModels: allStaticModels
+        });
         
         if (this.progress) {
             if (ollamaIntegration.ollamaInfo.available) {
@@ -286,7 +310,8 @@ class LLMChecker {
 
         const recommendations = await this.generateIntelligentRecommendations(hardware, {
             optimizeFor: options.optimizeFor || options.optimize,
-            runtime: options.runtime
+            runtime: options.runtime,
+            includeUncensored: options.includeUncensored === true
         });
         const intelligentRecommendations = recommendations;
 
@@ -340,7 +365,9 @@ class LLMChecker {
         
         // Use the specified use case, default to 'general'
         const useCase = options.useCase || 'general';
-        const results = await selector.selectBestModels(hardware, staticModels, useCase, 100);
+        const results = await selector.selectBestModels(hardware, staticModels, useCase, 100, {
+            includeUncensored: options.includeUncensored === true
+        });
         
         // Apple Silicon specific post-processing - make more models compatible
         // Lower threshold for Apple Silicon due to unified memory efficiency
@@ -520,18 +547,29 @@ class LLMChecker {
 
     async analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration, options = {}) {
         this.logger.info('Using mathematical heuristics combining database + local models');
+        const includeUncensored = options.includeUncensored === true;
+        const eligibleStaticModels = filterModelsBySafety(staticModels, { includeUncensored });
+        let eligibleOllamaIntegration = filterOllamaIntegrationBySafety(ollamaIntegration, {
+            includeUncensored,
+            referenceModels: staticModels
+        });
         
         try {
             // 1. Obtener TODOS los modelos de la base de datos de Ollama
             const ollamaData = await this.loadOllamaModelData();
-            const allOllamaModels = ollamaData.models || [];
+            const rawOllamaModels = ollamaData.models || [];
+            const allOllamaModels = filterModelsBySafety(rawOllamaModels, { includeUncensored });
+            eligibleOllamaIntegration = filterOllamaIntegrationBySafety(ollamaIntegration, {
+                includeUncensored,
+                referenceModels: [...staticModels, ...rawOllamaModels]
+            });
             this.logger.info(`Found ${allOllamaModels.length} models in Ollama database`);
 
             // 2. Crear una lista combinada de todos los modelos únicos
             const allModelsMap = new Map();
             
             // Agregar modelos estáticos
-            staticModels.forEach(model => {
+            eligibleStaticModels.forEach(model => {
                 allModelsMap.set(
                     model.name,
                     attachModelProvenance(
@@ -591,7 +629,8 @@ class LLMChecker {
                 hardware,
                 allUniqueModels,
                 'general',
-                50 // Top 50 modelos
+                50, // Top 50 modelos
+                { includeUncensored: options.includeUncensored === true }
             );
             
             this.logger.info(`Multi-objective analysis completed: ${multiObjectiveResult.compatible.length} compatible, ${multiObjectiveResult.marginal.length} marginal`);
@@ -610,8 +649,8 @@ class LLMChecker {
                             contextScore: model.components.context,
                             hardwareMatchScore: model.components.hardwareMatch
                         },
-                    isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
-                    ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+                    isOllamaInstalled: this.checkIfModelInstalled(model, eligibleOllamaIntegration),
+                    ollamaInfo: this.getOllamaModelInfo(model, eligibleOllamaIntegration)
                 })),
                 marginal: multiObjectiveResult.marginal.map(model => ({
                     ...model,
@@ -625,16 +664,16 @@ class LLMChecker {
                         contextScore: model.components.context,
                         hardwareMatchScore: model.components.hardwareMatch
                     },
-                    isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
-                    ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+                    isOllamaInstalled: this.checkIfModelInstalled(model, eligibleOllamaIntegration),
+                    ollamaInfo: this.getOllamaModelInfo(model, eligibleOllamaIntegration)
                 })),
                 incompatible: multiObjectiveResult.incompatible.map(model => ({
                     ...model,
                     score: model.totalScore,
                     confidence: model.totalScore / 100,
                     reasoning: model.reasoning,
-                    isOllamaInstalled: this.checkIfModelInstalled(model, ollamaIntegration),
-                    ollamaInfo: this.getOllamaModelInfo(model, ollamaIntegration)
+                    isOllamaInstalled: this.checkIfModelInstalled(model, eligibleOllamaIntegration),
+                    ollamaInfo: this.getOllamaModelInfo(model, eligibleOllamaIntegration)
                 }))
             };
             
@@ -673,10 +712,10 @@ class LLMChecker {
             }
             
             // Fallback al método original
-            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, staticModels);
+            const compatibility = this.compatibilityAnalyzer.analyzeCompatibility(hardware, eligibleStaticModels);
 
-            if (ollamaIntegration.compatibleOllamaModels && ollamaIntegration.compatibleOllamaModels.length > 0) {
-                for (const ollamaModel of ollamaIntegration.compatibleOllamaModels) {
+            if (eligibleOllamaIntegration.compatibleOllamaModels && eligibleOllamaIntegration.compatibleOllamaModels.length > 0) {
+                for (const ollamaModel of eligibleOllamaIntegration.compatibleOllamaModels) {
                     if (ollamaModel.matchedModel && ollamaModel.canRun) {
                         const enhancedModel = {
                             ...ollamaModel.matchedModel,
