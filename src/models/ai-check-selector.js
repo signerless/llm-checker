@@ -6,6 +6,7 @@
  */
 
 const DeterministicModelSelector = require('./deterministic-selector');
+const HardwareDetector = require('../hardware/detector');
 const { OllamaNativeScraper } = require('../ollama/native-scraper');
 const OllamaClient = require('../ollama/client');
 const crypto = require('crypto');
@@ -14,10 +15,11 @@ const path = require('path');
 const { evaluateFineTuningSupport } = require('./fine-tuning-support');
 
 class AICheckSelector {
-    constructor() {
-        this.deterministicSelector = new DeterministicModelSelector();
-        this.ollamaClient = new OllamaClient();
-        this.ollamaScraper = new OllamaNativeScraper();
+    constructor(options = {}) {
+        this.deterministicSelector = options.deterministicSelector || new DeterministicModelSelector();
+        this.hardwareDetector = options.hardwareDetector || new HardwareDetector();
+        this.ollamaClient = options.ollamaClient || new OllamaClient();
+        this.ollamaScraper = options.ollamaScraper || new OllamaNativeScraper();
         this.cachePath = path.join(require('os').homedir(), '.llm-checker', 'ai-check-cache.json');
         
         // Priority models for evaluation (prefer these if installed)
@@ -81,6 +83,40 @@ Respond with JSON only, no additional text.`;
         );
     }
 
+    /**
+     * Use the same hardware detector as `check` and `hw-detect`, then translate
+     * its richer result into the deterministic selector's input shape.
+     *
+     * Previously AI Check called DeterministicModelSelector#getHardware(), whose
+     * intentionally minimal non-macOS fallback always returned `cpu_only`. That
+     * discarded GPUs which the unified detector had already found (notably the
+     * Windows RX 7900 XTX reported in issue #106).
+     */
+    async getDetectedHardwareProfile() {
+        const detected = await this.hardwareDetector.getSystemInfo();
+        const summary = detected?.summary || {};
+        const bestBackend = String(summary.bestBackend || '').toLowerCase();
+        const runtimeBackend = String(summary.runtimeBackend || '').toLowerCase();
+
+        const normalized = this.deterministicSelector.normalizeHardwareProfile({
+            ...detected,
+            acceleration: {
+                supports_metal: bestBackend === 'metal' || runtimeBackend === 'metal',
+                supports_cuda: bestBackend === 'cuda' || runtimeBackend === 'cuda',
+                supports_rocm: bestBackend === 'rocm' || runtimeBackend === 'rocm',
+                supports_vulkan: runtimeBackend === 'vulkan'
+            }
+        });
+
+        return {
+            ...normalized,
+            acceleration: {
+                ...normalized.acceleration,
+                supports_vulkan: runtimeBackend === 'vulkan'
+            }
+        };
+    }
+
     async aiCheck(options = {}) {
         const {
             category = 'general',
@@ -93,8 +129,9 @@ Respond with JSON only, no additional text.`;
 
         const chalk = require('chalk');
 
-        // Phase 1: Get ALL available models from the 177-model Ollama database
-        const hardware = await this.deterministicSelector.getHardware();
+        // Phase 1: Detect hardware through the canonical detector used by the
+        // rest of the CLI, then load all available models.
+        const hardware = await this.getDetectedHardwareProfile();
         
         // Use the same synced database that recommend/check use.
         const ollamaData = await this.loadModelDatabase();
