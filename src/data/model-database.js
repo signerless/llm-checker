@@ -1178,16 +1178,65 @@ class ModelDatabase {
     }
 
     /**
-     * Clear all data
+     * Snapshot local speed telemetry keyed by model_id + tag so it can survive
+     * a force sync that recreates variant row ids.
+     */
+    snapshotSpeedBenchmarks() {
+        return this.all(`
+            SELECT v.model_id, v.tag, b.hardware_fingerprint, b.tokens_per_second,
+                   b.time_to_first_token, b.memory_used_gb, b.backend, b.created_at
+            FROM benchmarks b
+            JOIN variants v ON v.id = b.variant_id
+        `);
+    }
+
+    /**
+     * Reattach previously measured speed benchmarks to newly upserted variants.
+     * Replace, do not append: SQLite FKs are off by default so DELETE FROM
+     * variants does not cascade, and leftover rows would otherwise duplicate.
+     */
+    restoreSpeedBenchmarks(rows) {
+        this.run(`DELETE FROM benchmarks`);
+        if (!rows || rows.length === 0) return;
+
+        const insert = `
+            INSERT INTO benchmarks (variant_id, hardware_fingerprint, tokens_per_second,
+                time_to_first_token, memory_used_gb, backend, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        for (const row of rows) {
+            const variant = this.get(
+                `SELECT id FROM variants WHERE model_id = ? AND tag = ?`,
+                [row.model_id, row.tag]
+            );
+            if (!variant) continue;
+            this.run(insert, [
+                variant.id,
+                row.hardware_fingerprint,
+                row.tokens_per_second,
+                row.time_to_first_token,
+                row.memory_used_gb,
+                row.backend,
+                row.created_at || null
+            ]);
+        }
+    }
+
+    /**
+     * Clear catalog data. Local speed benchmarks are snapshotted by callers
+     * that recreate variants (variant_id is an autoincrement FK). Drop leftover
+     * benchmark rows here because SQLite FKs are off by default, so DELETE FROM
+     * variants does not cascade.
      */
     clear() {
         // The registry's Ollama source is derived from the local Ollama catalog.
         // Clear only that source so a classic Ollama sync does not erase HF/GPT4All data.
         this.clearRegistrySource('ollama');
-        this.run(`DELETE FROM benchmarks`);
         this.run(`DELETE FROM variants`);
         this.run(`DELETE FROM models`);
         this.run(`DELETE FROM sync_meta`);
+        this.run(`DELETE FROM benchmarks`);
     }
 
     /**

@@ -52,7 +52,11 @@ class SyncManager {
         // times, turning the sync into O(n^2) disk I/O.
         this.db.beginBatch();
         try {
-            // Clear existing data
+            // Keep locally measured speed telemetry across force sync.
+            const speedBenchmarks = this.db.snapshotSpeedBenchmarks();
+
+            // Clear existing catalog data (variants/models). Benchmarks are
+            // re-keyed onto new variant ids after upsert.
             this.db.clear();
 
             // Scrape all models
@@ -62,6 +66,8 @@ class SyncManager {
                     this.db.upsertVariant(variant);
                 }
             });
+
+            this.db.restoreSpeedBenchmarks(speedBenchmarks);
 
             // Update sync timestamp
             this.db.setLastSync(new Date().toISOString());
