@@ -9,12 +9,21 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileAsync, filterLspciDisplayLines } = require('../probe-exec');
 
 class ROCmDetector {
     constructor() {
         this.cache = null;
         this.isAvailable = null;
         this.detectionMethod = null;  // 'rocm-smi', 'rocminfo', 'lspci', 'sysfs'
+    }
+
+    usesOverriddenDetect() {
+        return this.detect !== ROCmDetector.prototype.detect;
+    }
+
+    usesOverriddenAvailability() {
+        return this.checkAvailability !== ROCmDetector.prototype.checkAvailability;
     }
 
     // AMD PCI device IDs for model name resolution
@@ -150,6 +159,103 @@ class ROCmDetector {
         return false;
     }
 
+    async tryRocmSmiAvailable() {
+        try {
+            await execFileAsync('rocm-smi', ['--version'], { encoding: 'utf8', timeout: 5000 });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async tryRocmInfoAvailable() {
+        try {
+            await execFileAsync('rocminfo', [], { encoding: 'utf8', timeout: 5000 });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async tryLspciAmdAvailable() {
+        try {
+            const lspci = filterLspciDisplayLines(
+                await execFileAsync('lspci', ['-nn'], { encoding: 'utf8', timeout: 5000 })
+            );
+            return /AMD|ATI|Radeon/i.test(lspci);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    hasAmdSysfs() {
+        try {
+            const drmPath = '/sys/class/drm';
+            const entries = fs.readdirSync(drmPath);
+            return entries.some(node => {
+                try {
+                    const vendorPath = path.join(drmPath, node, 'device/vendor');
+                    const vendor = fs.readFileSync(vendorPath, 'utf8').trim();
+                    return vendor === '0x1002';
+                } catch (e) {
+                    return false;
+                }
+            });
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async checkAvailabilityAsync() {
+        if (this.usesOverriddenAvailability()) {
+            return this.checkAvailability();
+        }
+
+        if (this.isAvailable !== null) {
+            return this.isAvailable;
+        }
+
+        if (process.platform !== 'linux') {
+            if (await this.tryRocmSmiAvailable()) {
+                this.isAvailable = true;
+                this.detectionMethod = 'rocm-smi';
+                return true;
+            }
+            this.isAvailable = false;
+            return false;
+        }
+
+        const [rocmSmi, rocminfo, lspciAmd] = await Promise.all([
+            this.tryRocmSmiAvailable(),
+            this.tryRocmInfoAvailable(),
+            this.tryLspciAmdAvailable()
+        ]);
+
+        if (rocmSmi) {
+            this.isAvailable = true;
+            this.detectionMethod = 'rocm-smi';
+            return true;
+        }
+        if (rocminfo) {
+            this.isAvailable = true;
+            this.detectionMethod = 'rocminfo';
+            return true;
+        }
+        if (lspciAmd) {
+            this.isAvailable = true;
+            this.detectionMethod = 'lspci';
+            return true;
+        }
+        if (this.hasAmdSysfs()) {
+            this.isAvailable = true;
+            this.detectionMethod = 'sysfs';
+            return true;
+        }
+
+        this.isAvailable = false;
+        return false;
+    }
+
     /**
      * Detect all AMD GPUs and their capabilities
      */
@@ -164,6 +270,28 @@ class ROCmDetector {
 
         try {
             const info = this.getGPUInfo();
+            this.cache = info;
+            return info;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async detectAsync() {
+        if (this.usesOverriddenDetect()) {
+            return this.detect();
+        }
+
+        if (!(await this.checkAvailabilityAsync())) {
+            return null;
+        }
+
+        if (this.cache) {
+            return this.cache;
+        }
+
+        try {
+            const info = await this.getGPUInfoAsync();
             this.cache = info;
             return info;
         } catch (error) {
@@ -204,6 +332,47 @@ class ROCmDetector {
         }
 
         // 4. Try sysfs
+        if (!detected && (this.detectionMethod === 'sysfs' || !this.detectionMethod)) {
+            detected = this._detectViaSysfs(result);
+        }
+
+        if (!detected || result.gpus.length === 0) {
+            return null;
+        }
+
+        result.isMultiGPU = result.gpus.length > 1;
+        result.speedCoefficient = result.gpus.length > 0
+            ? Math.max(...result.gpus.map(g => g.speedCoefficient))
+            : 0;
+
+        return result;
+    }
+
+    async getGPUInfoAsync() {
+        const result = {
+            gpus: [],
+            rocmVersion: null,
+            totalVRAM: 0,
+            totalSharedMemory: 0,
+            backend: 'rocm',
+            isMultiGPU: false,
+            speedCoefficient: 0
+        };
+
+        let detected = false;
+
+        if (this.detectionMethod === 'rocm-smi' || !this.detectionMethod) {
+            detected = await this._detectViaRocmSmiAsync(result);
+        }
+
+        if (!detected && (this.detectionMethod === 'rocminfo' || !this.detectionMethod)) {
+            detected = await this._detectViaRocmInfoAsync(result);
+        }
+
+        if (!detected && (this.detectionMethod === 'lspci' || !this.detectionMethod)) {
+            detected = await this._detectViaLspciAsync(result);
+        }
+
         if (!detected && (this.detectionMethod === 'sysfs' || !this.detectionMethod)) {
             detected = this._detectViaSysfs(result);
         }
@@ -281,6 +450,90 @@ class ROCmDetector {
             }
 
             // Build GPU list
+            const numGPUs = Math.max(gpuNames.length, Object.keys(gpuMemory).length);
+            for (let i = 0; i < numGPUs; i++) {
+                const name = gpuNames[i] || `AMD GPU ${i}`;
+                const detectedVram = gpuMemory[i];
+                const memoryProfile = this.resolveGpuMemoryProfile(name, detectedVram);
+                const vram = memoryProfile.total;
+
+                if (!Number.isFinite(vram) || vram <= 0) {
+                    continue;
+                }
+
+                const gpu = {
+                    index: i,
+                    name: name,
+                    type: memoryProfile.type,
+                    memory: {
+                        total: vram,
+                        free: vram,
+                        used: 0,
+                        dedicated: memoryProfile.dedicated,
+                        shared: memoryProfile.shared
+                    },
+                    dedicatedMemory: memoryProfile.dedicated,
+                    sharedMemory: memoryProfile.shared,
+                    unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
+                    temperature: temps[i] || 0,
+                    utilization: utils[i] || 0,
+                    capabilities: this.getGPUCapabilities(name),
+                    speedCoefficient: this.calculateSpeedCoefficient(name, vram)
+                };
+
+                result.gpus.push(gpu);
+                result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : vram;
+                result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
+            }
+
+            return result.gpus.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async _detectViaRocmSmiAsync(result) {
+        try {
+            const versionOutput = await execFileAsync('rocm-smi', ['--version'], {
+                encoding: 'utf8',
+                timeout: 5000
+            });
+            const match = String(versionOutput).match(/(\d+\.\d+\.?\d*)/);
+            if (match) {
+                result.rocmVersion = match[1];
+            }
+        } catch (e) {
+            return false;
+        }
+
+        try {
+            const [gpuList, memInfo] = await Promise.all([
+                execFileAsync('rocm-smi', ['--showproductname'], { encoding: 'utf8', timeout: 10000 }),
+                execFileAsync('rocm-smi', ['--showmeminfo', 'vram'], { encoding: 'utf8', timeout: 10000 })
+            ]);
+
+            const gpuNames = this.parseRocmSmiProductNames(gpuList);
+            const gpuMemory = this.parseRocmSmiMemoryInfo(memInfo);
+
+            let temps = {};
+            let utils = {};
+            try {
+                const [tempInfo, utilInfo] = await Promise.all([
+                    execFileAsync('rocm-smi', ['--showtemp'], { encoding: 'utf8', timeout: 5000 }),
+                    execFileAsync('rocm-smi', ['--showuse'], { encoding: 'utf8', timeout: 5000 })
+                ]);
+                const tempMatches = String(tempInfo).matchAll(/GPU\[(\d+)\].*?Temperature.*?:\s*(\d+\.?\d*)/g);
+                for (const match of tempMatches) {
+                    temps[parseInt(match[1])] = parseFloat(match[2]);
+                }
+                const utilMatches = String(utilInfo).matchAll(/GPU\[(\d+)\].*?GPU use.*?:\s*(\d+)/g);
+                for (const match of utilMatches) {
+                    utils[parseInt(match[1])] = parseInt(match[2]);
+                }
+            } catch (e) {
+                // Continue without temp/util
+            }
+
             const numGPUs = Math.max(gpuNames.length, Object.keys(gpuMemory).length);
             for (let i = 0; i < numGPUs; i++) {
                 const name = gpuNames[i] || `AMD GPU ${i}`;
@@ -790,6 +1043,50 @@ class ROCmDetector {
         }
     }
 
+    async _detectViaRocmInfoAsync(result) {
+        try {
+            const rocmInfo = await execFileAsync('rocminfo', [], {
+                encoding: 'utf8',
+                timeout: 10000
+            });
+            const agents = this.parseRocmInfoGpuAgents(rocmInfo);
+            for (let index = 0; index < agents.length; index += 1) {
+                const name = agents[index].name;
+                let vram = this.estimateVRAMFromGfxName(name);
+                const memoryProfile = this.resolveGpuMemoryProfile(name, vram);
+                vram = memoryProfile.total;
+
+                if (!Number.isFinite(vram) || vram <= 0) {
+                    vram = 8;
+                }
+
+                result.gpus.push({
+                    index,
+                    name,
+                    type: memoryProfile.type,
+                    memory: {
+                        total: vram,
+                        free: vram,
+                        used: 0,
+                        dedicated: memoryProfile.dedicated,
+                        shared: memoryProfile.shared
+                    },
+                    dedicatedMemory: memoryProfile.dedicated,
+                    sharedMemory: memoryProfile.shared,
+                    unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
+                    capabilities: this.getGPUCapabilities(name),
+                    speedCoefficient: this.calculateSpeedCoefficient(name, vram)
+                });
+                result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : vram;
+                result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
+            }
+
+            return result.gpus.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
     /**
      * Detect GPUs via lspci (fallback when ROCm is not installed)
      */
@@ -863,6 +1160,76 @@ class ROCmDetector {
         } catch (e) {
             return false;
         }
+    }
+
+    async _detectViaLspciAsync(result) {
+        try {
+            const lspciOutput = filterLspciDisplayLines(
+                await execFileAsync('lspci', ['-nn'], {
+                    encoding: 'utf8',
+                    timeout: 10000
+                })
+            );
+            return this._applyLspciOutput(result, lspciOutput);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _applyLspciOutput(result, lspciOutput) {
+        const lines = String(lspciOutput || '').trim().split('\n');
+        let idx = result.gpus.length;
+
+        for (const line of lines) {
+            const amdMatch = line.match(/\[(?:AMD|ATI)\].*?\[([0-9a-f]{4}):([0-9a-f]{4})\]/i) ||
+                             line.match(/(?:AMD|ATI|Radeon).*?\[([0-9a-f]{4}):([0-9a-f]{4})\]/i);
+
+            if (!amdMatch) continue;
+
+            const vendorId = amdMatch[1].toLowerCase();
+            if (vendorId !== '1002') continue;
+
+            const deviceId = amdMatch[2].toLowerCase();
+            const deviceInfo = ROCmDetector.AMD_DEVICE_IDS[deviceId];
+
+            let lspciName = null;
+            const nameMatch = line.match(/\[(?:AMD|ATI)\]\s*(.+?)\s*\[/);
+            if (nameMatch) {
+                lspciName = nameMatch[1].trim();
+            }
+
+            const reportedStrixModel = deviceId === '1586'
+                ? this.getReportedStrixHaloModel(line)
+                : null;
+            const name = reportedStrixModel || deviceInfo?.name ||
+                this._resolveAMDModelName(lspciName, deviceId) || `AMD GPU (${deviceId})`;
+            const vram = deviceInfo?.vram || this.estimateVRAMFromModel(name);
+            const sysfsVram = this._getVRAMFromSysfsForDevice(deviceId);
+            const memoryProfile = this.resolveGpuMemoryProfile(name, sysfsVram || vram);
+
+            result.gpus.push({
+                index: idx,
+                name: name,
+                type: memoryProfile.type,
+                memory: {
+                    total: memoryProfile.total,
+                    free: memoryProfile.total,
+                    used: 0,
+                    dedicated: memoryProfile.dedicated,
+                    shared: memoryProfile.shared
+                },
+                dedicatedMemory: memoryProfile.dedicated,
+                sharedMemory: memoryProfile.shared,
+                unifiedMemory: memoryProfile.type === 'integrated' ? memoryProfile.shared : 0,
+                capabilities: this.getGPUCapabilities(name),
+                speedCoefficient: this.calculateSpeedCoefficient(name, memoryProfile.total)
+            });
+            result.totalVRAM += memoryProfile.type === 'integrated' ? memoryProfile.dedicated : memoryProfile.total;
+            result.totalSharedMemory += memoryProfile.type === 'integrated' ? memoryProfile.shared : 0;
+            idx++;
+        }
+
+        return result.gpus.length > 0;
     }
 
     /**
