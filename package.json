@@ -51,7 +51,8 @@
     "sync:registry-seed": "node scripts/update-registry-seed.js",
     "benchmark": "cd ml-model && python python/benchmark_collector.py",
     "train-ai": "cd ml-model && python python/train_model.py",
-    "postinstall": "echo 'LLM Checker installed. Run: llm-checker hw-detect'"
+    "postinstall": "echo 'LLM Checker installed. Run: llm-checker hw-detect'",
+    "test:quality": "node tests/quality-evals.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
