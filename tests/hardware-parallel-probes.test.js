@@ -24,6 +24,10 @@ async function testIndependentBackendsOverlap() {
         started.push({ label, t: Date.now() });
         await delay(ms);
         finished.push({ label, t: Date.now() });
+        // Real detectAsync stores these before fingerprint generation. Keep the
+        // fixture independent of whether the CI host has NVIDIA tools/devices.
+        detector.backends[label].cache = value;
+        detector.backends[label].isAvailable = Boolean(value);
         return value;
     };
 
