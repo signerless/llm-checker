@@ -39,6 +39,7 @@ function testContextTokenNotMisreadAsParams() {
 function testRecommenderMoEParsing() {
     const model = artifactToSelectorModel({
         source_id: 'huggingface',
+        tasks: ['text-generation'],
         source_name: 'Hugging Face Hub',
         repo_id: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
         canonical_model_id: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
@@ -55,6 +56,7 @@ function testRecommenderActiveParamTotalSizing() {
     // "397B-A17B" = 397B total / 17B active. Memory must be sized by the TOTAL.
     const model = artifactToSelectorModel({
         source_id: 'huggingface',
+        tasks: ['text-generation'],
         repo_id: 'Qwen/Qwen3-397B-A17B',
         canonical_model_id: 'Qwen/Qwen3-397B-A17B',
         artifact_name: 'Qwen3-397B-A17B'
@@ -71,6 +73,7 @@ function testRecommenderActiveParamTotalSizing() {
     // parameter_count_b, the name re-derivation must still size it as 397B.
     const stale = artifactToSelectorModel({
         source_id: 'huggingface',
+        tasks: ['text-generation'],
         repo_id: 'Qwen/Qwen3-397B-A17B',
         canonical_model_id: 'Qwen/Qwen3-397B-A17B',
         artifact_name: 'Qwen3-397B-A17B',
@@ -85,6 +88,7 @@ function testHugeMoEDoesNotFitSmallHardware() {
     const selector = new DeterministicModelSelector();
     const model = artifactToSelectorModel({
         source_id: 'huggingface',
+        tasks: ['text-generation'],
         repo_id: 'Qwen/Qwen3-397B-A17B',
         canonical_model_id: 'Qwen/Qwen3-397B-A17B',
         artifact_name: 'Qwen3-397B-A17B',
@@ -149,6 +153,7 @@ function testShardedFileSizeNotUsedAsModelSize() {
     // whose shard is 4.66GB must be sized from params, not "fit" as 4.66GB.
     const model = artifactToSelectorModel({
         source_id: 'huggingface',
+        tasks: ['text-generation'],
         repo_id: 'org/Big-56B',
         canonical_model_id: 'org/Big-56B',
         artifact_name: 'model-00001-of-00012.safetensors',
