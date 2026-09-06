@@ -17,6 +17,7 @@ class ModelDatabase {
             throw new Error(`Unknown SQLite backend: ${this.sqliteBackend}`);
         }
         this.initialized = false;
+        this.readOnly = Boolean(options.readOnly);
         this.disableRegistrySeedImport = Boolean(options.disableRegistrySeedImport);
         // Batched-write state: during a bulk sync we defer the (expensive) full
         // sql.js export-and-write until the batch ends, instead of rewriting the
@@ -45,10 +46,11 @@ class ModelDatabase {
 
         // Ensure directory exists
         const dbDir = path.dirname(this.dbPath);
-        if (!fs.existsSync(dbDir)) {
+        if (!this.readOnly && !fs.existsSync(dbDir)) {
             fs.mkdirSync(dbDir, { recursive: true });
         }
-        this.seedDatabaseIfNeeded();
+        if (!this.readOnly) this.seedDatabaseIfNeeded();
+        if (this.readOnly && !fs.existsSync(this.dbPath)) throw new Error(`Database not found: ${this.dbPath}`);
 
         let DatabaseSync;
         if (this.sqliteBackend !== 'wasm') {
@@ -64,7 +66,7 @@ class ModelDatabase {
         if (DatabaseSync) {
             // Keep the file on disk; do not allocate a WASM heap or read it all.
             // Opening errors must surface, rather than retrying with another engine.
-            this.db = new DatabaseSync(this.dbPath);
+            this.db = new DatabaseSync(this.dbPath, { readOnly: this.readOnly });
             this.db.exec('PRAGMA busy_timeout = 5000');
         } else {
             let initSqlJs;
@@ -79,6 +81,10 @@ class ModelDatabase {
                 : new SQL.Database();
         }
 
+        if (this.readOnly) {
+            this.initialized = true;
+            return;
+        }
         this.createSchema();
         this.migrateSpeedBenchmarks();
         this.initialized = true;
@@ -305,6 +311,7 @@ class ModelDatabase {
      * Save sql.js database to file
      */
     saveToFile() {
+        if (this.readOnly) return;
         if (!this.useNativeSqlite && this.db) {
             const data = this.db.export();
             const buffer = Buffer.from(data);
@@ -345,6 +352,7 @@ class ModelDatabase {
      * Execute a query (handles both sqlite implementations)
      */
     run(sql, params = []) {
+        if (this.readOnly) throw new Error('Database is read-only');
         if (this.useNativeSqlite) {
             return this.db.prepare(sql).run(...params);
         } else {
@@ -825,7 +833,9 @@ class ModelDatabase {
         const seed = new ModelDatabase({
             dbPath: this.seedDbPath,
             seedDbPath: this.seedDbPath,
-            disableRegistrySeedImport: true
+            disableRegistrySeedImport: true,
+            readOnly: true,
+            sqliteBackend: this.sqliteBackend
         });
 
         await seed.initialize();
