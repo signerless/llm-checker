@@ -116,15 +116,20 @@ function testRocmInfoDedupeByGfxAlias() {
 }
 
 function testIntegratedSharedMemoryProfile() {
-    const detector = new ROCmDetector();
-    detector.getIntegratedMemoryProfile = () => ({ dedicated: 1, shared: 112 });
+    const os = require('os');
+    const originalTotalmem = os.totalmem;
+    os.totalmem = () => 128 * 1024 ** 3;
+    try {
+        const detector = new ROCmDetector();
+        detector.getIntegratedMemoryProfile = () => ({ dedicated: 1, shared: 112 });
 
-    const profile = detector.resolveGpuMemoryProfile('AMD Radeon 8060S (gfx1151)', 1);
+        const profile = detector.resolveGpuMemoryProfile('AMD Radeon 8060S (gfx1151)', 1);
 
-    assert.strictEqual(profile.type, 'integrated');
-    assert.strictEqual(profile.dedicated, 1);
-    assert.strictEqual(profile.shared, 112);
-    assert.strictEqual(profile.total, 112);
+        assert.strictEqual(profile.type, 'integrated');
+        assert.strictEqual(profile.dedicated, 1);
+        assert.strictEqual(profile.shared, 112);
+        assert.strictEqual(profile.total, 112);
+    } finally { os.totalmem = originalTotalmem; }
 }
 
 function run() {
