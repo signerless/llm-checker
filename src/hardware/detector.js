@@ -1,3 +1,4 @@
+const { megabytesToGB, clampSharedMemory } = require('./memory-units');
 const si = require('systeminformation');
 const UnifiedDetector = require('./unified-detector');
 const { normalizePlatform } = require('../utils/platform');
@@ -135,7 +136,7 @@ class HardwareDetector {
     }
 
     estimateIntegratedSharedMemory(gpu, memoryInfo) {
-        const dedicatedAperture = this.normalizeVRAM(gpu?.vram || 0);
+        const dedicatedAperture = megabytesToGB(gpu?.vram || 0);
         const explicitSharedCandidates = [
             gpu?.memoryTotal,
             gpu?.memory,
@@ -147,16 +148,16 @@ class HardwareDetector {
             .map((value) => this.normalizeVRAM(value))
             .filter((value) => value > dedicatedAperture);
 
+        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
         if (explicitSharedCandidates.length > 0) {
-            return Math.max(...explicitSharedCandidates);
+            return clampSharedMemory(Math.max(...explicitSharedCandidates), totalSystemGB);
         }
 
-        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
         if (gpu?.vramDynamic || dedicatedAperture <= 2) {
             return this.estimateSystemSharedMemory(totalSystemGB, dedicatedAperture);
         }
 
-        return dedicatedAperture;
+        return clampSharedMemory(dedicatedAperture, totalSystemGB);
     }
 
     estimateSystemSharedMemory(totalSystemGB, fallbackGB = 0) {
@@ -166,7 +167,7 @@ class HardwareDetector {
         }
 
         // Integrated GPUs typically expose roughly half of system RAM as a shared pool.
-        return Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16));
+        return clampSharedMemory(Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16)), totalSystemGB);
     }
 
     processGPUInfo(graphics, memoryInfo = null) {
@@ -287,7 +288,7 @@ class HardwareDetector {
         }
 
         const primaryIsIntegrated = this.isIntegratedGPU(enhancedModel);
-        const normalizedPrimaryVRAM = this.normalizeVRAM(primaryGPU.vram || 0);
+        const normalizedPrimaryVRAM = megabytesToGB(primaryGPU.vram || 0);
         const estimatedSharedMemory = primaryIsIntegrated
             ? this.estimateIntegratedSharedMemory(primaryGPU, memoryInfo)
             : 0;
@@ -311,7 +312,7 @@ class HardwareDetector {
         let gpuCount = 0;
 
         dedicatedGPUs.forEach(gpu => {
-            const gpuVram = this.normalizeVRAM(gpu.vram || 0) || this.estimateVRAMFromModel(gpu.model);
+            const gpuVram = megabytesToGB(gpu.vram || 0) || this.estimateVRAMFromModel(gpu.model);
             if (gpuVram > 0) {
                 totalDedicatedVRAM += gpuVram;
                 gpuCount++;
@@ -346,11 +347,11 @@ class HardwareDetector {
                 model: gpu.model,
                 vram: this.isIntegratedGPU(gpu.model)
                     ? this.estimateIntegratedSharedMemory(gpu, memoryInfo)
-                    : this.normalizeVRAM(gpu.vram || 0),
+                    : megabytesToGB(gpu.vram || 0),
                 sharedMemory: this.isIntegratedGPU(gpu.model)
                     ? this.estimateIntegratedSharedMemory(gpu, memoryInfo)
                     : 0,
-                dedicatedMemory: this.normalizeVRAM(gpu.vram || 0),
+                dedicatedMemory: megabytesToGB(gpu.vram || 0),
                 vendor: gpu.vendor || this.inferVendorFromGPUModel(gpu.model, 'Unknown')
             })),
             displays: displays.length,
@@ -785,8 +786,8 @@ class HardwareDetector {
             // Sort dedicated GPUs by a combination of VRAM and model tier
             return dedicatedGPUs.sort((a, b) => {
                 // First priority: VRAM amount
-                const vramA = this.normalizeVRAM(a.vram || 0);
-                const vramB = this.normalizeVRAM(b.vram || 0);
+                const vramA = megabytesToGB(a.vram || 0);
+                const vramB = megabytesToGB(b.vram || 0);
                 
                 if (vramA !== vramB) {
                     return vramB - vramA; // Higher VRAM first

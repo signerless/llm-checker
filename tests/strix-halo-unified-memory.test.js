@@ -1,5 +1,6 @@
 const assert = require('assert');
 const childProcess = require('child_process');
+const os = require('os');
 
 const rocmModulePath = require.resolve('../src/hardware/backends/rocm-detector');
 const originalExecSync = childProcess.execSync;
@@ -229,11 +230,15 @@ async function testUnifiedDetectionDedupesLinuxFallbackWithoutDeviceId() {
 }
 
 async function run() {
-    testRocmDeviceIdAndUnifiedMemory();
-    testSystemInformationFixtureAndCommandClassification();
-    testSpecificStrixHaloNamesArePreserved();
-    await testUnifiedDetectionDedupesLinuxFallbackWithoutDeviceId();
-    console.log('strix-halo-unified-memory.test.js: OK');
+    const originalTotalmem = os.totalmem;
+    os.totalmem = () => 124 * 1024 ** 3;
+    try {
+        testRocmDeviceIdAndUnifiedMemory();
+        testSystemInformationFixtureAndCommandClassification();
+        testSpecificStrixHaloNamesArePreserved();
+        await testUnifiedDetectionDedupesLinuxFallbackWithoutDeviceId();
+        console.log('strix-halo-unified-memory.test.js: OK');
+    } finally { os.totalmem = originalTotalmem; }
 }
 
 if (require.main === module) {
