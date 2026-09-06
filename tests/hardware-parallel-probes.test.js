@@ -5,6 +5,9 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const UnifiedDetector = require('../src/hardware/unified-detector');
 const { execFileAsync, filterLspciDisplayLines } = require('../src/hardware/probe-exec');
 
@@ -47,9 +50,7 @@ async function testIndependentBackendsOverlap() {
         hasDedicated: false
     });
 
-    const t0 = Date.now();
     const result = await detector.detect();
-    const elapsed = Date.now() - t0;
 
     assert.ok(result.backends.cpu?.available, 'CPU backend should remain available');
     assert.strictEqual(result.backends.cuda?.available, true, 'CUDA backend should remain available');
@@ -57,9 +58,8 @@ async function testIndependentBackendsOverlap() {
     assert.strictEqual(result.summary.bestBackend, 'cuda', 'Summary contract must stay cuda-first');
     assert.ok(typeof result.fingerprint === 'string' && result.fingerprint.length > 0, 'Fingerprint must still be produced');
 
-    const startSpread = Math.max(...started.map((s) => s.t)) - Math.min(...started.map((s) => s.t));
-    assert.ok(startSpread < 40, `probes should start together, spread was ${startSpread}ms`);
-    assert.ok(elapsed < 200, `wall time should approach the slowest probe, not the sum; got ${elapsed}ms`);
+    assert.ok(Math.max(...started.map((s) => s.t)) <= Math.min(...finished.map((s) => s.t)),
+        'every independent probe must start before the first probe completes');
 }
 
 async function testOverriddenSyncDetectStillWorks() {
@@ -114,6 +114,25 @@ async function main() {
     await testIndependentBackendsOverlap();
     await testOverriddenSyncDetectStillWorks();
     await testExecFileAndLspciFilter();
+    // Real child processes rendezvous through files: serial execution cannot
+    // finish, because the first child waits for the other two to start.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-probe-'));
+    try {
+        const child = `const fs = require('fs'); const path = require('path');
+            fs.writeFileSync(path.join(process.argv[1], process.argv[2]), 'ready');
+            const timer = setInterval(() => {
+                if (fs.readdirSync(process.argv[1]).length === 3) {
+                    clearInterval(timer); process.stdout.write('overlapped');
+                }
+            }, 10);`;
+        const results = await Promise.all([0, 1, 2].map((id) => execFileAsync(process.execPath,
+            ['-e', child, dir, String(id)], { timeout: 5000 })));
+        assert.deepStrictEqual(results, ['overlapped', 'overlapped', 'overlapped']);
+        await assert.rejects(execFileAsync(process.execPath,
+            ['-e', 'setInterval(() => {}, 1000)'], { timeout: 100 }),
+        (error) => error.killed === true, 'stalled probes must be killed at their deadline');
+        await assert.rejects(execFileAsync(path.join(dir, 'missing-probe')), /ENOENT/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     console.log('hardware-parallel-probes: ok');
 }
 
