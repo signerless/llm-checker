@@ -7,6 +7,8 @@ const ModelDatabase = require('../src/data/model-database');
 
 async function run() {
     const seedDbPath = path.join(__dirname, '..', 'src', 'data', 'seed', 'models.db');
+    const seedHash = () => require('crypto').createHash('sha256').update(fs.readFileSync(seedDbPath)).digest('hex');
+    const originalSeedHash = seedHash();
     const seedTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-seed-test-'));
     const database = new ModelDatabase({
         dbPath: path.join(seedTestDir, 'models.db'),
@@ -62,6 +64,7 @@ async function run() {
                 `Expected existing user DB to import packaged registry, got ${importedStats.artifacts}`
             );
             userDatabase.close();
+            assert.strictEqual(seedHash(), originalSeedHash, 'importing a snapshot must not migrate or rewrite the packaged database');
         } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
         }

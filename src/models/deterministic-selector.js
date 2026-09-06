@@ -1890,6 +1890,7 @@ class DeterministicModelSelector {
         // first use and degrades to the estimate if that is not possible.
         if (this.qualityEvals === undefined) {
             this.qualityEvals = null;
+            let connection;
             try {
                 const { DatabaseSync } = require('node:sqlite');
                 const { QualityEvals } = require('../data/quality-evals');
@@ -1897,9 +1898,13 @@ class DeterministicModelSelector {
                     require('os').homedir(), '.llm-checker', 'models.db'
                 );
                 if (require('fs').existsSync(dbPath)) {
-                    this.qualityEvals = new QualityEvals(new DatabaseSync(dbPath, { readOnly: true }));
+                    connection = new DatabaseSync(dbPath, { readOnly: true });
+                    const quality = new QualityEvals(connection, { readOnly: true });
+                    quality.stats();
+                    connection.prepare('SELECT 1 FROM catalog_families LIMIT 1').get();
+                    this.qualityEvals = quality;
                 }
-            } catch { /* no benchmark data available — estimates it is */ }
+            } catch { connection?.close(); /* no benchmark data available */ }
         }
         if (!this.qualityEvals) return null;
 
@@ -1912,10 +1917,10 @@ class DeterministicModelSelector {
                 'bcb_hard_instruct', 'bcb_instruct', 'livebench_coding',
                 'livebench_agentic_coding', 'humaneval_plus', 'mbpp_plus', 'bcb_complete',
             ],
-            reasoning: ['livebench_reasoning', 'livebench_mathematics'],
+            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr'],
             creative: ['livebench_language'],
-            talking: ['livebench_if'],
-            general: ['livebench_data_analysis'],
+            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if'],
+            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis'],
             multimodal: ['mmmu_val'],
         };
         const wanted = BENCH_FOR_CATEGORY[category];
@@ -1929,7 +1934,8 @@ class DeterministicModelSelector {
 
         // Take the most preferred metric that exists for this model.
         const byMetric = new Map(hit.evals.map((e) => [e.metric, e]));
-        const chosen = wanted.map((m) => byMetric.get(m)).find(Boolean);
+        const chosen = wanted.map((m) => byMetric.get(m)).filter(Boolean)
+            .find((entry) => this.qualityEvals.percentile(entry.metric, entry.score) != null);
         if (!chosen) return null;
 
         // BigCodeBench runs far below HumanEval on the same model (its top
@@ -1961,6 +1967,8 @@ class DeterministicModelSelector {
                 metric: chosen.metric,
                 rawScore: chosen.score,
                 source: chosen.sourceName,
+                sourceUrl: chosen.sourceUrl,
+                scoreUnit: chosen.scoreUnit,
                 independent: chosen.independent,
                 benchModel: chosen.benchModel,
                 precision: chosen.precision,

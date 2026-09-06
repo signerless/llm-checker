@@ -508,6 +508,7 @@ rules:
 | Command | Description |
 |---------|-------------|
 | `sync` | Refresh the local SQLite model catalog from Ollama |
+| `quality-sync` | Refresh public quality benchmarks from HF Open LLM, LMArena, BigCodeBench, EvalPlus, LiveBench and MMMU; supports `--sources` and `--json` |
 | `search <query>` | Search the synced Ollama catalog; add `--registry`/`--source` to search the multi-source registry (HF + Ollama + GPT4All) with `--max-params`/`--runtime`/`--format` filters |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
 
@@ -531,6 +532,24 @@ llm-checker registry-recommend --category coding --runtime mlx
 # Search Hugging Face for vLLM-ready reasoning models under 24B
 llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
 ```
+
+Refresh the quality scores used by `check`, `recommend` and `registry-recommend`:
+
+```bash
+llm-checker quality-sync
+llm-checker quality-sync --sources hf_open_llm,lmarena --json
+```
+
+HF Open LLM contributes MMLU-PRO, BBH, GPQA, MuSR, MATH Level 5 and IFEval
+from official, available, original checkpoints. It supplies no coding score.
+LMArena contributes overall human preference Elo to general and conversation
+recommendations, with attribution to its [CC-BY-4.0 dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset).
+The sources are downloaded from their official Parquet snapshots without an
+account. Failed refreshes retain cached scores. Recommendations expose
+`qualitySource` as `measured` or `estimated`, including the measured source,
+metric and checkpoint; `sizeUnknown` marks a family score without a published
+size. The coverage report counts catalog families, not every size or task.
+Percentiles use the local catalog cohort and map to the estimator's 45–95 band.
 
 ### Enterprise Policy Commands
 

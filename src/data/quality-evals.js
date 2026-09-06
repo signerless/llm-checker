@@ -13,9 +13,8 @@
  *
  * Why NOT the existing `benchmarks` table: it is per-machine SPEED telemetry
  * (tokens_per_second, hardware_fingerprint), and `ModelDatabase.clear()`
- * issues `DELETE FROM benchmarks` on every `fullSync()`. Quality data stored
- * there would be silently wiped by a routine catalog refresh. The tables here
- * are untouched by clear().
+ * is keyed to a machine and runtime rather than a public evaluation. The
+ * quality tables here remain independent of catalog and speed refreshes.
  *
  * The join key is (family_key, params_b), never a variant id: a leaderboard
  * measures an fp16 base checkpoint, while a variant is a local Q4 build of it.
@@ -56,6 +55,7 @@ CREATE TABLE IF NOT EXISTS quality_evals (
 
 CREATE INDEX IF NOT EXISTS idx_quality_family ON quality_evals(family_key, params_b);
 CREATE INDEX IF NOT EXISTS idx_quality_category ON quality_evals(category);
+CREATE TABLE IF NOT EXISTS catalog_families (family_key TEXT PRIMARY KEY);
 `;
 
 /**
@@ -63,6 +63,91 @@ CREATE INDEX IF NOT EXISTS idx_quality_category ON quality_evals(category);
  * measures — HumanEval says nothing about vision, so it is not borrowed for it.
  */
 const SOURCES = {
+    hf_open_llm: {
+        displayName: 'Hugging Face Open LLM Leaderboard',
+        homepage: 'https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard',
+        // The contents snapshot works independently of datasets-server's
+        // broken results dataset and includes the Official Providers flag.
+        url: 'https://huggingface.co/datasets/open-llm-leaderboard/contents/resolve/main/data/train-00000-of-00001.parquet',
+        format: 'parquet',
+        independent: true,
+        parse(rows) {
+            const metrics = {
+                'MMLU-PRO': ['hf_mmlu_pro', 'general'],
+                BBH: ['hf_bbh', 'reasoning'],
+                GPQA: ['hf_gpqa', 'reasoning'],
+                MUSR: ['hf_musr', 'reasoning'],
+                'MATH Lvl 5': ['hf_math_lvl5', 'reasoning'],
+                IFEval: ['hf_ifeval', 'talking'],
+            };
+            const out = new Map();
+            for (const row of rows) {
+                if (row['Official Providers'] !== true || row.Flagged || row.Merged ||
+                    row['Available on the hub'] !== true || row['Weight type'] !== 'Original') continue;
+                const name = row.fullname;
+                if (typeof name !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(name)) continue;
+                for (const [label, [metric, category]] of Object.entries(metrics)) {
+                    // Raw is accuracy in [0, 1]; the displayed columns can
+                    // instead be chance-adjusted scores. Never mix the two.
+                    const value = finiteNumber(row[`${label} Raw`]);
+                    if (value == null || value < 0 || value > 1) continue;
+                    const result = {
+                        benchModelName: name,
+                        benchModelUrl: `https://huggingface.co/${name}`,
+                        paramsB: numOrNull(row['#Params (B)']),
+                        isMoe: row.MoE ? 1 : 0,
+                        variantRole: /pretrained/i.test(row.Type || '') ? 'base' : 'instruct',
+                        metric, category,
+                        rawScore: value * 100,
+                        rawScaleMax: 100,
+                        evalPrecision: row.Precision || 'not published',
+                    };
+                    const key = `${name}::${metric}`;
+                    const previous = out.get(key);
+                    // Prefer a full-precision run over a quantized duplicate.
+                    if (!previous || /^(bfloat16|float16|float32)$/.test(result.evalPrecision)) out.set(key, result);
+                }
+            }
+            return [...out.values()];
+        },
+    },
+
+    lmarena: {
+        displayName: 'LMArena (human preference Elo)',
+        // The publisher distributes these ratings under CC-BY-4.0. Preserve
+        // its attribution URL in the source and recommendation provenance.
+        homepage: 'https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset',
+        url: 'https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset/resolve/main/text/latest-00000-of-00001.parquet',
+        format: 'parquet',
+        independent: true,
+        parse(rows) {
+            const latest = new Map();
+            for (const row of rows) {
+                const score = finiteNumber(row.rating);
+                if (row.category !== 'overall' || typeof row.model_name !== 'string' ||
+                    !row.model_name.trim() || score == null || score <= 0 || !(finiteNumber(row.vote_count) > 0)) continue;
+                const previous = latest.get(row.model_name);
+                if (!previous || String(row.leaderboard_publish_date) > String(previous.leaderboard_publish_date)) {
+                    latest.set(row.model_name, row);
+                }
+            }
+            return [...latest.values()].flatMap((row) => ['general', 'talking'].map((category) => ({
+                benchModelName: row.model_name,
+                benchModelUrl: this.homepage,
+                paramsB: null,
+                isMoe: 0,
+                variantRole: 'instruct',
+                metric: category === 'general' ? 'lmarena_general' : 'lmarena_chat',
+                category,
+                rawScore: Number(row.rating),
+                // Elo has no fixed maximum. Zero records an unbounded scale;
+                // it is ranked within the catalog cohort, never divided by 100.
+                rawScaleMax: 0,
+                evalPrecision: 'not published',
+            })));
+        },
+    },
+
     bigcodebench: {
         displayName: 'BigCodeBench',
         homepage: 'https://bigcode-bench.github.io',
@@ -175,8 +260,8 @@ const SOURCES = {
                 if (!name) continue;
                 const byTask = {};
                 head.forEach((h, i) => {
-                    const v = Number(cells[i]);
-                    if (i > 0 && Number.isFinite(v)) byTask[h] = v;
+                    const v = finiteNumber(cells[i]);
+                    if (i > 0 && v != null) byTask[h] = v;
                 });
                 for (const [group, tasks] of Object.entries(this.categories)) {
                     const vals = tasks.map((t) => byTask[t]).filter(Number.isFinite);
@@ -230,8 +315,8 @@ const SOURCES = {
                     // MMMU-Pro runs ~20-30 points below val and is NOT comparable
                     // to it, so the two are stored as separate metrics.
                     const raw = row?.[split]?.overall;
-                    const val = Number(raw);
-                    if (!Number.isFinite(val)) continue;
+                    const val = finiteNumber(raw);
+                    if (val == null) continue;
                     out.push({
                         benchModelName: String(name),
                         benchModelUrl: info?.link ?? row?.url ?? null,
@@ -253,10 +338,17 @@ const SOURCES = {
 
 const numOrNull = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
 
+function finiteNumber(value) {
+    if (value == null || value === '' || typeof value === 'boolean' ||
+        (typeof value === 'string' && !value.trim())) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
 function pickNumber(row, keys) {
     for (const k of keys) {
-        const n = Number(row?.[k]);
-        if (Number.isFinite(n)) return n;
+        const n = finiteNumber(row?.[k]);
+        if (n != null) return n;
     }
     return null;
 }
@@ -312,18 +404,50 @@ const sizeMatches = (a, b) => {
 };
 
 class QualityEvals {
-    constructor(db) {
-        this.db = db;              // node:sqlite DatabaseSync
-        this.db.exec(SCHEMA);
+    constructor(db, { readOnly = false } = {}) {
+        // Accept both a raw node:sqlite handle (desktop) and ModelDatabase
+        // (CLI, including its Node 18/20 sql.js fallback).
+        this.modelDatabase = typeof db.beginBatch === 'function' ? db : null;
+        this.db = this.modelDatabase ? {
+            exec: (sql) => db.db.exec(sql),
+            prepare: (sql) => ({
+                run: (...args) => db.run(sql, args),
+                all: (...args) => db.all(sql, args),
+                get: (...args) => db.get(sql, args),
+            }),
+        } : db;
+        if (!readOnly) {
+            this.db.exec(SCHEMA);
+            this.modelDatabase?.saveToFile();
+        }
+    }
+
+    transaction(write) {
+        this.modelDatabase?.beginBatch();
+        try {
+            this.db.exec('SAVEPOINT quality_update');
+            try {
+                const result = write();
+                this.db.exec('RELEASE quality_update');
+                return result;
+            } catch (error) {
+                this.db.exec('ROLLBACK TO quality_update');
+                this.db.exec('RELEASE quality_update');
+                throw error;
+            }
+        } finally {
+            this.modelDatabase?.endBatch();
+        }
     }
 
     /** Fetch one source and replace its rows. Returns a small report. */
-    async ingest(sourceId, { fetchImpl = fetch } = {}) {
+    async ingest(sourceId, { fetchImpl = fetch, timeoutMs = 60000 } = {}) {
         const spec = SOURCES[sourceId];
         if (!spec) throw new Error(`Unknown quality source: ${sourceId}`);
 
         let rows = [];
-        let text = '';
+        let payload = '';
+        const request = (url) => fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
 
         if (Array.isArray(spec.releases)) {
             // Merge releases oldest-first so a newer re-run of the same model
@@ -333,11 +457,11 @@ class QualityEvals {
                 const url = `https://livebench.ai/table_${release}.csv`;
                 let body;
                 try {
-                    const r = await fetchImpl(url, { redirect: 'follow' });
+                    const r = await request(url);
                     if (!r.ok) continue;
                     body = await r.text();
                 } catch { continue; }
-                text += body;
+                payload += body;
                 for (const row of spec.parseCsv(body, release)) {
                     seen.set(`${row.benchModelName}::${row.metric}`, row);
                 }
@@ -345,25 +469,39 @@ class QualityEvals {
             rows = [...seen.values()];
             if (!rows.length) throw new Error(`${sourceId}: no release returned usable rows`);
         } else {
-            const res = await fetchImpl(spec.url, { redirect: 'follow' });
+            const res = await request(spec.url);
             if (!res.ok) throw new Error(`${sourceId}: HTTP ${res.status}`);
-            text = await res.text();
             try {
-                rows = spec.parse(JSON.parse(text));
+                if (spec.format === 'parquet') {
+                    const file = await res.arrayBuffer();
+                    payload = Buffer.from(file);
+                    const { parquetReadObjects } = await import('hyparquet');
+                    rows = spec.parse(await parquetReadObjects({ file }));
+                } else {
+                    payload = await res.text();
+                    rows = spec.parse(JSON.parse(payload));
+                }
             } catch (err) {
                 throw new Error(`${sourceId}: could not parse — ${err.message}`);
             }
         }
 
-        const now = new Date().toISOString();
-        const sha = require('crypto').createHash('sha256').update(text).digest('hex');
+        if (!rows.length || rows.some((row) => !row.benchModelName || !Number.isFinite(row.rawScore))) {
+            throw new Error(`${sourceId}: no valid replacement data; cached scores retained`);
+        }
 
-        this.db.exec('BEGIN');
-        try {
+        const now = new Date().toISOString();
+        const sha = require('crypto').createHash('sha256').update(payload).digest('hex');
+
+        this.transaction(() => {
             this.db.prepare(`
                 INSERT INTO quality_sources (id, display_name, data_url, homepage_url, independent, fetched_at, row_count, payload_sha256)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                  display_name = excluded.display_name,
+                  data_url = excluded.data_url,
+                  homepage_url = excluded.homepage_url,
+                  independent = excluded.independent,
                   fetched_at = excluded.fetched_at,
                   row_count  = excluded.row_count,
                   payload_sha256 = excluded.payload_sha256
@@ -376,8 +514,8 @@ class QualityEvals {
                 INSERT OR REPLACE INTO quality_evals
                   (source_id, bench_model_name, bench_model_url, family_key, params_b,
                    active_params_b, is_moe, variant_role, metric, category,
-                   raw_score, raw_scale_max, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   raw_score, raw_scale_max, eval_precision, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
             for (const r of rows) {
                 const fk = familyKey(r.benchModelName);
@@ -385,14 +523,11 @@ class QualityEvals {
                     sourceId, r.benchModelName, r.benchModelUrl ?? null,
                     fk.family, r.paramsB ?? fk.paramsB, r.activeParamsB ?? r.paramsB ?? fk.paramsB,
                     r.isMoe, r.variantRole, r.metric, r.category,
-                    r.rawScore, r.rawScaleMax, now
+                    r.rawScore, r.rawScaleMax, r.evalPrecision || 'fp16', now
                 );
             }
-            this.db.exec('COMMIT');
-        } catch (err) {
-            this.db.exec('ROLLBACK');
-            throw err;
-        }
+        });
+        this._pctCache = new Map();
 
         return { source: sourceId, rows: rows.length, fetchedAt: now };
     }
@@ -410,7 +545,7 @@ class QualityEvals {
             SELECT q.*, s.display_name AS source_name, s.homepage_url, s.independent
             FROM quality_evals q JOIN quality_sources s ON s.id = q.source_id
             WHERE q.family_key = ?
-        `).all(fk.family);
+        `).all(fk.family).filter((r) => !category || r.category === category);
         if (!rows.length) return null;
 
         // Prefer rows whose published size matches the build being scored.
@@ -448,10 +583,12 @@ class QualityEvals {
                 metric: r.metric,
                 category: r.category,
                 score: r.raw_score,
-                scaleMax: r.raw_scale_max,
+                scaleMax: r.raw_scale_max || null,
+                scoreUnit: r.raw_scale_max === 0 ? 'elo' : 'percent',
                 benchModel: r.bench_model_name,
                 benchParamsB: r.params_b,
                 url: r.bench_model_url,
+                sourceUrl: r.homepage_url,
                 precision: r.eval_precision,
             })),
         };
@@ -504,18 +641,13 @@ class QualityEvals {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS catalog_families (family_key TEXT PRIMARY KEY);
         `);
-        this.db.exec('BEGIN');
-        try {
+        this.transaction(() => {
             this.db.prepare('DELETE FROM catalog_families').run();
             const ins = this.db.prepare(
                 'INSERT OR IGNORE INTO catalog_families (family_key) VALUES (?)'
             );
             for (const m of catalogRows) ins.run(familyKey(m.name).family);
-            this.db.exec('COMMIT');
-        } catch (err) {
-            this.db.exec('ROLLBACK');
-            throw err;
-        }
+        });
         this._pctCache = new Map();
         return this.db.prepare('SELECT COUNT(*) c FROM catalog_families').get().c;
     }

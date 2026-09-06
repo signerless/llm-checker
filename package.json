@@ -58,6 +58,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
+    "hyparquet": "^1.30.0",
     "inquirer": "^8.2.6",
     "node-fetch": "^2.7.0",
     "ora": "^5.4.1",
