@@ -25,6 +25,22 @@ const SOURCE_DEFINITIONS = {
 const HUGGING_FACE_MODEL_API = 'https://huggingface.co/api/models';
 const GPT4ALL_MODELS_URL = 'https://gpt4all.io/models/models3.json';
 
+// A weight-file extension alone also matches diffusion models and asset bundles.
+// Require an explicit language/vision-language task, including older Hub tags.
+const LANGUAGE_MODEL_TASKS = new Set([
+    'text-generation', 'text2text-generation', 'conversational',
+    'image-text-to-text', 'image-to-text', 'visual-question-answering',
+    'document-question-answering', 'feature-extraction', 'sentence-similarity'
+]);
+
+function isSupportedHuggingFaceModel(model = {}) {
+    const library = String(model.library_name || '').toLowerCase();
+    if (/^(diffusers|diffusion-single-file|timm|peft|adapter-transformers)$/.test(library)) return false;
+    const pipeline = String(model.pipeline_tag || '').toLowerCase();
+    if (pipeline) return LANGUAGE_MODEL_TASKS.has(pipeline);
+    return toArray(model.tags).some((tag) => LANGUAGE_MODEL_TASKS.has(String(tag).toLowerCase()));
+}
+
 function extractNextLink(linkHeader = '') {
     const links = String(linkHeader || '').split(',');
     for (const link of links) {
@@ -298,7 +314,7 @@ function buildHuggingFaceDownloadUrl(repoId, filename, revision = 'main') {
 
 function normalizeHuggingFaceModel(model) {
     const repoId = model.id || model.modelId || model.model_id;
-    if (!repoId) return null;
+    if (!repoId || !isSupportedHuggingFaceModel(model)) return null;
 
     const namespace = repoId.includes('/') ? repoId.split('/')[0] : '';
     const tags = toArray(model.tags);
@@ -758,6 +774,7 @@ module.exports = {
     RegistryIngestor,
     SOURCE_DEFINITIONS,
     normalizeHuggingFaceModel,
+    isSupportedHuggingFaceModel,
     normalizeGpt4AllEntry,
     normalizeOllamaRows,
     inferFormat,
