@@ -15,7 +15,37 @@ function runRuntimeCommandTests() {
 
     assert.strictEqual(normalizeRuntime('VLLM'), 'vllm');
     assert.strictEqual(normalizeRuntime('mlx'), 'mlx');
-    assert.strictEqual(normalizeRuntime('unknown-runtime'), 'ollama');
+    assert.strictEqual(normalizeRuntime('unknown-runtime'), null);
+    assert.strictEqual(normalizeRuntime('auto'), 'auto');
+    assert.strictEqual(normalizeRuntime('llama.cpp'), 'llama.cpp');
+    assert.strictEqual(normalizeRuntime('HF'), 'transformers');
+    assert.strictEqual(runtimeSupportedOnHardware('typo'), false);
+    const invalid = getRuntimeCommandSet(model, 'unknown-runtime');
+    assert.strictEqual(invalid.runtime, null);
+    assert.strictEqual(invalid.pull, null);
+    assert.strictEqual(invalid.run, null);
+
+    const gguf = { hfId: 'ggml-org/models', filename: 'tinyllamas/stories260K.gguf' };
+    const cpp = getRuntimeCommandSet(gguf, 'llama.cpp');
+    assert.ok(cpp.install.includes('llama.cpp'));
+    assert.ok(cpp.pull.includes('curl --fail --location'));
+    assert.ok(cpp.pull.includes('/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf'));
+    assert.ok(cpp.run.includes("llama-cli --model './stories260K.gguf'"));
+    assert.deepStrictEqual(getRuntimeCommandSet(gguf, 'auto'), cpp);
+    assert.strictEqual(getRuntimeCommandSet(model, 'llama.cpp').run, null, 'an Ollama tag is not a GGUF file');
+    const transformers = getRuntimeCommandSet({ hfId: 'HuggingFaceTB/SmolLM2-135M' }, 'transformers');
+    assert.ok(transformers.install.includes('transformers torch'));
+    assert.ok(transformers.pull.includes("hf download 'HuggingFaceTB/SmolLM2-135M'"));
+    assert.ok(transformers.run.includes('from transformers import pipeline'));
+    assert.strictEqual(getRuntimeCommandSet({ hfId: 'HuggingFaceTB/SmolLM2-135M' }, 'auto').runtime, 'transformers');
+    assert.strictEqual(getRuntimeCommandSet(model, 'auto').runtime, 'ollama');
+    const { spawnSync } = require('child_process');
+    const path = require('path');
+    const invalidCli = spawnSync(process.execPath, [path.join(__dirname, '../bin/enhanced_cli.js'),
+        'check', '--simulate', 'rtx4090', '--runtime', 'unknown-runtime', '--no-verbose'], { encoding: 'utf8' });
+    assert.notStrictEqual(invalidCli.status, 0);
+    assert.match(invalidCli.stdout + invalidCli.stderr, /Invalid --runtime/);
+    assert.doesNotMatch(invalidCli.stdout + invalidCli.stderr, /Falling back to Ollama/);
 
     const ollamaCmds = getRuntimeCommandSet(model, 'ollama');
     assert.ok(ollamaCmds.pull.includes('ollama pull'));
