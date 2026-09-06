@@ -1,3 +1,4 @@
+const { megabytesToGB, clampSharedMemory } = require('./memory-units');
 /**
  * Unified Hardware Detector
  * Coordinates all hardware detection backends and provides a unified interface
@@ -353,10 +354,10 @@ class UnifiedDetector {
         summary.dedicatedGpuCount = topology.dedicatedCount;
         summary.integratedGpuModels = topology.integratedModels;
         summary.dedicatedGpuModels = topology.dedicatedModels;
-        summary.integratedSharedMemory = Math.max(
+        summary.integratedSharedMemory = clampSharedMemory(Math.max(
             topology.integratedSharedMemory,
             this.getPrimaryIntegratedSharedMemory(primary)
-        );
+        ), summary.systemRAM);
         if (!summary.gpuModel) {
             summary.gpuModel = topology.primaryModel || null;
         }
@@ -619,11 +620,11 @@ class UnifiedDetector {
             return fallback;
         }
 
-        return Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16));
+        return clampSharedMemory(Math.max(fallback, Math.min(Math.max(1, Math.round(totalSystemGB / 2)), 16)), totalSystemGB);
     }
 
     estimateIntegratedFallbackMemory(controller, memoryInfo) {
-        const dedicatedAperture = this.normalizeFallbackVRAM(controller?.vram || 0);
+        const dedicatedAperture = megabytesToGB(controller?.vram || 0);
         const explicitSharedCandidates = [
             controller?.memoryTotal,
             controller?.memory,
@@ -635,16 +636,16 @@ class UnifiedDetector {
             .map((value) => this.normalizeFallbackVRAM(value))
             .filter((value) => value > dedicatedAperture);
 
+        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
         if (explicitSharedCandidates.length > 0) {
-            return Math.max(...explicitSharedCandidates);
+            return clampSharedMemory(Math.max(...explicitSharedCandidates), totalSystemGB);
         }
 
-        const totalSystemGB = this.getSystemMemoryGB(memoryInfo);
         if (controller?.vramDynamic || dedicatedAperture <= 2) {
             return this.estimateSystemSharedMemory(totalSystemGB, dedicatedAperture);
         }
 
-        return dedicatedAperture;
+        return clampSharedMemory(dedicatedAperture, totalSystemGB);
     }
 
     mergeGpuInventories(...gpuLists) {
@@ -699,7 +700,7 @@ class UnifiedDetector {
                 const isIntegrated = mapped ? mapped.type === 'integrated' : this.isIntegratedGPUModel(name);
                 let vram = isIntegrated
                     ? this.estimateIntegratedFallbackMemory(controller, memoryInfo)
-                    : this.normalizeFallbackVRAM(controller?.vram || controller?.memoryTotal || controller?.memory || 0);
+                    : megabytesToGB(controller?.vram || controller?.memoryTotal || 0) || this.normalizeFallbackVRAM(controller?.memory || 0);
 
                 // For dedicated cards, estimate VRAM from model if runtime did not report memory.
                 if (!isIntegrated && vram === 0) {
