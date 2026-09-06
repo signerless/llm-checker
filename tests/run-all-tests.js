@@ -67,7 +67,8 @@ const TESTS = [
     { name: 'MCP multi-client setup + verify_model', file: 'mcp-multiclient.test.mjs', category: 'MCP' },
     { name: 'modelvet verify command', file: 'modelvet-verify.test.js', category: 'Security' },
     { name: 'modelvet Ollama verification gates', file: 'verify-gates.test.js', category: 'Security' },
-    { name: 'Policy structural validation', file: 'policy-structural-validation.test.js', category: 'Security' }
+    { name: 'Policy structural validation', file: 'policy-structural-validation.test.js', category: 'Security' },
+    { name: 'Quality eval ingestion and matching', file: 'quality-evals.test.js', category: 'Recommendations' }
 ];
 
 function runSingleTest(test) {

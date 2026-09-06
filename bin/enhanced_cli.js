@@ -5425,6 +5425,54 @@ program
     });
 
 program
+    .command('quality-sync')
+    .description('Refresh public benchmark scores used for model quality recommendations')
+    .option('-s, --sources <list>', 'Comma-separated sources: hf_open_llm,lmarena,bigcodebench,evalplus,livebench,mmmu')
+    .option('--db <path>', 'Model database path (defaults to the local catalog)')
+    .option('-j, --json', 'Output the sync and coverage report as JSON')
+    .action(async (options) => {
+        const ModelDatabase = require('../src/data/model-database');
+        const { QualityEvals, SOURCES } = require('../src/data/quality-evals');
+        const database = new ModelDatabase({ dbPath: options.db });
+        try {
+            const sources = options.sources === undefined ? Object.keys(SOURCES)
+                : [...new Set(options.sources.split(',').map((source) => source.trim()).filter(Boolean))];
+            if (!sources.length || sources.some((source) => !Object.hasOwn(SOURCES, source))) {
+                throw new Error(`Invalid quality sources. Choose from: ${Object.keys(SOURCES).join(', ')}`);
+            }
+            await database.initialize();
+            const quality = new QualityEvals(database);
+            const catalog = database.all('SELECT name FROM models');
+            quality.refreshCatalogCohort(catalog);
+            const before = quality.coverage(catalog);
+            const reports = [];
+            for (const source of sources) {
+                try {
+                    reports.push(await quality.ingest(source));
+                } catch (error) {
+                    reports.push({ source, error: error.message });
+                    process.exitCode = 1;
+                }
+            }
+            const coverage = quality.coverage(catalog);
+            const report = { reports, coverage: { ...coverage, unit: 'catalog families', before: before.measured }, stats: quality.stats() };
+            if (options.json) console.log(JSON.stringify(report, null, 2));
+            else {
+                for (const result of reports) console.log(result.error
+                    ? `${result.source}: ${result.error}` : `${result.source}: ${result.rows} scores refreshed`);
+                console.log(`Benchmark coverage: ${coverage.measured}/${coverage.total} catalog families (previously ${before.measured}).`);
+                console.log('Recommendations use measurements only for matching sizes and tasks; remaining scores are labeled estimated.');
+            }
+        } catch (error) {
+            if (options.json) console.log(JSON.stringify({ error: error.message }));
+            else console.error(chalk.red('Error:'), error.message);
+            process.exitCode = 1;
+        } finally {
+            database.close();
+        }
+    });
+
+program
     .command('registry-sync')
     .description('Sync the multi-source model registry (Ollama, Hugging Face, GPT4All)')
     .option('-s, --sources <list>', 'Comma-separated sources: ollama,huggingface,gpt4all', 'ollama,huggingface,gpt4all')

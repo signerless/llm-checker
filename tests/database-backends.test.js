@@ -30,6 +30,16 @@ async function run() {
                 assert.strictEqual(db.get('SELECT params_b FROM variants WHERE model_id = ?', ['test-model']).params_b, 1);
                 assert.throws(() => db.all('SELECT missing_column FROM models'));
                 assert.strictEqual(db.get('SELECT 1 AS n').n, 1, 'query errors leave the connection usable');
+                const expectedModelCount = db.getModelCount();
+                db.close();
+                const snapshot = fs.readFileSync(options.dbPath);
+                const reader = new ModelDatabase({ ...options, readOnly: true });
+                try {
+                    await reader.initialize();
+                    assert.strictEqual(reader.getModelCount(), expectedModelCount);
+                    assert.throws(() => reader.run('DELETE FROM models'), /read-only/);
+                } finally { reader.close(); }
+                assert.deepStrictEqual(fs.readFileSync(options.dbPath), snapshot, 'read-only connections leave file bytes unchanged');
             } finally { db.close(); }
         }
         if (outputs.length === 2) assert.deepStrictEqual(outputs[1], outputs[0], 'native and WASM return the same full catalog');
