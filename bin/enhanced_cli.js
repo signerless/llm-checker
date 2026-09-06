@@ -2891,10 +2891,10 @@ async function displayModelRecommendations(analysis, hardware, useCase = 'genera
                 }
             } else {
                 console.log(`Status: ${chalk.gray(`${runtimeLabel} runtime selected`)}`);
-                console.log(`\nRun: ${chalk.cyan.bold(runtimeCommands.run)}`);
+                console.log(`\nRun: ${runtimeCommands.run ? chalk.cyan.bold(runtimeCommands.run) : chalk.yellow('Select a matching repository or local model file for this runtime.')}`);
                 if (index === 0) {
-                    console.log(`Install runtime: ${chalk.cyan.bold(runtimeCommands.install)}`);
-                    console.log(`Fetch model: ${chalk.cyan.bold(runtimeCommands.pull)}`);
+                    if (runtimeCommands.install) console.log(`Install runtime: ${chalk.cyan.bold(runtimeCommands.install)}`);
+                    if (runtimeCommands.pull) console.log(`Fetch model: ${chalk.cyan.bold(runtimeCommands.pull)}`);
                 }
             }
 
@@ -2956,6 +2956,10 @@ async function displayQuickStartCommands(analysis, recommendedModel = null, allR
         }
 
         const runtimeCommands = getRuntimeCommandSet(bestModel, selectedRuntime);
+        if (!runtimeCommands.run || !runtimeCommands.pull) {
+            console.log(chalk.yellow(`Select a matching repository or local model file for ${runtimeLabel}.`));
+            return;
+        }
         console.log(`1. Install ${runtimeLabel}:`);
         console.log(`   ${chalk.cyan.bold(runtimeCommands.install)}`);
         console.log(`2. Fetch model weights:`);
@@ -3538,6 +3542,7 @@ auditCommand
 
             if (selectedCommand === 'check') {
                 let selectedRuntime = normalizeRuntime(options.runtime);
+                if (!selectedRuntime) throw new Error(`Invalid --runtime: ${options.runtime}`);
                 if (!runtimeSupportedOnHardware(selectedRuntime, hardware)) {
                     selectedRuntime = 'ollama';
                 }
@@ -3872,6 +3877,7 @@ Policy scope:
 
             const hardware = await checker.getSystemInfo();
             let selectedRuntime = normalizeRuntime(options.runtime);
+            if (!selectedRuntime) throw new Error(`Invalid --runtime: ${options.runtime}`);
             if (!runtimeSupportedOnHardware(selectedRuntime, hardware)) {
                 const runtimeLabel = getRuntimeDisplayName(selectedRuntime);
                 console.log(
@@ -4522,7 +4528,8 @@ Calibrated routing examples:
             }
 
             const hardware = await checker.getSystemInfo();
-            let recommendationRuntime = options.runtime;
+            let recommendationRuntime = normalizeRuntime(options.runtime);
+            if (!recommendationRuntime) throw new Error(`Invalid --runtime: ${options.runtime}`);
             const requestedRuntimeName = String(options.runtime || 'auto').toLowerCase();
             if (
                 !['auto', 'all', '*'].includes(requestedRuntimeName) &&
