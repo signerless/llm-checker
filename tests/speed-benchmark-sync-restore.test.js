@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 
 const ModelDatabase = require('../src/data/model-database');
+const SyncManager = require('../src/data/sync-manager');
 
 async function withTempDb(fn) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-speed-restore-'));
@@ -37,24 +38,67 @@ function seedSpeedRow(database) {
 }
 
 async function run() {
+    for (const foreignKeys of [false, true]) {
+        await withTempDb(async (database) => {
+            database.run(`PRAGMA foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+            const oldVariant = seedSpeedRow(database);
+            const original = database.all('SELECT * FROM benchmarks')[0];
+            const scraper = { scrapeAll: async (onModel) => {
+                onModel({ id: 'llama3', name: 'llama3' }, [{ model_id: 'llama3', tag: '8b' }]);
+            } };
+            const sync = new SyncManager({ database, scraper, onProgress() {} });
+            await sync.fullSync();
+            const variant = database.get("SELECT id FROM variants WHERE model_id = 'llama3'");
+            assert.notStrictEqual(variant.id, oldVariant.id, 'variant ids change during a rebuild');
+            assert.deepStrictEqual(database.getBenchmarks(variant.id)[0], { ...original, variant_id: variant.id });
+            database.reattachSpeedBenchmarks();
+            assert.strictEqual(database.all('SELECT * FROM benchmarks').length, 1, 'reattachment never duplicates measurements');
+
+            const beforeFailure = database.all('SELECT * FROM benchmarks');
+            scraper.scrapeAll = async () => { throw new Error('network unavailable'); };
+            await assert.rejects(sync.fullSync(), /network unavailable/);
+            assert.deepStrictEqual(database.all('SELECT * FROM benchmarks'), beforeFailure);
+            assert.strictEqual(database.getVariantCount(), 1, 'failed sync rolls the catalog back too');
+
+            scraper.scrapeAll = async () => {};
+            await sync.fullSync();
+            assert.strictEqual(database.all('SELECT * FROM benchmarks').length, 1, 'missing model keeps telemetry');
+            assert.strictEqual(database.all('SELECT * FROM benchmarks')[0].variant_id, null);
+            // Persistence matters: an in-memory snapshot is insufficient across restarts.
+            database.close(); database.db = null; database.initialized = false;
+            await database.initialize();
+            scraper.scrapeAll = async (onModel) => {
+                onModel({ id: 'llama3', name: 'llama3' }, [{ model_id: 'llama3', tag: '8b' }]);
+            };
+            await sync.fullSync();
+            const returned = database.get("SELECT id FROM variants WHERE model_id = 'llama3'");
+            assert.deepStrictEqual(database.getBenchmarks(returned.id)[0], { ...original, variant_id: returned.id });
+        });
+    }
+
     await withTempDb((database) => {
-        seedSpeedRow(database);
-        const snapshot = database.snapshotSpeedBenchmarks();
-        assert.strictEqual(snapshot.length, 1);
-
+        const variant = seedSpeedRow(database);
+        // Recreate the shipped pre-migration schema, with real historical data.
+        database.db.exec(`
+            DROP TABLE benchmarks;
+            CREATE TABLE benchmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, variant_id INTEGER NOT NULL,
+                hardware_fingerprint TEXT NOT NULL, tokens_per_second REAL,
+                time_to_first_token REAL, memory_used_gb REAL, backend TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE
+            );
+            INSERT INTO benchmarks VALUES (17, ${variant.id}, 'legacy-hw', 42.5, 0.2, 5.1, 'cpu', '2026-01-01');
+        `);
+        database.migrateSpeedBenchmarks();
+        database.migrateSpeedBenchmarks();
+        const migrated = database.all('SELECT * FROM benchmarks')[0];
+        assert.strictEqual(migrated.model_id, 'llama3');
+        assert.strictEqual(migrated.tag, '8b');
+        assert.strictEqual(migrated.id, 17);
+        assert.strictEqual(migrated.created_at, '2026-01-01');
         database.clear();
-        assert.strictEqual(database.get(`SELECT COUNT(*) as count FROM benchmarks`).count, 0);
-
-        database.upsertModel({ id: 'llama3', name: 'llama3' });
-        database.upsertVariant({ model_id: 'llama3', tag: '8b' });
-        database.restoreSpeedBenchmarks(snapshot);
-        database.restoreSpeedBenchmarks(snapshot);
-
-        const restored = database.all(`SELECT tokens_per_second, hardware_fingerprint FROM benchmarks`);
-        assert.strictEqual(restored.length, 1, 'restore must replace, not append');
-        assert.strictEqual(restored[0].tokens_per_second, 42.5);
-        assert.strictEqual(restored[0].hardware_fingerprint, 'hw-1');
-        assert.strictEqual(database.snapshotSpeedBenchmarks().length, 1);
+        assert.strictEqual(database.all('SELECT * FROM benchmarks').length, 1);
     });
 
     console.log('[OK] speed-benchmark-sync-restore.test.js passed');

@@ -52,11 +52,9 @@ class SyncManager {
         // times, turning the sync into O(n^2) disk I/O.
         this.db.beginBatch();
         try {
-            // Keep locally measured speed telemetry across force sync.
-            const speedBenchmarks = this.db.snapshotSpeedBenchmarks();
-
-            // Clear existing catalog data (variants/models). Benchmarks are
-            // re-keyed onto new variant ids after upsert.
+            this.db.run('SAVEPOINT full_sync');
+            // Stable model/tag keys keep telemetry even when a model temporarily
+            // disappears from the catalog. Roll back failed refreshes as a unit.
             this.db.clear();
 
             // Scrape all models
@@ -67,10 +65,15 @@ class SyncManager {
                 }
             });
 
-            this.db.restoreSpeedBenchmarks(speedBenchmarks);
+            this.db.reattachSpeedBenchmarks();
 
             // Update sync timestamp
             this.db.setLastSync(new Date().toISOString());
+            this.db.run('RELEASE full_sync');
+        } catch (error) {
+            this.db.run('ROLLBACK TO full_sync');
+            this.db.run('RELEASE full_sync');
+            throw error;
         } finally {
             this.db.endBatch();
         }

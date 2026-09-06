@@ -65,6 +65,7 @@ class ModelDatabase {
         this.useBetterSqlite = false;
 
         this.createSchema();
+        this.migrateSpeedBenchmarks();
         this.initialized = true;
         if (!this.disableRegistrySeedImport) {
             await this.seedRegistryFromPackagedSnapshotIfNeeded();
@@ -113,14 +114,16 @@ class ModelDatabase {
             -- Benchmarks table (real performance data per hardware)
             CREATE TABLE IF NOT EXISTS benchmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                variant_id INTEGER NOT NULL,
+                variant_id INTEGER,
+                model_id TEXT,
+                tag TEXT,
                 hardware_fingerprint TEXT NOT NULL,
                 tokens_per_second REAL,
                 time_to_first_token REAL,
                 memory_used_gb REAL,
                 backend TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE
+                FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE SET NULL
             );
 
             -- Registry sources for multi-hub model discovery (Hugging Face,
@@ -239,6 +242,47 @@ class ModelDatabase {
         } else {
             this.db.run(schema);
             this.saveToFile();
+        }
+    }
+
+    migrateSpeedBenchmarks() {
+        if (this.all('PRAGMA table_info(benchmarks)').some((column) => column.name === 'model_id')) return;
+        // Preserve the original measurement ids/timestamps and backfill stable
+        // identities before any catalog refresh can replace variant row ids.
+        this.beginBatch();
+        try {
+            this.db.exec(`
+                SAVEPOINT migrate_speed_benchmarks;
+                CREATE TABLE benchmarks_stable (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    variant_id INTEGER,
+                    model_id TEXT,
+                    tag TEXT,
+                    hardware_fingerprint TEXT NOT NULL,
+                    tokens_per_second REAL,
+                    time_to_first_token REAL,
+                    memory_used_gb REAL,
+                    backend TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE SET NULL
+                );
+                INSERT INTO benchmarks_stable
+                SELECT b.id, v.id, v.model_id, v.tag, b.hardware_fingerprint,
+                       b.tokens_per_second, b.time_to_first_token, b.memory_used_gb,
+                       b.backend, b.created_at
+                FROM benchmarks b LEFT JOIN variants v ON v.id = b.variant_id;
+                DROP TABLE benchmarks;
+                ALTER TABLE benchmarks_stable RENAME TO benchmarks;
+                CREATE INDEX idx_benchmarks_hardware ON benchmarks(hardware_fingerprint);
+                CREATE INDEX idx_benchmarks_variant ON benchmarks(variant_id);
+                RELEASE migrate_speed_benchmarks;
+            `);
+            this._pendingSave = true;
+        } catch (error) {
+            this.db.exec('ROLLBACK TO migrate_speed_benchmarks; RELEASE migrate_speed_benchmarks;');
+            throw error;
+        } finally {
+            this.endBatch();
         }
     }
 
@@ -446,13 +490,17 @@ class ModelDatabase {
      * Add benchmark result
      */
     addBenchmark(benchmark) {
+        const variant = this.get('SELECT model_id, tag FROM variants WHERE id = ?', [benchmark.variant_id]);
+        if (!variant) throw new Error('Cannot record a benchmark for an unknown variant');
         const sql = `
-            INSERT INTO benchmarks (variant_id, hardware_fingerprint, tokens_per_second, time_to_first_token, memory_used_gb, backend)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO benchmarks (variant_id, model_id, tag, hardware_fingerprint, tokens_per_second, time_to_first_token, memory_used_gb, backend)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         this.run(sql, [
             benchmark.variant_id,
+            variant.model_id,
+            variant.tag,
             benchmark.hardware_fingerprint,
             benchmark.tokens_per_second,
             benchmark.time_to_first_token,
@@ -1177,66 +1225,22 @@ class ModelDatabase {
         };
     }
 
-    /**
-     * Snapshot local speed telemetry keyed by model_id + tag so it can survive
-     * a force sync that recreates variant row ids.
-     */
-    snapshotSpeedBenchmarks() {
-        return this.all(`
-            SELECT v.model_id, v.tag, b.hardware_fingerprint, b.tokens_per_second,
-                   b.time_to_first_token, b.memory_used_gb, b.backend, b.created_at
-            FROM benchmarks b
-            JOIN variants v ON v.id = b.variant_id
-        `);
+    /** Reattach persisted telemetry after a catalog rebuild. Missing models keep
+     * their measurements, ready for a later sync that brings the tag back. */
+    reattachSpeedBenchmarks() {
+        this.run(`UPDATE benchmarks SET variant_id = (
+            SELECT v.id FROM variants v
+            WHERE v.model_id = benchmarks.model_id AND v.tag = benchmarks.tag
+        )`);
     }
 
-    /**
-     * Reattach previously measured speed benchmarks to newly upserted variants.
-     * Replace, do not append: SQLite FKs are off by default so DELETE FROM
-     * variants does not cascade, and leftover rows would otherwise duplicate.
-     */
-    restoreSpeedBenchmarks(rows) {
-        this.run(`DELETE FROM benchmarks`);
-        if (!rows || rows.length === 0) return;
-
-        const insert = `
-            INSERT INTO benchmarks (variant_id, hardware_fingerprint, tokens_per_second,
-                time_to_first_token, memory_used_gb, backend, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `;
-
-        for (const row of rows) {
-            const variant = this.get(
-                `SELECT id FROM variants WHERE model_id = ? AND tag = ?`,
-                [row.model_id, row.tag]
-            );
-            if (!variant) continue;
-            this.run(insert, [
-                variant.id,
-                row.hardware_fingerprint,
-                row.tokens_per_second,
-                row.time_to_first_token,
-                row.memory_used_gb,
-                row.backend,
-                row.created_at || null
-            ]);
-        }
-    }
-
-    /**
-     * Clear catalog data. Local speed benchmarks are snapshotted by callers
-     * that recreate variants (variant_id is an autoincrement FK). Drop leftover
-     * benchmark rows here because SQLite FKs are off by default, so DELETE FROM
-     * variants does not cascade.
-     */
+    /** Clear catalog data while preserving local measurements and their keys. */
     clear() {
-        // The registry's Ollama source is derived from the local Ollama catalog.
-        // Clear only that source so a classic Ollama sync does not erase HF/GPT4All data.
         this.clearRegistrySource('ollama');
-        this.run(`DELETE FROM variants`);
-        this.run(`DELETE FROM models`);
-        this.run(`DELETE FROM sync_meta`);
-        this.run(`DELETE FROM benchmarks`);
+        this.run('UPDATE benchmarks SET variant_id = NULL');
+        this.run('DELETE FROM variants');
+        this.run('DELETE FROM models');
+        this.run('DELETE FROM sync_meta');
     }
 
     /**
