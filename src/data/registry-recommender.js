@@ -2,7 +2,7 @@ const ModelDatabase = require('./model-database');
 const { isSupportedHuggingFaceModel } = require('./registry-ingestors');
 const DeterministicModelSelector = require('../models/deterministic-selector');
 const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
-const { runtimeSupportedOnHardware } = require('../runtime/runtime-support');
+const { runtimeSupportedOnHardware, normalizeRuntime } = require('../runtime/runtime-support');
 
 function toArray(value) {
     return Array.isArray(value) ? value : [];
@@ -458,7 +458,8 @@ class RegistryRecommender {
                 ? { cpuOnly: options.cpuOnly }
                 : {})
         });
-        const requestedRuntime = options.runtime || 'auto';
+        const requestedRuntime = normalizeRuntime(options.runtime || 'auto');
+        if (!requestedRuntime) throw new Error(`Unsupported runtime: ${options.runtime}`);
         const requestedRuntimeName = String(requestedRuntime).toLowerCase();
         const runtime = !['auto', 'all', '*'].includes(requestedRuntimeName) &&
             !runtimeSupportedOnHardware(requestedRuntime, selectorHardware)
