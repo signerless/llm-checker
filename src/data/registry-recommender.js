@@ -1,4 +1,5 @@
 const ModelDatabase = require('./model-database');
+const { isSupportedHuggingFaceModel } = require('./registry-ingestors');
 const DeterministicModelSelector = require('../models/deterministic-selector');
 const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
 const { runtimeSupportedOnHardware } = require('../runtime/runtime-support');
@@ -117,6 +118,12 @@ function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '')
 }
 
 function artifactToSelectorModel(row) {
+    // Apply the same rule to existing user databases and the packaged snapshot,
+    // so rejected repositories disappear from recommendations without a resync.
+    if (row.source_id === 'huggingface' && !isSupportedHuggingFaceModel({
+        ...(row.repo_metadata || {}),
+        tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
+    })) return null;
     const shardedFile = row.source_id === 'huggingface' && isShardedWeightFile(row.filename || row.artifact_name);
     const identifier = shardedFile
         ? (row.canonical_model_id || row.repo_id)
@@ -583,7 +590,9 @@ class RegistryRecommender {
                     bestModels: selection.result.candidates.map((candidate) => this.selector.mapCandidateToLegacyFormat(candidate)),
                     totalEvaluated: selection.result.total_evaluated,
                     totalArtifacts: selection.rows.length,
-                    totalCandidates: selection.modelPool.length,
+                    // Public category headers use this field as "evaluated".
+                    // The unfiltered catalog pool is shared by every category.
+                    totalCandidates: selection.result.total_evaluated,
                     category: this.selector.getCategoryInfo(category)
                 };
             } catch (error) {
@@ -634,6 +643,7 @@ class RegistryRecommender {
         const budget = isUnified ? usableMem : (vram || usableMem);
         const filtered = this.selector.filterByCategory(modelPool, category, { includeUncensored });
         const candidates = [];
+        let totalEvaluated = 0;
 
         for (const model of filtered) {
             const preferredRuntime = model.preferredRuntime || choosePreferredRuntime(
@@ -649,6 +659,7 @@ class RegistryRecommender {
                 runtimeSupportedOnHardware(candidateRuntime, normalizedHardware)
             );
             if (!runtime) continue;
+            totalEvaluated += 1;
             const candidate = this.selector.evaluateModel(
                 model,
                 normalizedHardware,
@@ -671,7 +682,7 @@ class RegistryRecommender {
             // Return a wide sorted window; selectCategory collapses variants and
             // applies source diversity before trimming to the caller's limit.
             candidates: candidates.slice(0, Math.max(limit, 2000)),
-            total_evaluated: filtered.length,
+            total_evaluated: totalEvaluated,
             timestamp: new Date().toISOString()
         };
     }
