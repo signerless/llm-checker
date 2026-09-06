@@ -1,4 +1,5 @@
 const ModelDatabase = require('./model-database');
+const { isSupportedHuggingFaceModel } = require('./registry-ingestors');
 const DeterministicModelSelector = require('../models/deterministic-selector');
 const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
 const { runtimeSupportedOnHardware } = require('../runtime/runtime-support');
@@ -117,6 +118,12 @@ function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '')
 }
 
 function artifactToSelectorModel(row) {
+    // Apply the same rule to existing user databases and the packaged snapshot,
+    // so rejected repositories disappear from recommendations without a resync.
+    if (row.source_id === 'huggingface' && !isSupportedHuggingFaceModel({
+        ...(row.repo_metadata || {}),
+        tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
+    })) return null;
     const shardedFile = row.source_id === 'huggingface' && isShardedWeightFile(row.filename || row.artifact_name);
     const identifier = shardedFile
         ? (row.canonical_model_id || row.repo_id)
