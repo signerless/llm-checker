@@ -151,6 +151,29 @@ async function run() {
         assert.ok(['vllm', 'transformers'].includes(hfResult.recommendations[0].runtime));
         assert.ok(hfResult.recommendations[0].download_url.includes('huggingface.co/example/CodeTiny-7B'));
 
+        // Count actual scoring calls: headers must describe each category, even
+        // when most candidates fail to fit or an entire category is empty.
+        const evaluateModel = recommender.selector.evaluateModel;
+        const calls = {};
+        recommender.selector.evaluateModel = function(model, hardware, category, ...args) {
+            calls[category] = (calls[category] || 0) + 1;
+            return evaluateModel.call(this, model, hardware, category, ...args);
+        };
+        for (const runtime of ['auto', 'ollama']) {
+            for (const key of Object.keys(calls)) delete calls[key];
+            const grouped = await recommender.getBestModelsForHardware(buildHardware(), {
+                runtime, categories: ['general', 'coding', 'multimodal'], limit: 1
+            });
+            for (const [category, group] of Object.entries(grouped.recommendations)) {
+                assert.strictEqual(group.totalCandidates, calls[category] || 0, `${runtime}/${category} header`);
+                assert.strictEqual(group.totalEvaluated, calls[category] || 0);
+            }
+            assert.ok(grouped.recommendations.general.totalCandidates > grouped.recommendations.coding.totalCandidates);
+            assert.strictEqual(grouped.recommendations.multimodal.totalCandidates, 0);
+            assert.ok(grouped.totalModelsAnalyzed > 0, 'global pool remains available separately');
+        }
+        recommender.selector.evaluateModel = evaluateModel;
+
         console.log('[OK] model-registry-recommender.test.js passed');
     } finally {
         database.close();
