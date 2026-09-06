@@ -6,7 +6,7 @@ registry recommendations, and the desktop source now tracked in this repository.
 
 | Case | Corrected behavior | Regression coverage |
 | --- | --- | --- |
-| Artifact precision and size | FP16/BF16/FP32 retain their precision. A fixed Q8 file cannot become Q5 to fit a budget. Complete shard sets contribute their combined size; incomplete sets are excluded. Unknown precision without a known size is ineligible. | `ranking-contract.test.js`, `selector-memory-sizing.test.js`, `deterministic-model-pool-check.js` |
+| Artifact precision and size | FP16/BF16/FP32 retain their precision. A fixed Q8 file cannot become Q5 to fit a budget. Complete shard sets contribute their combined size; incomplete sets are excluded. Unknown precision without a known size is ineligible. Missing Ollama metadata no longer invents a 4 GB Q4 artifact, and full-precision resident weights cannot shrink to a stale download-size estimate. | `ranking-contract.test.js`, `selector-memory-sizing.test.js`, `deterministic-model-pool-check.js` |
 | Model capabilities | Embeddings and rerankers are excluded from generation categories; missing capability data does not imply generation. | `ranking-contract.test.js` |
 | Benchmark identity | Base, Instruct, size, revision, thinking, and context-extension variants remain distinct. Unsized family measurements cannot score a smaller checkpoint. Quantized repos require an explicit quantization alias to inherit upstream measurements. | `quality-evals.test.js`, `ranking-contract.test.js` |
 | Accelerator scoring | ROCm, Vulkan and SYCL have explicit estimate profiles. CPU-only mode suppresses accelerator scoring. | `ranking-contract.test.js`, `cpu-only-mode.test.js` |

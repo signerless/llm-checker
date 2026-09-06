@@ -1135,7 +1135,7 @@ class DeterministicModelSelector {
         return this.normalizeQuantization(
             variant.quantization ||
             variant.quant ||
-            'Q4_K_M'
+            'UNKNOWN'
         );
     }
 
@@ -1210,10 +1210,9 @@ class DeterministicModelSelector {
     }
 
     extractVariantSizeGB(variant, paramsB) {
-        const candidate = Number(variant.real_size_gb ?? variant.estimated_size_gb ?? variant.size_gb ?? NaN);
+        const candidate = Number(variant.real_size_gb ?? variant.size_gb ?? NaN);
         if (Number.isFinite(candidate) && candidate > 0) return candidate;
-        if (!Number.isFinite(paramsB) || paramsB <= 0) return 0.5;
-        return Math.max(0.5, Math.round((paramsB * 0.58 + 0.5) * 10) / 10);
+        return null; // No observed artifact size; estimate from the actual precision later.
     }
 
     inferModalities(model, variantTag = '') {
@@ -1303,27 +1302,27 @@ class DeterministicModelSelector {
 
     extractParams(details) {
         // Look for parameter info in ollama show output
-        const match = details.match(/parameters\s+(\d+\.?\d*)[BM]/i);
+        const match = details.match(/parameters\s+(\d+\.?\d*)\s*[BM]/i);
         if (match) {
             const num = parseFloat(match[1]);
             return match[0].toUpperCase().includes('B') ? num : num / 1000;
         }
-        return 7; // Default fallback
+        return null;
     }
 
     extractContextLength(details) {
-        const match = details.match(/context_length\s+(\d+)/i);
-        return match ? parseInt(match[1]) : 4096;
+        const match = details.match(/context[ _]length\s+(\d+)/i);
+        return match ? parseInt(match[1]) : null;
     }
 
     extractQuantization(details) {
-        const match = details.match(/quantization\s+(Q\d+_[A-Z0-9_]+)/i);
-        return match ? match[1] : 'Q4_K_M';
+        const match = details.match(/quantization\s+(\S+)/i);
+        return normalizePrecision(match?.[1]);
     }
 
     extractSizeGB(details) {
-        const match = details.match(/size\s+(\d+\.?\d*)\s*GB/i);
-        return match ? parseFloat(match[1]) : 4.0;
+        const match = details.match(/size\s+(\d+\.?\d*)\s*(GB|MB)/i);
+        return match ? parseFloat(match[1]) / (match[2].toUpperCase() === 'MB' ? 1024 : 1) : null;
     }
 
     extractModalities(details) {
@@ -1584,6 +1583,7 @@ class DeterministicModelSelector {
     }
 
     evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced', runtime = 'ollama', options = {}) {
+        if (!(this.parseBillionsValue(model.totalParamsB || model.paramsB) > 0)) return null;
         const nativeContext = Number(model.ctxMax);
         const requiredContext = options.contextPolicy !== 'preferred';
         if (requiredContext && (!(nativeContext > 0) || nativeContext < targetCtx)) return null;
@@ -1674,7 +1674,9 @@ class DeterministicModelSelector {
         // A model/tag/file is an immutable artifact. Alternative files are separate rows.
         if (model?.quant) return [this.normalizeQuantization(model.quant)];
         const available = model?.availableQuantizations || Object.keys(model?.sizeByQuant || {});
-        if (!available.length && Number(model?.sizeGB) > 0) return ['UNKNOWN'];
+        if (available.length !== 1 && (model?.model_identifier || !available.length)) {
+            return Number(model?.sizeGB) > 0 ? ['UNKNOWN'] : [];
+        }
         return [...new Set(available.map(normalizePrecision))]
             .sort((a, b) => (precisionProfile(b).bytes || 0) - (precisionProfile(a).bytes || 0));
     }
@@ -1716,9 +1718,11 @@ class DeterministicModelSelector {
                 ? parameterProfile.totalParamsB
                 : parameterProfile.effectiveParamsB;
         const modeledWeightGB = bpp == null ? Infinity : weightParamsB * bpp;
-        // A real observed artifact size always wins for weight memory — never let
-        // an MoE "sparse inference" assumption discard a measured on-disk size.
-        const useObservedArtifactSize = Number.isFinite(observedWeightGB) && observedWeightGB > 0;
+        // Full-precision resident weights cannot shrink to a compressed download
+        // or an old Q4 size estimate. Quantized artifacts retain their observed size.
+        const fullPrecision = ['FP16', 'BF16', 'FP32'].includes(normalizedQuant);
+        const useObservedArtifactSize = Number.isFinite(observedWeightGB) && observedWeightGB > 0 &&
+            (!fullPrecision || observedWeightGB >= modeledWeightGB);
         const modelMemGB = useObservedArtifactSize ? observedWeightGB : modeledWeightGB;
         const effectiveCtx = Number.isFinite(Number(ctx)) && Number(ctx) > 0 ? Number(ctx) : 4096;
 

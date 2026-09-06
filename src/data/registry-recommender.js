@@ -1,5 +1,5 @@
 const ModelDatabase = require('./model-database');
-const { isSupportedHuggingFaceModel } = require('./registry-ingestors');
+const { isSupportedHuggingFaceModel, inferQuantization, inferPrecision } = require('./registry-ingestors');
 const DeterministicModelSelector = require('../models/deterministic-selector');
 const { normalizePrecision, memoryBudgetGB } = require('../models/ranking-contract');
 const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
@@ -93,7 +93,8 @@ function inferFamily(identifier = '') {
 }
 
 function normalizeQuantization(row = {}) {
-    const raw = row.quantization || row.precision || '';
+    const filename = row.filename || row.artifact_name || '';
+    const raw = inferQuantization(filename) || inferPrecision(filename) || row.quantization || row.precision || '';
     return normalizePrecision(raw);
 }
 

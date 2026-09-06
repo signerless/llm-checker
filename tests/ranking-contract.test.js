@@ -19,6 +19,22 @@ for (const quant of ['FP16', 'BF16', 'FP32']) {
     assert.strictEqual(selector.evaluateModel({ ...base, quant }, hardware, 'general', 4096, 8), null);
 }
 assert.strictEqual(precisionProfile('IQ4_XS').bytes, 0.58);
+assert.strictEqual(selector.extractQuantization('quantization F16'), 'FP16');
+assert.ok(selector.estimateRequiredGB({ ...base, sizeGB: 4 }, 'FP16', 4096) > 14, 'a stale Q4 size must not shrink FP16 resident weights');
+assert.strictEqual(selector.extractQuantization('quantization BF16'), 'BF16');
+assert.strictEqual(selector.extractQuantization(''), 'UNKNOWN');
+assert.strictEqual(selector.extractSizeGB(''), null);
+assert.strictEqual(selector.extractParams('parameters 7 B'), 7);
+assert.strictEqual(selector.evaluateModel({ ...base, paramsB: null, sizeGB: 4 }, hardware, 'general', 4096, 8), null);
+assert.strictEqual(selector.extractContextLength(''), null);
+assert.strictEqual(selector.extractVariantSizeGB({ estimated_size_gb: 4 }, 7), null);
+const fpVariant = selector.convertOllamaModelToDeterministicModels({ model_identifier: 'test', primary_category: 'general',
+    variants: [{ tag: 'test:7b-fp16', quantization: 'FP16', size: '7b' }] })[0];
+assert.strictEqual(fpVariant.quant, 'FP16');
+assert.ok(selector.estimateRequiredGB(fpVariant, 'FP16', 4096) > 14);
+assert.strictEqual(selector.selectBestQuantization(fpVariant, 8, 4096), null);
+assert.deepStrictEqual(selector.getQuantizationCandidates({ model_identifier: 'unknown:7b', availableQuantizations: ['Q8_0', 'Q4_K_M'] }), []);
+
 assert.strictEqual(selector.estimateRequiredGB({ ...base, quant: 'unknown' }, 'unknown', 4096), Infinity);
 const fixed = { ...base, quant: 'Q8_0', model_identifier: 'qwen:7b-q8_0',
     availableQuantizations: ['Q8_0', 'Q4_K_M'], sizeByQuant: { Q8_0: 7.6, Q4_K_M: 4.5 } };
@@ -32,6 +48,9 @@ const shard = { source_id: 'huggingface', repo_id: 'test/model-7B-GGUF',
     canonical_model_id: 'test/model-7B-GGUF', repo_tasks: ['text-generation'], format: 'gguf',
     quantization: 'Q8_0', size_gb: 4, parameter_count_b: 7, context_length: 4096,
     runtime_support: ['ollama', 'llama.cpp'] };
+const stalePrecision = artifactToSelectorModel({ ...shard, filename: 'model-7b-f16.gguf', quantization: 'Q4_K_M' });
+assert.strictEqual(stalePrecision.quant, 'FP16', 'the concrete file precision overrides stale metadata');
+assert.ok(selector.estimateRequiredGB(stalePrecision, 'FP16', 4096) > 14);
 const shards = [1, 2].map(i => ({ ...shard, filename: `model-Q8_0-0000${i}-of-00002.gguf` }));
 assert.strictEqual(groupWeightShards(shards.slice(1)).length, 0, 'incomplete shard sets are not installable');
 const grouped = groupWeightShards(shards);
