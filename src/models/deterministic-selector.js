@@ -5,6 +5,7 @@
  * for a given machine and task category.
  */
 
+const { normalizePrecision, precisionProfile, capabilitiesOf, detectedBackend, memoryBudgetGB, classifyFit } = require('./ranking-contract');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -94,6 +95,9 @@ class DeterministicModelSelector {
         this.backendK = {
             'metal': 160,    // Apple Metal
             'cuda': 220,     // NVIDIA CUDA
+            'rocm': 220,
+            'vulkan': 160,
+            'sycl': 160,
             'cpu_x86': 70,   // CPU x86_64
             'cpu_arm': 90    // CPU ARM64
         };
@@ -220,6 +224,7 @@ class DeterministicModelSelector {
         const memoryHeadroomGB = inferredUnified ? 1.5 : 2;
         const usableMemGB =
             toNumber(input.usableMemGB) ??
+            toNumber(input.summary?.effectiveMemory) ??
             Math.max(1, Math.min(utilizationFactor * totalMemGB, totalMemGB - memoryHeadroomGB));
 
         const gpuCount =
@@ -276,6 +281,7 @@ class DeterministicModelSelector {
         }
 
         const normalizedAcceleration = {
+            ...acceleration,
             supports_metal:
                 typeof acceleration.supports_metal === 'boolean'
                     ? acceleration.supports_metal
@@ -787,28 +793,9 @@ class DeterministicModelSelector {
             const modalities = this.inferModalities(ollamaModel, variantTag);
             const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
             const sizeByQuant = {};
-            const variantIsCloud = this.isCloudVariantTag(variantTag);
 
-            for (const sibling of variants) {
-                const siblingTag = sibling.tag || fallbackTag;
-                if (this.isCloudVariantTag(siblingTag) !== variantIsCloud) continue;
-
-                const siblingQuant = this.resolveVariantQuantization(sibling, siblingTag);
-                const siblingParams = this.resolveVariantParamsB(ollamaModel, sibling, siblingQuant);
-
-                // Keep quantization map parameter-aware: don't blend 8B/70B/405B sizes.
-                if (Math.abs(siblingParams - paramsB) > 0.25) continue;
-
-                const siblingSize = this.extractVariantSizeGB(sibling, siblingParams);
-                if (!Number.isFinite(sizeByQuant[siblingQuant]) || siblingSize < sizeByQuant[siblingQuant]) {
-                    sizeByQuant[siblingQuant] = siblingSize;
-                }
-            }
-
-            const availableQuantizations = this.getQuantizationCandidates({
-                availableQuantizations: this.extractAvailableQuantizations(ollamaModel, variants),
-                sizeByQuant
-            });
+            if (Number.isFinite(variantSizeGB) && variantSizeGB > 0) sizeByQuant[quant] = variantSizeGB;
+            const availableQuantizations = [quant];
 
             const source = ollamaModel.source || 'ollama_database';
             const registry = ollamaModel.registry || 'ollama.com';
@@ -848,6 +835,8 @@ class DeterministicModelSelector {
                 sizeGB: variantSizeGB,
                 modalities,
                 tags: modelTags,
+                capabilities: [ollamaModel.primary_category, ...['capabilities', 'categories', 'use_cases']
+                    .flatMap(key => Array.isArray(ollamaModel[key]) ? ollamaModel[key] : [])].filter(Boolean),
                 sourceTags: Array.isArray(ollamaModel.tags) ? ollamaModel.tags : [],
                 description: ollamaModel.description || '',
                 detailed_description: ollamaModel.detailed_description || '',
@@ -1126,15 +1115,7 @@ class DeterministicModelSelector {
 
     inferParamsFromArtifactSizeGB(sizeGB, quant = 'Q4_K_M') {
         const normalizedQuant = this.normalizeQuantization(quant);
-        const bytesPerParam = {
-            'Q8_0': 1.05,
-            'Q6_K': 0.80,
-            'Q5_K_M': 0.68,
-            'Q4_K_M': 0.58,
-            'Q3_K': 0.48,
-            'Q2_K': 0.37
-        };
-        const bpp = bytesPerParam[normalizedQuant] || 0.58;
+        const bpp = precisionProfile(normalizedQuant).bytes || 2;
         const inferred = sizeGB / bpp;
         return Math.max(0.5, Math.round(inferred * 2) / 2);
     }
@@ -1146,6 +1127,8 @@ class DeterministicModelSelector {
     resolveVariantQuantization(variant = {}, variantTag = '') {
         const tagQuant = this.extractQuantizationFromTag(variantTag);
         if (tagQuant) {
+            const declared = this.normalizeQuantization(variant.quantization || variant.quant);
+            if (/^Q[2-8]$/.test(tagQuant) && declared.startsWith(`${tagQuant}_`)) return declared;
             return this.normalizeQuantization(tagQuant);
         }
 
@@ -1218,19 +1201,12 @@ class DeterministicModelSelector {
     }
 
     extractQuantizationFromTag(tag = '') {
-        const match = String(tag).match(/\b(q\d+[_\w]*)\b/i);
+        const match = String(tag).match(/\b((?:i?q\d+[_\w]*|bf16|fp(?:16|32|8)|f(?:16|32)))\b/i);
         return match ? match[1].toUpperCase() : null;
     }
 
-    normalizeQuantization(quant = 'Q4_K_M') {
-        const q = String(quant).toUpperCase();
-        if (q.startsWith('Q8')) return 'Q8_0';
-        if (q.startsWith('Q6')) return 'Q6_K';
-        if (q.startsWith('Q5')) return 'Q5_K_M';
-        if (q.startsWith('Q4')) return 'Q4_K_M';
-        if (q.startsWith('Q3')) return 'Q3_K';
-        if (q.startsWith('Q2')) return 'Q2_K';
-        return 'Q4_K_M';
+    normalizeQuantization(quant) {
+        return normalizePrecision(quant);
     }
 
     extractVariantSizeGB(variant, paramsB) {
@@ -1487,13 +1463,7 @@ class DeterministicModelSelector {
         
         // Phase 1: Estimation filter
         const candidates = [];
-        const totalMem = hardware?.memory?.totalGB ?? hardware?.memory?.total ?? 8;
-        const usableMem = typeof hardware.usableMemGB === 'number'
-            ? hardware.usableMemGB
-            : Math.max(1, Math.min(0.8 * totalMem, totalMem - 2));
-        const isUnified = Boolean(hardware?.gpu?.unified) || hardware?.gpu?.type === 'apple_silicon';
-        const vram = hardware?.gpu?.vramGB ?? hardware?.gpu?.vram ?? 0;
-        const budget = isUnified ? usableMem : (vram || usableMem);
+        const budget = memoryBudgetGB(hardware);
 
         for (const model of filtered) {
             const result = this.evaluateModel(
@@ -1503,7 +1473,8 @@ class DeterministicModelSelector {
                 targetCtx,
                 budget,
                 optimizationObjective,
-                normalizedRuntime
+                normalizedRuntime,
+                { contextPolicy: Number(options.targetCtx) > 0 ? 'required' : 'preferred' }
             );
             if (result) {
                 candidates.push(result);
@@ -1575,8 +1546,10 @@ class DeterministicModelSelector {
                 return false;
             }
 
-            // Guard against malformed external pool rows (a missing tags/modalities
-            // /name field used to throw and silently nuke the whole category).
+            const capability = capabilitiesOf(model);
+            if (category === 'embeddings') return capability.embedding && !capability.reranking;
+            if (category === 'reranking') return capability.reranking;
+            if (!capability.generation) return false;
             const tags = Array.isArray(model.tags) ? model.tags : [];
             const modalities = Array.isArray(model.modalities) ? model.modalities : [];
             const name = String(model.name || model.model_identifier || '').toLowerCase();
@@ -1610,13 +1583,18 @@ class DeterministicModelSelector {
         });
     }
 
-    evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced', runtime = 'ollama') {
+    evaluateModel(model, hardware, category, targetCtx, budget, optimizeFor = 'balanced', runtime = 'ollama', options = {}) {
+        const nativeContext = Number(model.ctxMax);
+        const requiredContext = options.contextPolicy !== 'preferred';
+        if (requiredContext && (!(nativeContext > 0) || nativeContext < targetCtx)) return null;
+        const effectiveContext = nativeContext > 0 ? Math.min(nativeContext, targetCtx) : targetCtx;
+        if (!(budget > 0) || !Number.isFinite(budget)) return null;
         // 1. Select best fitting quantization
-        const bestQuant = this.selectBestQuantization(model, budget, targetCtx);
+        const bestQuant = this.selectBestQuantization(model, budget, effectiveContext);
         if (!bestQuant) return null;
 
         // 2. Calculate required memory
-        const memoryEstimate = this.estimateMemoryBreakdown(model, bestQuant.quant, targetCtx);
+        const memoryEstimate = this.estimateMemoryBreakdown(model, bestQuant.quant, effectiveContext);
         const requiredGB = memoryEstimate.requiredGB;
         if (requiredGB > budget) return null;
 
@@ -1659,6 +1637,8 @@ class DeterministicModelSelector {
 
         return {
             meta: model,
+            context: { requested: targetCtx, effective: effectiveContext, native: nativeContext > 0 ? nativeContext : null,
+                policy: requiredContext ? 'required' : 'preferred', limited: !(nativeContext >= targetCtx) },
             quant: bestQuant.quant,
             requiredGB: Math.round(requiredGB * 10) / 10,
             estTPS: speedEstimate.estimatedTPS,
@@ -1666,6 +1646,9 @@ class DeterministicModelSelector {
             runtime: speedEstimate.runtime,
             rationale,
             memory: {
+                requiredGB,
+                budgetGB: budget,
+                fit: classifyFit(requiredGB, budget),
                 modelMemGB: Math.round(memoryEstimate.modelMemGB * 100) / 100,
                 kvCacheGB: Math.round(memoryEstimate.kvCacheGB * 100) / 100,
                 runtimeOverheadGB: Math.round(memoryEstimate.runtimeOverheadGB * 100) / 100,
@@ -1676,6 +1659,7 @@ class DeterministicModelSelector {
             },
             speed: {
                 backend: speedEstimate.backend,
+                basis: speedEstimate.basis,
                 targetTPS: speedEstimate.targetTPS,
                 estimatedTPS: speedEstimate.estimatedTPS,
                 runtime: speedEstimate.runtime,
@@ -1687,69 +1671,20 @@ class DeterministicModelSelector {
     }
 
     getQuantizationCandidates(model) {
-        const normalizedAvailable = Array.isArray(model?.availableQuantizations)
-            ? model.availableQuantizations.map((quant) => this.normalizeQuantization(quant))
-            : [];
-        const fromSizeMap = model?.sizeByQuant && typeof model.sizeByQuant === 'object'
-            ? Object.keys(model.sizeByQuant).map((quant) => this.normalizeQuantization(quant))
-            : [];
-
-        const seeded = (fromSizeMap.length > 0
-            ? [...new Set(fromSizeMap)]
-            : [...new Set(normalizedAvailable)])
-            .filter(Boolean);
-
-        let candidates = seeded.length > 0 ? seeded : [...this.quantHierarchy];
-
-        // If we have at least one known quantization, allow extrapolating to
-        // *more compressed* levels as an explicit feasibility assumption.
-        if (seeded.length > 0) {
-            const expanded = new Set();
-            for (const quant of seeded) {
-                const idx = this.quantHierarchy.indexOf(quant);
-                if (idx === -1) {
-                    expanded.add(quant);
-                    continue;
-                }
-                for (let i = idx; i < this.quantHierarchy.length; i++) {
-                    expanded.add(this.quantHierarchy[i]);
-                }
-            }
-            candidates = [...expanded];
-        }
-
-        return candidates.sort((a, b) => {
-            const aIdx = this.quantHierarchy.indexOf(a);
-            const bIdx = this.quantHierarchy.indexOf(b);
-            const safeA = aIdx === -1 ? Number.MAX_SAFE_INTEGER : aIdx;
-            const safeB = bIdx === -1 ? Number.MAX_SAFE_INTEGER : bIdx;
-            return safeA - safeB;
-        });
+        // A model/tag/file is an immutable artifact. Alternative files are separate rows.
+        if (model?.quant) return [this.normalizeQuantization(model.quant)];
+        const available = model?.availableQuantizations || Object.keys(model?.sizeByQuant || {});
+        if (!available.length && Number(model?.sizeGB) > 0) return ['UNKNOWN'];
+        return [...new Set(available.map(normalizePrecision))]
+            .sort((a, b) => (precisionProfile(b).bytes || 0) - (precisionProfile(a).bytes || 0));
     }
 
     selectBestQuantization(model, budget, targetCtx) {
-        const quantizationCandidates = this.getQuantizationCandidates(model);
-
-        // Try quantizations from best to worst quality
-        for (const quant of quantizationCandidates) {
+        for (const quant of this.getQuantizationCandidates(model)) {
             const requiredGB = this.estimateRequiredGB(model, quant, targetCtx);
-            if (requiredGB <= budget) {
-                return { quant, sizeGB: requiredGB };
-            }
+            if (requiredGB <= budget) return { quant, sizeGB: requiredGB };
         }
-        
-        // If nothing fits at target context, try halving context once
-        const halfCtx = Math.floor(targetCtx / 2);
-        if (halfCtx >= 1024) {
-            for (const quant of quantizationCandidates) {
-                const requiredGB = this.estimateRequiredGB(model, quant, halfCtx);
-                if (requiredGB <= budget) {
-                    return { quant, sizeGB: requiredGB };
-                }
-            }
-        }
-        
-        return null; // Model doesn't fit
+        return null;
     }
 
     resolveMemoryParameterProfile(model = {}) {
@@ -1757,18 +1692,8 @@ class DeterministicModelSelector {
     }
 
     estimateMemoryBreakdown(model, quant, ctx) {
-        // Bytes per parameter by quantization level (calibrated to real Ollama sizes)
-        // 7B Q4_K_M=~4.5GB, 14B Q4_K_M=~9GB, 32B Q4_K_M=~19GB
-        const bytesPerParam = {
-            'Q8_0': 1.05,
-            'Q6_K': 0.80,
-            'Q5_K_M': 0.68,
-            'Q4_K_M': 0.58,
-            'Q3_K': 0.48,
-            'Q2_K': 0.37
-        };
         const normalizedQuant = this.normalizeQuantization(quant);
-        const bpp = bytesPerParam[normalizedQuant] || 0.63;
+        const bpp = precisionProfile(normalizedQuant).bytes;
         const sizeByQuant = model?.sizeByQuant && typeof model.sizeByQuant === 'object' ? model.sizeByQuant : {};
         const observedFromSizeMap = Number(sizeByQuant[normalizedQuant]);
         const directVariantMatch =
@@ -1790,7 +1715,7 @@ class DeterministicModelSelector {
             parameterProfile.isMoE && Number.isFinite(parameterProfile.totalParamsB) && parameterProfile.totalParamsB > 0
                 ? parameterProfile.totalParamsB
                 : parameterProfile.effectiveParamsB;
-        const modeledWeightGB = weightParamsB * bpp;
+        const modeledWeightGB = bpp == null ? Infinity : weightParamsB * bpp;
         // A real observed artifact size always wins for weight memory — never let
         // an MoE "sparse inference" assumption discard a measured on-disk size.
         const useObservedArtifactSize = Number.isFinite(observedWeightGB) && observedWeightGB > 0;
@@ -1831,7 +1756,7 @@ class DeterministicModelSelector {
         const measured = this.lookupMeasuredQuality(model, category);
         if (measured) {
             let Qm = measured.score;
-            Qm += this.quantPenalties[quant] || -5;   // benchmarks are run at fp16
+            Qm += this.quantPenalties[quant] ?? precisionProfile(quant).penalty;   // benchmarks are run at fp16
             Qm += this.calculateFreshnessAdjustment(model);
             model.qualitySource = measured.provenance;
             return Math.max(0, Math.min(100, Qm));
@@ -1846,7 +1771,7 @@ class DeterministicModelSelector {
         Q += familyBump;
         
         // Quantization penalty
-        const quantPenalty = this.quantPenalties[quant] || -5;
+        const quantPenalty = this.quantPenalties[quant] ?? precisionProfile(quant).penalty;
         Q += quantPenalty;
 
         // Freshness/deprecation adjustment
@@ -1884,6 +1809,12 @@ class DeterministicModelSelector {
      * says nothing about vision, so it is never borrowed for it. A category
      * with no matching benchmark returns null rather than a nearby proxy.
      */
+    invalidateQualityEvals() {
+        this.qualityConnection?.close();
+        this.qualityConnection = null;
+        this.qualityEvals = undefined;
+    }
+
     lookupMeasuredQuality(model, category) {
         // Attach lazily: the selector is constructed in several places that
         // have no database handle, so it opens the shared catalog read-only on
@@ -1903,6 +1834,7 @@ class DeterministicModelSelector {
                     quality.stats();
                     connection.prepare('SELECT 1 FROM catalog_families LIMIT 1').get();
                     this.qualityEvals = quality;
+                    this.qualityConnection = connection;
                 }
             } catch { connection?.close(); /* no benchmark data available */ }
         }
@@ -1928,7 +1860,7 @@ class DeterministicModelSelector {
 
         let hit;
         try {
-            hit = this.qualityEvals.lookup(model.name, model.paramsB, category);
+            hit = this.qualityEvals.lookup(model.model_identifier || model.name, model.paramsB, category, model);
         } catch { return null; }
         if (!hit?.evals?.length) return null;
 
@@ -2004,7 +1936,7 @@ class DeterministicModelSelector {
                 return 0;
                 
             case 'multimodal':
-                if (model.modalities.includes('vision')) return 6;
+                if (model.modalities?.includes('vision')) return 6;
                 return 0;
                 
             case 'general':
@@ -2039,14 +1971,8 @@ class DeterministicModelSelector {
     }
 
     estimateSpeedProfile(hardware, model, quant, category, runtime = 'ollama') {
-        // Determine backend
-        const cpuArchitecture = String(hardware.cpu?.architecture || '').toLowerCase();
-        const isArmCpu = /(?:arm64|aarch64|apple\s+silicon)/.test(cpuArchitecture);
-        let backend = 'cpu_x86';
-        if (hardware.acceleration.supports_metal) backend = 'metal';
-        else if (hardware.acceleration.supports_cuda) backend = 'cuda';
-        else if (isArmCpu) backend = 'cpu_arm';
-        
+        const backend = detectedBackend(hardware);
+
         // Base speed calculation
         const K = this.backendK[backend];
         const denseParamsB = Number.isFinite(this.parseBillionsValue(model.paramsB))
@@ -2059,12 +1985,12 @@ class DeterministicModelSelector {
         let base = K / effectiveParamsB;
         
         // Quantization multiplier
-        const quantMultiplier = this.quantSpeedMultipliers[quant] || 1.0;
+        const quantMultiplier = this.quantSpeedMultipliers[quant] ?? precisionProfile(quant).speed;
         base *= quantMultiplier;
         
         // Threading multiplier
         if (hardware.cpu.cores >= 8) base *= 1.1;
-        if (hardware.acceleration.supports_metal || hardware.acceleration.supports_cuda) base *= 1.2;
+        if (!backend.startsWith('cpu_')) base *= 1.2;
 
         const acceleratorScale = this.calculateAcceleratorSpeedScale(hardware, backend);
         base *= acceleratorScale.multiplier;
@@ -2087,6 +2013,7 @@ class DeterministicModelSelector {
 
         return {
             backend,
+            basis: 'backend_profile_estimate',
             targetTPS: target,
             estimatedTPS,
             score,
@@ -2097,7 +2024,7 @@ class DeterministicModelSelector {
     }
 
     calculateAcceleratorSpeedScale(hardware = {}, backend = 'cpu_x86') {
-        if (backend !== 'cuda' && backend !== 'metal') {
+        if (!['cuda', 'metal', 'rocm', 'vulkan', 'sycl'].includes(backend)) {
             return { multiplier: 1, reason: null };
         }
 
@@ -2121,7 +2048,7 @@ class DeterministicModelSelector {
         else if (acceleratorMemoryGB >= 48) multiplier *= 1.7;
         else if (acceleratorMemoryGB >= 24) multiplier *= 1.15;
 
-        if (backend === 'cuda' && gpuCount > 1) {
+        if (['cuda', 'rocm'].includes(backend) && gpuCount > 1) {
             multiplier *= Math.min(1.8, 1 + ((gpuCount - 1) * 0.25));
         }
 
@@ -2145,9 +2072,8 @@ class DeterministicModelSelector {
         const ctxMax = Number(model?.ctxMax) || 0;
         if (ctxMax >= targetCtx) return 100;
         if (ctxMax >= targetCtx * 0.5) return 70;
-        // Context is NOT pre-filtered: a model that cannot serve the requested
-        // context still scores here (0 for this component) and stays eligible,
-        // weighted down rather than excluded.
+        // Required contexts are filtered before scoring. Preferred contexts
+        // contribute a lower score when the model window is shorter.
         return 0;
     }
 
@@ -2333,7 +2259,7 @@ class DeterministicModelSelector {
         
         // Special attributes  
         if (model.tags.includes('coder')) parts.push('coder-tuned');
-        if (model.modalities.includes('vision')) parts.push('vision-capable');
+        if (model.modalities?.includes('vision')) parts.push('vision-capable');
         if (model.isDeprecated) parts.push('deprecated penalized');
         else if (model.isStale) parts.push('stale penalized');
         else if (model.freshnessScore >= 90) parts.push('fresh release');
@@ -2370,8 +2296,8 @@ class DeterministicModelSelector {
         }
         
         // Backend
-        if (hardware.acceleration.supports_metal) parts.push('Metal backend');
-        else if (hardware.acceleration.supports_cuda) parts.push('CUDA backend');
+        const backend = speedEstimate?.backend || detectedBackend(hardware);
+        parts.push(`${backend.replace('_', ' ').toUpperCase()} speed estimate`);
         
         return parts.join(', ');
     }
@@ -2543,6 +2469,10 @@ class DeterministicModelSelector {
             tags: candidate.meta.tags || [],
             quantization: candidate.quant,
             estimatedRAM: candidate.requiredGB,
+            memory: candidate.memory,
+            context: candidate.context,
+            speed: candidate.speed,
+            artifact: candidate.meta.artifact,
             reasoning: candidate.rationale,
             runtime: candidate.runtime || candidate.speed?.runtime || 'ollama',
             installCommand: candidate.meta.installCommand || provenance.install_command || '',
@@ -2649,7 +2579,7 @@ class DeterministicModelSelector {
         const tags = model.tags || [];
 
         if (tags.includes('coder') || name.includes('code')) return 'coding';
-        if (tags.includes('vision') || (model.modalities && model.modalities.includes('vision'))) return 'multimodal';
+        if (tags.includes('vision') || (model.modalities && model.modalities?.includes('vision'))) return 'multimodal';
         if (tags.includes('embed')) return 'embeddings';
         if (name.includes('creative') || name.includes('wizard')) return 'creative';
 

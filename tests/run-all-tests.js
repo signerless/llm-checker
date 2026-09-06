@@ -7,6 +7,9 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const TESTS = [
+    { name: 'Ranking contracts', file: 'ranking-contract.test.js', category: 'Recommendations' },
+    { name: 'Desktop ranking bridge', file: 'desktop-core.test.js', category: 'UI' },
+    { name: 'Desktop runtime registry', file: '../desktop/test/runtimes.test.js', category: 'UI' },
     { name: 'Integrated GPU memory units', file: 'hardware-integrated-memory-units.test.js', category: 'Hardware' },
     { name: 'Parallel hardware probes', file: 'hardware-parallel-probes.test.js', category: 'Hardware' },
     { name: 'AMD GPU detection', file: 'amd-gpu-detection.test.js', category: 'Hardware' },
