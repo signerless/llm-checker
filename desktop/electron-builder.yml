@@ -1,0 +1,85 @@
+appId: com.llmchecker.desktop
+productName: LLM Checker
+copyright: Copyright © Pavelevich
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only the Electron layer lives in the asar. The analysis core is shipped as an
+# unpacked resource because it carries src/data/seed/models.db (42 MB) — sql.js
+# and node:sqlite both want a real file on disk, and an asar-packed DB would
+# have to be copied out at first run.
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+  - "!test/**"
+
+extraResources:
+  - from: ../bin
+    to: core/bin
+  - from: ../analyzer
+    to: core/analyzer
+  - from: ../LICENSE
+    to: core/LICENSE
+  - from: ../THIRD_PARTY_NOTICES
+    to: core/THIRD_PARTY_NOTICES
+  - from: ../src
+    to: core/src
+    filter:
+      - "**/*"
+      - "!**/*.md"
+  - from: ../node_modules
+    to: core/node_modules
+    filter:
+      - "**/*"
+      - "!**/test/**"
+      - "!**/tests/**"
+      - "!**/*.md"
+      - "!**/*.map"
+      - "!**/.bin/**"
+  - from: ../package.json
+    to: core/package.json
+
+asar: true
+# Nothing in the tree is a native module (systeminformation is pure JS, sql.js
+# is WASM), so there is no electron-rebuild step and no per-platform native ABI
+# to match. That is the one genuinely easy part of packaging this app.
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64]
+  maintainer: Pavelevich
+  desktop:
+    entry:
+      Name: LLM Checker
+      Comment: Find which local models your machine can actually run
+      Categories: Development;Utility;
+
+publish: null

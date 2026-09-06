@@ -1,6 +1,7 @@
 const ModelDatabase = require('./model-database');
 const { isSupportedHuggingFaceModel } = require('./registry-ingestors');
 const DeterministicModelSelector = require('../models/deterministic-selector');
+const { normalizePrecision, memoryBudgetGB } = require('../models/ranking-contract');
 const { applyCpuOnlyOverride } = require('../hardware/cpu-only');
 const { runtimeSupportedOnHardware, normalizeRuntime } = require('../runtime/runtime-support');
 
@@ -93,15 +94,35 @@ function inferFamily(identifier = '') {
 
 function normalizeQuantization(row = {}) {
     const raw = row.quantization || row.precision || '';
-    if (raw) return raw;
-    if (row.format === 'safetensors' || row.format === 'pytorch' || row.format === 'pytorch_bin') {
-        return 'FP16';
-    }
-    return 'Q4_K_M';
+    return normalizePrecision(raw);
 }
 
 function isShardedWeightFile(filename = '') {
-    return /-\d{5,}-of-\d{5,}\.(safetensors|bin)$/i.test(String(filename || ''));
+    return /-\d{5,}-of-\d{5,}\.(safetensors|bin|gguf)$/i.test(String(filename || ''));
+}
+
+function groupWeightShards(rows) {
+    const groups = new Map();
+    const output = [];
+    for (const row of rows) {
+        const file = row.filename || row.artifact_name || '';
+        const match = file.match(/^(.*)-(\d{5,})-of-(\d{5,})\.(safetensors|bin|gguf)$/i);
+        if (!match) { output.push(row); continue; }
+        const key = [row.source_id, row.repo_id, match[1], match[3], match[4], row.quantization, row.revision].join('|');
+        if (!groups.has(key)) groups.set(key, { count: Number(match[3]), rows: new Map() });
+        groups.get(key).rows.set(Number(match[2]), row);
+    }
+    for (const group of groups.values()) {
+        const shards = [...group.rows.entries()].sort((a, b) => a[0] - b[0]);
+        // Partial catalogs cannot establish a runnable download or a complete size.
+        if (shards.length !== group.count || shards.some(([index], i) => index !== i + 1)) continue;
+        const first = shards[0][1];
+        const sizes = shards.map(([, row]) => Number(row.size_gb));
+        output.push({ ...first, shard_files: shards.map(([, row]) => row.filename || row.artifact_name),
+            shards_complete: true,
+            size_gb: sizes.every(size => size > 0 && Number.isFinite(size)) ? sizes.reduce((a, b) => a + b, 0) : null });
+    }
+    return output;
 }
 
 function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '') {
@@ -109,9 +130,10 @@ function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '')
     const normalizedFormat = String(format || '').toLowerCase();
     const source = String(sourceId || '').toLowerCase();
 
-    if (source === 'ollama' || runtimes.includes('ollama')) return 'ollama';
+    if (source === 'ollama' || normalizedFormat === 'ollama') return 'ollama';
+    if (normalizedFormat === 'gguf') return 'llama.cpp';
     if (normalizedFormat === 'mlx' || runtimes.includes('mlx')) return 'mlx';
-    if (normalizedFormat === 'gguf' || runtimes.includes('llama.cpp')) return 'llama.cpp';
+    if (runtimes.includes('llama.cpp')) return 'llama.cpp';
     if (runtimes.includes('vllm')) return 'vllm';
     if (runtimes.includes('transformers')) return 'transformers';
     return runtimes[0] || 'transformers';
@@ -125,7 +147,7 @@ function artifactToSelectorModel(row) {
         tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
     })) return null;
     const shardedFile = row.source_id === 'huggingface' && isShardedWeightFile(row.filename || row.artifact_name);
-    const identifier = shardedFile
+    const identifier = shardedFile && row.format !== 'gguf'
         ? (row.canonical_model_id || row.repo_id)
         : (row.artifact_name || row.filename || row.canonical_model_id || row.repo_id);
     const displayName = row.canonical_model_id || row.repo_display_name || identifier;
@@ -189,12 +211,10 @@ function artifactToSelectorModel(row) {
         .filter(Boolean)
         .map((tag) => String(tag).toLowerCase());
 
-    // A sharded weight file's size is only ONE shard, not the whole model. Don't
-    // let it stand in for the model's memory (that made a 56B model look like
-    // ~4.6GB and "fit" tiny hardware); leave size unset so memory estimates from
-    // the (total) parameter count instead.
+    // Only a complete shard group supplies an observed model size. Individual
+    // shards must never stand in for the full resident weight set.
     const rawSizeGB = Number(row.size_gb);
-    const sizeGB = (!shardedFile && Number.isFinite(rawSizeGB) && rawSizeGB > 0) ? rawSizeGB : NaN;
+    const sizeGB = ((!shardedFile || row.shards_complete) && Number.isFinite(rawSizeGB) && rawSizeGB > 0) ? rawSizeGB : NaN;
     const sizeByQuant = Number.isFinite(sizeGB) && sizeGB > 0
         ? { [quant]: sizeGB }
         : {};
@@ -210,7 +230,7 @@ function artifactToSelectorModel(row) {
         availableQuantizations: [quant],
         sizeGB: Number.isFinite(sizeGB) && sizeGB > 0 ? sizeGB : undefined,
         sizeByQuant,
-        ctxMax: Number(row.context_length) > 0 ? Number(row.context_length) : 4096,
+        ctxMax: Number(row.context_length) > 0 ? Number(row.context_length) : null,
         tags,
         repoTags,
         description,
@@ -367,6 +387,7 @@ function candidateToRecommendation(candidate) {
         components: candidate.components,
         qualitySource: candidate.meta.qualitySource || { kind: 'estimated', basis: 'parameter count' },
         memory: candidate.memory,
+        context: candidate.context,
         speed: candidate.speed
     };
 }
@@ -421,7 +442,9 @@ function normalizeHardwareForSelector(hardware = {}, options = {}) {
             ...(hardware.acceleration || {}),
             supports_metal: isMetal,
             supports_cuda: isCuda,
-            supports_rocm: isRocm
+            supports_rocm: isRocm,
+            supports_vulkan: bestBackend === 'vulkan',
+            supports_sycl: bestBackend === 'sycl'
         },
         usableMemGB: Number(summary.effectiveMemory) > 0 ? Number(summary.effectiveMemory) : undefined
     };
@@ -492,7 +515,8 @@ class RegistryRecommender {
             localOnly: options.localOnly !== false,
             limit: poolLimit
         });
-        const modelPool = dedupeRecommendationPool(rows.map(artifactToSelectorModel).filter(Boolean));
+        const modelPool = dedupeRecommendationPool(groupWeightShards(rows).map(artifactToSelectorModel)
+            .filter(model => model && (runtimeFilter !== 'ollama' || model.source === 'ollama')));
 
         const normalizedRuntime = runtimeFilter || 'auto';
 
@@ -646,13 +670,7 @@ class RegistryRecommender {
         );
         const objective = this.selector.normalizeOptimizationObjective(optimizeFor);
         const ctx = targetCtx || this.selector.targetContexts[category] || this.selector.targetContexts.general;
-        const totalMem = normalizedHardware?.memory?.totalGB ?? normalizedHardware?.memory?.total ?? 8;
-        const usableMem = typeof normalizedHardware.usableMemGB === 'number'
-            ? normalizedHardware.usableMemGB
-            : Math.max(1, Math.min(0.8 * totalMem, totalMem - 2));
-        const isUnified = Boolean(normalizedHardware?.gpu?.unified) || normalizedHardware?.gpu?.type === 'apple_silicon';
-        const vram = normalizedHardware?.gpu?.vramGB ?? normalizedHardware?.gpu?.vram ?? 0;
-        const budget = isUnified ? usableMem : (vram || usableMem);
+        const budget = memoryBudgetGB(normalizedHardware);
         const filtered = this.selector.filterByCategory(modelPool, category, { includeUncensored });
         const candidates = [];
         let totalEvaluated = 0;
@@ -679,7 +697,8 @@ class RegistryRecommender {
                 ctx,
                 budget,
                 objective,
-                runtime
+                runtime,
+                { contextPolicy: targetCtx ? 'required' : 'preferred' }
             );
             if (candidate) candidates.push(candidate);
         }
@@ -713,5 +732,6 @@ module.exports = {
     candidateToRecommendation,
     normalizeHardwareForSelector,
     choosePreferredRuntime,
-    dedupeRecommendationPool
+    dedupeRecommendationPool,
+    groupWeightShards
 };
