@@ -1,3 +1,4 @@
+const { clampSharedMemory } = require('../memory-units');
 /**
  * ROCm Detector
  * Detects AMD GPUs using rocm-smi, rocminfo, lspci, and sysfs
@@ -929,8 +930,9 @@ class ROCmDetector {
             name,
             detectedVram || this.estimateVRAMFromModel(name)
         );
-        const dedicated = sysfsProfile.dedicated || detectedVram || 0;
-        const shared = Math.max(sysfsProfile.shared || 0, estimatedShared || 0, dedicated);
+        const systemGB = os.totalmem() / (1024 ** 3);
+        const dedicated = clampSharedMemory(sysfsProfile.dedicated || detectedVram || 0, systemGB);
+        const shared = clampSharedMemory(Math.max(sysfsProfile.shared || 0, estimatedShared || 0, dedicated), systemGB);
         const total = shared || dedicated || this.estimateVRAMFromModel(name) || 8;
 
         return {
