@@ -6,7 +6,8 @@
 
 const fs = require('fs');
 const os = require('os');
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
+const { execCommandAsync } = require('../probe-exec');
 
 class CUDADetector {
     constructor() {
@@ -17,6 +18,18 @@ class CUDADetector {
 
     execCommand(command, options = {}) {
         return execSync(command, options);
+    }
+
+    execCommandAsync(command, options = {}) {
+        return execCommandAsync(command, options);
+    }
+
+    usesOverriddenDetect() {
+        return this.detect !== CUDADetector.prototype.detect;
+    }
+
+    usesOverriddenAvailability() {
+        return this.checkAvailability !== CUDADetector.prototype.checkAvailability;
     }
 
     /**
@@ -45,12 +58,50 @@ class CUDADetector {
         return this.isAvailable;
     }
 
+    async checkAvailabilityAsync() {
+        if (this.usesOverriddenAvailability()) {
+            return this.checkAvailability();
+        }
+
+        if (this.isAvailable !== null) {
+            return this.isAvailable;
+        }
+
+        if (await this.hasNvidiaSMIAsync()) {
+            this.isAvailable = true;
+            this.detectionMode = 'nvidia-smi';
+            return this.isAvailable;
+        }
+
+        if (this.isJetsonPlatform() && await this.hasJetsonCudaSupportAsync()) {
+            this.isAvailable = true;
+            this.detectionMode = 'jetson';
+            return this.isAvailable;
+        }
+
+        this.isAvailable = false;
+        this.detectionMode = null;
+        return this.isAvailable;
+    }
+
     hasNvidiaSMI() {
         try {
             this.execCommand('nvidia-smi --version', {
                 encoding: 'utf8',
                 timeout: 5000,
                 stdio: ['pipe', 'pipe', 'pipe']
+            });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async hasNvidiaSMIAsync() {
+        try {
+            await this.execCommandAsync('nvidia-smi --version', {
+                encoding: 'utf8',
+                timeout: 5000
             });
             return true;
         } catch (e) {
@@ -157,6 +208,33 @@ class CUDADetector {
         }
     }
 
+    async hasJetsonCudaSupportAsync() {
+        const runtimeHints = [
+            '/usr/local/cuda',
+            '/usr/bin/tegrastats',
+            '/usr/sbin/nvpmodel',
+            '/usr/lib/aarch64-linux-gnu/tegra',
+            '/etc/nv_tegra_release',
+            '/dev/nvhost-gpu',
+            '/dev/nvmap',
+            '/proc/driver/nvidia/version'
+        ];
+
+        if (runtimeHints.some((hintPath) => fs.existsSync(hintPath))) {
+            return true;
+        }
+
+        try {
+            await this.execCommandAsync('nvcc --version', {
+                encoding: 'utf8',
+                timeout: 5000
+            });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     /**
      * Detect all NVIDIA GPUs and their capabilities
      */
@@ -173,6 +251,35 @@ class CUDADetector {
             const info = this.detectionMode === 'jetson'
                 ? this.getJetsonGPUInfo()
                 : this.getGPUInfo();
+
+            if (!info || !Array.isArray(info.gpus) || info.gpus.length === 0) {
+                return null;
+            }
+
+            this.cache = info;
+            return info;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async detectAsync() {
+        if (this.usesOverriddenDetect()) {
+            return this.detect();
+        }
+
+        if (!(await this.checkAvailabilityAsync())) {
+            return null;
+        }
+
+        if (this.cache) {
+            return this.cache;
+        }
+
+        try {
+            const info = this.detectionMode === 'jetson'
+                ? await this.getJetsonGPUInfoAsync()
+                : await this.getGPUInfoAsync();
 
             if (!info || !Array.isArray(info.gpus) || info.gpus.length === 0) {
                 return null;
@@ -351,6 +458,156 @@ class CUDADetector {
         return result;
     }
 
+    async getGPUInfoAsync() {
+        const result = {
+            gpus: [],
+            driver: null,
+            cuda: null,
+            totalVRAM: 0,
+            backend: 'cuda',
+            isMultiGPU: false,
+            speedCoefficient: 0
+        };
+
+        try {
+            const [versionOut, banner] = await Promise.all([
+                this.execCommandAsync('nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits', {
+                    encoding: 'utf8',
+                    timeout: 5000
+                }),
+                this.execCommandAsync('nvidia-smi', {
+                    encoding: 'utf8',
+                    timeout: 5000
+                })
+            ]);
+            result.driver = String(versionOut).trim().split('\n')[0];
+            const header = String(banner).split('\n').slice(0, 3).join('\n');
+            const cudaMatch = header.match(/CUDA Version:\s*([\d.]+)/);
+            if (cudaMatch) {
+                result.cuda = cudaMatch[1];
+            }
+        } catch (e) {
+            // Continue without version info
+        }
+
+        try {
+            const query = [
+                'index',
+                'name',
+                'uuid',
+                'memory.total',
+                'memory.free',
+                'memory.used',
+                'compute_mode',
+                'pcie.link.gen.current',
+                'pcie.link.width.current',
+                'power.draw',
+                'power.limit',
+                'temperature.gpu',
+                'utilization.gpu',
+                'utilization.memory',
+                'clocks.current.sm',
+                'clocks.max.sm'
+            ].join(',');
+
+            const gpuData = (await this.execCommandAsync(
+                `nvidia-smi --query-gpu=${query} --format=csv,noheader,nounits`,
+                { encoding: 'utf8', timeout: 10000 }
+            )).trim();
+
+            const lines = gpuData.split('\n');
+            const toMB = (value) => {
+                const n = parseInt(value, 10);
+                return Number.isFinite(n) ? n : 0;
+            };
+            const toGB = (value) => {
+                const mb = toMB(value);
+                return mb > 0 ? Math.round(mb / 1024) : 0;
+            };
+            const toInt = (value) => {
+                const n = parseInt(value, 10);
+                return Number.isFinite(n) ? n : 0;
+            };
+            const toFloat = (value) => {
+                const n = parseFloat(value);
+                return Number.isFinite(n) ? n : 0;
+            };
+
+            for (const line of lines) {
+                if (!line || !line.trim()) continue;
+                const parts = line.split(/\s*,\s*/).map(p => p.trim());
+                if (parts.length < 4) continue;
+                const memTotalMB = toMB(parts[3]);
+                const gpu = {
+                    index: toInt(parts[0]),
+                    name: parts[1] || 'Unknown NVIDIA GPU',
+                    uuid: parts[2] || null,
+                    memory: {
+                        total: toGB(parts[3]),
+                        free: toGB(parts[4]),
+                        used: toGB(parts[5])
+                    },
+                    computeMode: parts[6] || 'Default',
+                    pcie: {
+                        generation: toInt(parts[7]),
+                        width: toInt(parts[8])
+                    },
+                    power: {
+                        draw: toFloat(parts[9]),
+                        limit: toFloat(parts[10])
+                    },
+                    temperature: toInt(parts[11]),
+                    utilization: {
+                        gpu: toInt(parts[12]),
+                        memory: toInt(parts[13])
+                    },
+                    clocks: {
+                        current: toInt(parts[14]),
+                        max: toInt(parts[15])
+                    },
+                    capabilities: this.getGPUCapabilities(parts[1]),
+                    speedCoefficient: this.calculateSpeedCoefficient(parts[1], memTotalMB)
+                };
+                result.gpus.push(gpu);
+                result.totalVRAM += gpu.memory.total;
+            }
+        } catch (e) {
+            try {
+                const simpleQuery = (await this.execCommandAsync(
+                    'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits',
+                    { encoding: 'utf8', timeout: 5000 }
+                )).trim();
+
+                const lines = simpleQuery.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    if (!lines[i] || !lines[i].trim()) continue;
+                    const [name, memMB] = lines[i].split(/\s*,\s*/).map(p => p.trim());
+                    const parsedMB = parseInt(memMB, 10);
+                    const memMBSafe = Number.isFinite(parsedMB) ? parsedMB : 0;
+                    const memGB = memMBSafe > 0 ? Math.round(memMBSafe / 1024) : 0;
+
+                    result.gpus.push({
+                        index: i,
+                        name: name || 'NVIDIA GPU',
+                        memory: { total: memGB, free: memGB, used: 0 },
+                        capabilities: this.getGPUCapabilities(name),
+                        speedCoefficient: this.calculateSpeedCoefficient(name, memMBSafe)
+                    });
+                    result.totalVRAM += memGB;
+                }
+            } catch (e2) {
+                return null;
+            }
+        }
+
+        result.isMultiGPU = result.gpus.length > 1;
+        result.speedCoefficient = result.gpus.length > 0
+            ? Math.max(...result.gpus.map(g => g.speedCoefficient))
+            : 0;
+
+        return result;
+    }
+
     getJetsonGPUInfo() {
         const modelRaw = this.readJetsonModel();
         const model = this.normalizeJetsonModel(modelRaw);
@@ -433,6 +690,48 @@ class CUDADetector {
         return 'NVIDIA Jetson (CUDA)';
     }
 
+    getJetsonGPUInfoAsync() {
+        return Promise.resolve().then(async () => {
+            const modelRaw = this.readJetsonModel();
+            const model = this.normalizeJetsonModel(modelRaw);
+            const cudaVersion = await this.detectJetsonCudaVersionAsync();
+            const driverVersion = this.detectJetsonDriverVersion() || 'unknown';
+            const totalSystemGB = Math.max(1, Math.round(os.totalmem() / (1024 ** 3)));
+            const sharedGpuMemoryGB = Math.max(1, Math.round(totalSystemGB * 0.85));
+            const capabilities = this.getJetsonCapabilities(modelRaw || model);
+            const speedCoefficient = this.getJetsonSpeedCoefficient(modelRaw || model);
+
+            return {
+                gpus: [
+                    {
+                        index: 0,
+                        name: model,
+                        uuid: null,
+                        memory: {
+                            total: sharedGpuMemoryGB,
+                            free: Math.max(0, sharedGpuMemoryGB - 1),
+                            used: Math.min(1, sharedGpuMemoryGB)
+                        },
+                        computeMode: 'Default',
+                        pcie: { generation: 0, width: 0 },
+                        power: { draw: 0, limit: 0 },
+                        temperature: 0,
+                        utilization: { gpu: 0, memory: 0 },
+                        clocks: { current: 0, max: 0 },
+                        capabilities,
+                        speedCoefficient
+                    }
+                ],
+                driver: driverVersion,
+                cuda: cudaVersion,
+                totalVRAM: sharedGpuMemoryGB,
+                backend: 'cuda',
+                isMultiGPU: false,
+                speedCoefficient
+            };
+        });
+    }
+
     detectJetsonCudaVersion() {
         const versionTxt = this.readFileIfExists('/usr/local/cuda/version.txt');
         if (versionTxt) {
@@ -447,6 +746,27 @@ class CUDADetector {
                 stdio: ['pipe', 'pipe', 'pipe']
             });
             const match = nvccVersion.match(/release\s+([\d.]+)/i);
+            if (match) return match[1];
+        } catch (e) {
+            // Ignore missing nvcc
+        }
+
+        return null;
+    }
+
+    async detectJetsonCudaVersionAsync() {
+        const versionTxt = this.readFileIfExists('/usr/local/cuda/version.txt');
+        if (versionTxt) {
+            const match = versionTxt.match(/CUDA Version\s+([\d.]+)/i);
+            if (match) return match[1];
+        }
+
+        try {
+            const nvccVersion = await this.execCommandAsync('nvcc --version', {
+                encoding: 'utf8',
+                timeout: 5000
+            });
+            const match = String(nvccVersion).match(/release\s+([\d.]+)/i);
             if (match) return match[1];
         } catch (e) {
             // Ignore missing nvcc

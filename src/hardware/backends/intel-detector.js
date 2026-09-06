@@ -7,11 +7,39 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { execFileAsync, filterLspciDisplayLines } = require('../probe-exec');
 
 class IntelDetector {
     constructor() {
         this.cache = null;
         this.isAvailable = null;
+    }
+
+    usesOverriddenDetect() {
+        return this.detect !== IntelDetector.prototype.detect;
+    }
+
+    usesOverriddenAvailability() {
+        return this.checkAvailability !== IntelDetector.prototype.checkAvailability;
+    }
+
+    hasIntelSysfs() {
+        try {
+            const renderNodes = fs.readdirSync('/sys/class/drm');
+            return renderNodes.some(node => {
+                try {
+                    const vendor = fs.readFileSync(
+                        `/sys/class/drm/${node}/device/vendor`,
+                        'utf8'
+                    ).trim();
+                    return vendor === '0x8086';
+                } catch (e) {
+                    return false;
+                }
+            });
+        } catch (e) {
+            return false;
+        }
     }
 
     /**
@@ -59,6 +87,32 @@ class IntelDetector {
         return this.isAvailable;
     }
 
+    async checkAvailabilityAsync() {
+        if (this.usesOverriddenAvailability()) {
+            return this.checkAvailability();
+        }
+
+        if (this.isAvailable !== null) {
+            return this.isAvailable;
+        }
+
+        if (process.platform !== 'linux') {
+            this.isAvailable = false;
+            return false;
+        }
+
+        try {
+            const lspci = filterLspciDisplayLines(
+                await execFileAsync('lspci', [], { encoding: 'utf8', timeout: 5000 })
+            );
+            this.isAvailable = /intel/i.test(lspci);
+        } catch (e) {
+            this.isAvailable = this.hasIntelSysfs();
+        }
+
+        return this.isAvailable;
+    }
+
     /**
      * Detect Intel GPUs
      */
@@ -73,6 +127,28 @@ class IntelDetector {
 
         try {
             const info = this.getGPUInfo();
+            this.cache = info;
+            return info;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async detectAsync() {
+        if (this.usesOverriddenDetect()) {
+            return this.detect();
+        }
+
+        if (!(await this.checkAvailabilityAsync())) {
+            return null;
+        }
+
+        if (this.cache) {
+            return this.cache;
+        }
+
+        try {
+            const info = await this.getGPUInfoAsync();
             this.cache = info;
             return info;
         } catch (error) {
@@ -180,6 +256,114 @@ class IntelDetector {
             : 0;
 
         return result;
+    }
+
+    async getGPUInfoAsync() {
+        const result = {
+            gpus: [],
+            totalVRAM: 0,
+            backend: 'sycl',
+            isMultiGPU: false,
+            hasDedicated: false,
+            speedCoefficient: 0
+        };
+
+        try {
+            const lspci = await execFileAsync('lspci', ['-v'], {
+                encoding: 'utf8',
+                timeout: 10000
+            });
+            this._applyIntelLspci(result, lspci);
+        } catch (e) {
+            if (!this._applyIntelSysfs(result)) {
+                return null;
+            }
+        }
+
+        if (result.gpus.length === 0) {
+            if (!this._applyIntelSysfs(result)) {
+                return null;
+            }
+        }
+
+        if (result.gpus.length === 0) {
+            return null;
+        }
+
+        result.isMultiGPU = result.gpus.filter(g => g.type === 'dedicated').length > 1;
+        result.speedCoefficient = result.gpus.length > 0
+            ? Math.max(...result.gpus.map(g => g.speedCoefficient))
+            : 0;
+
+        return result;
+    }
+
+    _applyIntelLspci(result, lspci) {
+        const gpuBlocks = String(lspci || '').split(/(?=\d{2}:\d{2}\.\d)/);
+
+        for (const block of gpuBlocks) {
+            if (!block.trim()) continue;
+            if (!/VGA|3D|Display/i.test(block) || !/intel/i.test(block)) continue;
+
+            const nameMatch = block.match(/Intel.*?(Arc|Iris|UHD|HD Graphics)[^\n]*/i);
+            if (!nameMatch) continue;
+
+            const name = nameMatch[0].replace(/Corporation\s*/i, '').trim();
+            const isDedicated = name.toLowerCase().includes('arc');
+            let vram = this.estimateVRAM(name) || this.getVRAMFromSysfs(block);
+
+            const gpu = {
+                index: result.gpus.length,
+                name: name,
+                type: isDedicated ? 'dedicated' : 'integrated',
+                memory: {
+                    total: vram,
+                    shared: isDedicated ? 0 : vram
+                },
+                capabilities: this.getGPUCapabilities(name),
+                speedCoefficient: this.calculateSpeedCoefficient(name, vram, isDedicated)
+            };
+
+            result.gpus.push(gpu);
+            if (isDedicated) {
+                result.totalVRAM += vram;
+                result.hasDedicated = true;
+            }
+        }
+    }
+
+    _applyIntelSysfs(result) {
+        try {
+            const drmPath = '/sys/class/drm';
+            const cards = fs.readdirSync(drmPath).filter(f => f.startsWith('card') && !f.includes('-'));
+
+            for (const card of cards) {
+                const vendorPath = path.join(drmPath, card, 'device/vendor');
+                try {
+                    const vendor = fs.readFileSync(vendorPath, 'utf8').trim();
+                    if (vendor !== '0x8086') continue;
+
+                    const devicePath = path.join(drmPath, card, 'device/device');
+                    const deviceId = fs.readFileSync(devicePath, 'utf8').trim();
+
+                    const gpuInfo = this.getGPUFromDeviceId(deviceId);
+                    result.gpus.push({
+                        index: result.gpus.length,
+                        ...gpuInfo
+                    });
+
+                    if (gpuInfo.type === 'dedicated') {
+                        result.totalVRAM += gpuInfo.memory.total;
+                        result.hasDedicated = true;
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+            return result.gpus.length > 0;
+        } catch (e2) {
+            return false;
+        }
     }
 
     /**

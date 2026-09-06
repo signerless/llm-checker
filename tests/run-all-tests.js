@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const TESTS = [
+    { name: 'Parallel hardware probes', file: 'hardware-parallel-probes.test.js', category: 'Hardware' },
     { name: 'AMD GPU detection', file: 'amd-gpu-detection.test.js', category: 'Hardware' },
     { name: 'AMD Strix Halo unified memory', file: 'strix-halo-unified-memory.test.js', category: 'Hardware' },
     { name: 'CUDA Jetson detection', file: 'cuda-jetson-detection.test.js', category: 'Hardware' },

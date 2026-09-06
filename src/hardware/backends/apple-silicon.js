@@ -5,11 +5,16 @@
  */
 
 const { execSync } = require('child_process');
+const { execFileAsync } = require('../probe-exec');
 
 class AppleSiliconDetector {
     constructor() {
         this.cache = null;
         this.isSupported = process.platform === 'darwin' && process.arch === 'arm64';
+    }
+
+    usesOverriddenDetect() {
+        return this.detect !== AppleSiliconDetector.prototype.detect;
     }
 
     /**
@@ -26,6 +31,28 @@ class AppleSiliconDetector {
 
         try {
             const info = this.getChipInfo();
+            this.cache = info;
+            return info;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async detectAsync() {
+        if (this.usesOverriddenDetect()) {
+            return this.detect();
+        }
+
+        if (!this.isSupported) {
+            return null;
+        }
+
+        if (this.cache) {
+            return this.cache;
+        }
+
+        try {
+            const info = await this.getChipInfoAsync();
             this.cache = info;
             return info;
         } catch (error) {
@@ -142,6 +169,108 @@ class AppleSiliconDetector {
         result.speedCoefficient = this.calculateSpeedCoefficient(result);
         result.memory.bandwidth = this.estimateMemoryBandwidth(result.variant, result.generation);
 
+        return result;
+    }
+
+    async getChipInfoAsync() {
+        const result = {
+            chip: null,
+            variant: null,
+            generation: null,
+            cores: {
+                performance: 0,
+                efficiency: 0,
+                total: 0
+            },
+            gpu: {
+                cores: 0,
+                model: null
+            },
+            neuralEngine: {
+                cores: 0
+            },
+            memory: {
+                unified: 0,
+                bandwidth: null
+            },
+            capabilities: {
+                metal: true,
+                metalVersion: null,
+                fp16: true,
+                int8: true,
+                amx: true
+            },
+            backend: 'metal',
+            speedCoefficient: 0
+        };
+
+        const sysctl = async (key) => {
+            const out = await execFileAsync('sysctl', ['-n', key], { encoding: 'utf8', timeout: 5000 });
+            return String(out).trim();
+        };
+
+        try {
+            const [brand, ncpu, perf, eff, memBytes, gpuInfo] = await Promise.all([
+                sysctl('machdep.cpu.brand_string').catch(() => ''),
+                sysctl('hw.ncpu').catch(() => ''),
+                sysctl('hw.perflevel0.logicalcpu').catch(() => ''),
+                sysctl('hw.perflevel1.logicalcpu').catch(() => ''),
+                sysctl('hw.memsize').catch(() => ''),
+                execFileAsync('system_profiler', ['SPDisplaysDataType', '-json'], {
+                    encoding: 'utf8',
+                    timeout: 5000
+                }).catch(() => '')
+            ]);
+
+            if (brand) {
+                result.chip = brand;
+                const parsed = this.parseChipBrand(brand);
+                result.variant = parsed.variant;
+                result.generation = parsed.generation;
+            }
+
+            result.cores.total = parseInt(ncpu, 10) || require('os').cpus().length;
+            result.cores.performance = parseInt(perf, 10) || Math.ceil(result.cores.total / 2);
+            result.cores.efficiency = parseInt(eff, 10) || Math.floor(result.cores.total / 2);
+
+            const memParsed = parseInt(memBytes, 10);
+            result.memory.unified = Number.isFinite(memParsed)
+                ? Math.round(memParsed / (1024 ** 3))
+                : Math.round(require('os').totalmem() / (1024 ** 3));
+
+            try {
+                const parsedGpu = gpuInfo ? JSON.parse(gpuInfo) : {};
+                const displays = parsedGpu.SPDisplaysDataType || [];
+                if (displays.length > 0) {
+                    const gpu = displays[0];
+                    result.gpu.model = gpu.sppci_model || result.chip;
+                    const coreMatch = gpu.sppci_cores?.match(/(\d+)/);
+                    result.gpu.cores = coreMatch
+                        ? parseInt(coreMatch[1], 10)
+                        : this.estimateGPUCores(result.variant, result.generation);
+                    const metal = JSON.stringify(gpu);
+                    const match = metal.match(/Metal\s*([\d.]+|Family)/i);
+                    result.capabilities.metalVersion = match ? match[1] : '3';
+                } else {
+                    result.gpu.cores = this.estimateGPUCores(result.variant, result.generation);
+                    result.gpu.model = result.chip;
+                    result.capabilities.metalVersion = '3';
+                }
+            } catch (e) {
+                result.gpu.cores = this.estimateGPUCores(result.variant, result.generation);
+                result.gpu.model = result.chip;
+                result.capabilities.metalVersion = '3';
+            }
+        } catch (e) {
+            result.cores.total = require('os').cpus().length;
+            result.memory.unified = Math.round(require('os').totalmem() / (1024 ** 3));
+            result.gpu.cores = this.estimateGPUCores(result.variant, result.generation);
+            result.gpu.model = result.chip;
+            result.capabilities.metalVersion = '3';
+        }
+
+        result.speedCoefficient = this.calculateSpeedCoefficient(result);
+        result.memory.bandwidth = this.estimateMemoryBandwidth(result.variant, result.generation);
         return result;
     }
 

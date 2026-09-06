@@ -10,7 +10,7 @@ const ROCmDetector = require('./backends/rocm-detector');
 const IntelDetector = require('./backends/intel-detector');
 const CPUDetector = require('./backends/cpu-detector');
 const si = require('systeminformation');
-const { execSync } = require('child_process');
+const { execFileAsync, filterLspciDisplayLines } = require('./probe-exec');
 const { normalizePlatform } = require('../utils/platform');
 const { applyCpuOnlyOverride, resolveCpuOnlyMode } = require('./cpu-only');
 
@@ -89,95 +89,100 @@ class UnifiedDetector {
             timestamp: Date.now()
         };
 
-        // Detect CPU first (always available)
-        try {
-            result.cpu = this.backends.cpu.detect();
-            result.backends.cpu = {
-                available: true,
-                info: result.cpu
-            };
-        } catch (e) {
-            result.backends.cpu = { available: false, error: e.message };
-        }
+        // Independent backend probes overlap via async execFile. Sync detect()
+        // remains for tests/callers that monkey-patch execSync.
+        const probes = [
+            (async () => {
+                try {
+                    result.cpu = await this.backends.cpu.detectAsync();
+                    result.backends.cpu = {
+                        available: true,
+                        info: result.cpu
+                    };
+                } catch (e) {
+                    result.backends.cpu = { available: false, error: e.message };
+                }
+            })(),
+            (async () => {
+                try {
+                    const cudaInfo = await this.backends.cuda.detectAsync();
+                    if (cudaInfo && cudaInfo.gpus.length > 0) {
+                        result.backends.cuda = {
+                            available: true,
+                            info: cudaInfo
+                        };
+                    }
+                } catch (e) {
+                    result.backends.cuda = { available: false, error: e.message };
+                }
+            })(),
+            (async () => {
+                try {
+                    const rocmInfo = await this.backends.rocm.detectAsync();
+                    if (rocmInfo && rocmInfo.gpus.length > 0) {
+                        result.backends.rocm = {
+                            available: true,
+                            info: rocmInfo
+                        };
+                    }
+                } catch (e) {
+                    result.backends.rocm = { available: false, error: e.message };
+                }
+            })()
+        ];
 
-        // Detect Apple Silicon (macOS ARM only)
         if (platform === 'darwin' && process.arch === 'arm64') {
-            try {
-                const metalInfo = this.backends.metal.detect();
-                if (metalInfo) {
-                    result.backends.metal = {
-                        available: true,
-                        info: metalInfo
-                    };
+            probes.push((async () => {
+                try {
+                    const metalInfo = await this.backends.metal.detectAsync();
+                    if (metalInfo) {
+                        result.backends.metal = {
+                            available: true,
+                            info: metalInfo
+                        };
+                    }
+                } catch (e) {
+                    result.backends.metal = { available: false, error: e.message };
                 }
-            } catch (e) {
-                result.backends.metal = { available: false, error: e.message };
-            }
+            })());
         }
 
-        // Detect NVIDIA CUDA
-        try {
-            if (this.backends.cuda.checkAvailability()) {
-                const cudaInfo = this.backends.cuda.detect();
-                if (cudaInfo && cudaInfo.gpus.length > 0) {
-                    result.backends.cuda = {
-                        available: true,
-                        info: cudaInfo
-                    };
-                }
-            }
-        } catch (e) {
-            result.backends.cuda = { available: false, error: e.message };
-        }
-
-        // Detect AMD ROCm
-        try {
-            if (this.backends.rocm.checkAvailability()) {
-                const rocmInfo = this.backends.rocm.detect();
-                if (rocmInfo && rocmInfo.gpus.length > 0) {
-                    result.backends.rocm = {
-                        available: true,
-                        info: rocmInfo
-                    };
-                }
-            }
-        } catch (e) {
-            result.backends.rocm = { available: false, error: e.message };
-        }
-
-        // Detect Intel (Linux only for now)
         if (platform === 'linux') {
-            try {
-                if (this.backends.intel.checkAvailability()) {
-                    const intelInfo = this.backends.intel.detect();
+            probes.push((async () => {
+                try {
+                    const intelInfo = await this.backends.intel.detectAsync();
                     if (intelInfo && intelInfo.gpus.length > 0) {
                         result.backends.intel = {
                             available: true,
                             info: intelInfo
                         };
                     }
+                } catch (e) {
+                    result.backends.intel = { available: false, error: e.message };
                 }
-            } catch (e) {
-                result.backends.intel = { available: false, error: e.message };
-            }
+            })());
         }
 
         // Always collect a generic GPU inventory on Windows/Linux so integrated
         // GPUs remain visible even when a dedicated backend is selected.
         if (platform === 'win32' || platform === 'linux') {
-            try {
-                const genericGpuInfo = await this.detectSystemGpuFallback();
-                if (genericGpuInfo?.available) {
-                    result.systemGpu = genericGpuInfo;
-                    result.backends.generic = {
-                        available: true,
-                        info: genericGpuInfo
-                    };
+            probes.push((async () => {
+                try {
+                    const genericGpuInfo = await this.detectSystemGpuFallback();
+                    if (genericGpuInfo?.available) {
+                        result.systemGpu = genericGpuInfo;
+                        result.backends.generic = {
+                            available: true,
+                            info: genericGpuInfo
+                        };
+                    }
+                } catch (e) {
+                    result.backends.generic = { available: false, error: e.message };
                 }
-            } catch (e) {
-                result.backends.generic = { available: false, error: e.message };
-            }
+            })());
         }
+
+        await Promise.all(probes);
 
         // Select the best available backend
         result.primary = this.selectPrimaryBackend(result.backends);
@@ -713,7 +718,7 @@ class UnifiedDetector {
         const platform = normalizePlatform();
 
         if (platform === 'linux') {
-            const lspciControllers = this.detectLinuxLspciGpus();
+            const lspciControllers = await this.detectLinuxLspciGpus();
             const knownKeys = new Set(
                 normalized.map((gpu) => this.getGpuMatchKey(gpu.name)).filter(Boolean)
             );
@@ -752,13 +757,14 @@ class UnifiedDetector {
         };
     }
 
-    detectLinuxLspciGpus() {
+    async detectLinuxLspciGpus() {
         try {
-            const lspciOutput = execSync('lspci -nn | grep -Ei "VGA|3D|Display"', {
-                encoding: 'utf8',
-                timeout: 8000,
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
+            const lspciOutput = filterLspciDisplayLines(
+                await execFileAsync('lspci', ['-nn'], {
+                    encoding: 'utf8',
+                    timeout: 8000
+                })
+            );
             return this.parseLinuxLspciGpus(lspciOutput);
         } catch (error) {
             return [];
