@@ -49,6 +49,7 @@ const TESTS = [
     { name: 'CLI interactive panel helpers', file: 'cli-interactive-panel.test.js', category: 'UI' },
     { name: 'Windows panel overflow + resize', file: 'windows-panel-overflow.test.js', category: 'UI' },
     { name: 'Local features end-to-end', file: 'local-features-e2e.test.js', category: 'E2E' },
+    { name: 'Speed telemetry survives sync', file: 'speed-benchmark-sync-restore.test.js', category: 'Calibration' },
     { name: 'Calibration schema', file: 'calibration-schema.test.js', category: 'Calibration' },
     { name: 'Calibration command', file: 'calibrate-command.test.js', category: 'Calibration' },
     { name: 'Calibration end-to-end', file: 'calibration-e2e-integration.test.js', category: 'Calibration' },
