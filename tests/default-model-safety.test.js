@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -231,9 +233,10 @@ async function testOllamaDescriptionOnlyModel() {
 
 async function testPackagedSeedDescriptionOnlyModel() {
     const seedDbPath = path.join(__dirname, '..', 'src', 'data', 'seed', 'models.db');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-safety-seed-'));
     const database = new ModelDatabase({
-        dbPath: seedDbPath,
-        seedDbPath: path.join(__dirname, 'missing-seed.db'),
+        dbPath: path.join(dir, 'models.db'),
+        seedDbPath,
         disableRegistrySeedImport: true
     });
 
@@ -286,6 +289,7 @@ async function testPackagedSeedDescriptionOnlyModel() {
         assert.ok(explicitResult.recommendations.some((item) => item.model === 'dolphin-mixtral'));
     } finally {
         database.close();
+        fs.rmSync(dir, { recursive: true, force: true });
     }
 }
 
