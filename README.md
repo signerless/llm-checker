@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/pavelevich-llm-checker-badge.png)](https://mseep.ai/app/pavelevich-llm-checker)
+
 # LLM Checker
 
 ![LLM Checker Animated Logo](https://raw.githubusercontent.com/signerless/llm-checker/main/assets/llm-checker-logo.gif)
