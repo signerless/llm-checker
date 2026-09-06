@@ -365,6 +365,7 @@ function candidateToRecommendation(candidate) {
         modalities: toArray(artifact.modalities),
         rationale: candidate.rationale,
         components: candidate.components,
+        qualitySource: candidate.meta.qualitySource || { kind: 'estimated', basis: 'parameter count' },
         memory: candidate.memory,
         speed: candidate.speed
     };
@@ -434,6 +435,16 @@ class RegistryRecommender {
 
     async initialize() {
         await this.database.initialize();
+        if (this.selector.qualityEvals === undefined) {
+            // Custom registry adapters may not expose a SQL database.
+            if (typeof this.database.beginBatch !== 'function') {
+                this.selector.qualityEvals = null;
+                return;
+            }
+            const { QualityEvals } = require('./quality-evals');
+            this.selector.qualityEvals = new QualityEvals(this.database);
+            this.selector.qualityEvals.refreshCatalogCohort(this.database.all('SELECT name FROM models'));
+        }
     }
 
     async recommend(options = {}) {

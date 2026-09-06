@@ -1823,9 +1823,24 @@ class DeterministicModelSelector {
     }
 
     calculateQualityPrior(model, quant, category) {
+        // Measured benchmark scores win over the size heuristic whenever we
+        // actually have them. `qualityEvals` is injected by the caller; when
+        // it is absent or the model was never benchmarked we fall back to the
+        // estimate below and mark it as such on the result, so nothing ever
+        // presents a guess as a measurement.
+        const measured = this.lookupMeasuredQuality(model, category);
+        if (measured) {
+            let Qm = measured.score;
+            Qm += this.quantPenalties[quant] || -5;   // benchmarks are run at fp16
+            Qm += this.calculateFreshnessAdjustment(model);
+            model.qualitySource = measured.provenance;
+            return Math.max(0, Math.min(100, Qm));
+        }
+        model.qualitySource = { kind: 'estimated', basis: 'parameter count' };
+
         // Base quality by parameter count
         let Q = this.getBaseQuality(model.paramsB);
-        
+
         // Family bump
         const familyBump = this.familyBumps[model.family] || 0;
         Q += familyBump;
@@ -1859,6 +1874,109 @@ class DeterministicModelSelector {
         }
         
         return Math.max(0, Math.min(100, Q));
+    }
+
+    /**
+     * Real benchmark score for this model at this size, on the 0-100 axis the
+     * selector uses, or null when nothing was measured.
+     *
+     * Only metrics that actually measure the category are consulted: HumanEval
+     * says nothing about vision, so it is never borrowed for it. A category
+     * with no matching benchmark returns null rather than a nearby proxy.
+     */
+    lookupMeasuredQuality(model, category) {
+        // Attach lazily: the selector is constructed in several places that
+        // have no database handle, so it opens the shared catalog read-only on
+        // first use and degrades to the estimate if that is not possible.
+        if (this.qualityEvals === undefined) {
+            this.qualityEvals = null;
+            let connection;
+            try {
+                const { DatabaseSync } = require('node:sqlite');
+                const { QualityEvals } = require('../data/quality-evals');
+                const dbPath = require('path').join(
+                    require('os').homedir(), '.llm-checker', 'models.db'
+                );
+                if (require('fs').existsSync(dbPath)) {
+                    connection = new DatabaseSync(dbPath, { readOnly: true });
+                    const quality = new QualityEvals(connection, { readOnly: true });
+                    quality.stats();
+                    connection.prepare('SELECT 1 FROM catalog_families LIMIT 1').get();
+                    this.qualityEvals = quality;
+                }
+            } catch { connection?.close(); /* no benchmark data available */ }
+        }
+        if (!this.qualityEvals) return null;
+
+        // Preference order per category: the most discriminating benchmark
+        // first. LiveBench closes the gap for reasoning, creative and chat —
+        // the three categories that previously had no task signal at all and
+        // therefore ranked purely by model size.
+        const BENCH_FOR_CATEGORY = {
+            coding: [
+                'bcb_hard_instruct', 'bcb_instruct', 'livebench_coding',
+                'livebench_agentic_coding', 'humaneval_plus', 'mbpp_plus', 'bcb_complete',
+            ],
+            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr'],
+            creative: ['livebench_language'],
+            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if'],
+            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis'],
+            multimodal: ['mmmu_val'],
+        };
+        const wanted = BENCH_FOR_CATEGORY[category];
+        if (!wanted) return null;   // no benchmark speaks to this category yet
+
+        let hit;
+        try {
+            hit = this.qualityEvals.lookup(model.name, model.paramsB, category);
+        } catch { return null; }
+        if (!hit?.evals?.length) return null;
+
+        // Take the most preferred metric that exists for this model.
+        const byMetric = new Map(hit.evals.map((e) => [e.metric, e]));
+        const chosen = wanted.map((m) => byMetric.get(m)).filter(Boolean)
+            .find((entry) => this.qualityEvals.percentile(entry.metric, entry.score) != null);
+        if (!chosen) return null;
+
+        // BigCodeBench runs far below HumanEval on the same model (its top
+        // score is ~50 where HumanEval saturates near 90), so the two are
+        // rescaled onto a common axis instead of being compared directly.
+        // Rank within the metric's own distribution rather than against a
+        // fixed ceiling. Boards differ wildly in difficulty — BigCodeBench
+        // tops out near 51 while HumanEval+ saturates at 89, and LiveBench's
+        // reasoning median sits at 70 because frontier hosted models dominate
+        // it. A percentile puts every metric on one comparable axis.
+        const pct = this.qualityEvals.percentile(chosen.metric, chosen.score);
+        if (pct == null) return null;   // too thin a cohort to rank against
+
+        // Map the percentile onto the SAME band the size estimator produces
+        // (getBaseQuality spans 45-95). Handing back a raw 0-100 percentile
+        // instead makes measured and estimated models incomparable: measured
+        // ones spread across the whole axis while unmeasured ones cluster high,
+        // so a benchmarked model scores below an unbenchmarked one and gets
+        // punished for having been evaluated. Verified before this change:
+        // qwen3@30B measured = 20.8 vs deepseek-r1@14B estimated = 88.0.
+        const EST_FLOOR = 45;
+        const EST_CEIL = 95;
+        const score = EST_FLOOR + (pct / 100) * (EST_CEIL - EST_FLOOR);
+
+        return {
+            score,
+            provenance: {
+                kind: 'measured',
+                metric: chosen.metric,
+                rawScore: chosen.score,
+                source: chosen.sourceName,
+                sourceUrl: chosen.sourceUrl,
+                scoreUnit: chosen.scoreUnit,
+                independent: chosen.independent,
+                benchModel: chosen.benchModel,
+                precision: chosen.precision,
+                // The board did not publish a size, so this measures the
+                // family rather than this exact build. Shown as such.
+                sizeUnknown: Boolean(hit.sizeUnknown),
+            },
+        };
     }
 
     getBaseQuality(paramsB) {
@@ -2431,6 +2549,11 @@ class DeterministicModelSelector {
             downloadUrl: candidate.meta.downloadUrl || provenance.download_url || '',
             artifactFormat: candidate.meta.artifact?.format || '',
             memoryAssumptionSource: candidate.memory?.assumptionSource || 'dense_params',
+            // Where the quality half of the score came from: a real benchmark
+            // or the parameter-count estimate. Carried all the way out so the
+            // UI can label it — a 23%-measured catalog must not present an
+            // estimate and a measurement as the same kind of number.
+            qualitySource: candidate.meta.qualitySource || { kind: 'estimated', basis: 'parameter count' },
             speedAssumptions: candidate.speed?.moe ? {
                 applied: Boolean(candidate.speed.moe.applied),
                 runtime: candidate.speed.runtime || candidate.runtime || 'ollama',
