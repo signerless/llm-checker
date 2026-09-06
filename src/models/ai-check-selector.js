@@ -189,7 +189,8 @@ Respond with JSON only, no additional text.`;
                 hardware, 
                 category, 
                 ctx || this.deterministicSelector.targetContexts[category], 
-                budget
+                budget, 'balanced', 'ollama',
+                { contextPolicy: ctx ? 'required' : 'preferred' }
             );
             if (result) {
                 candidates.push(result);

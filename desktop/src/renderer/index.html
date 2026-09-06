@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Fully local renderer: no remote anything. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self';">
+  <title>LLM Checker</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ===== sidebar (0:2177 / 0:2179) ===== -->
+    <nav class="sb">
+      <!-- macOS: reserves room for the real traffic lights (hiddenInset). -->
+      <div class="dragstrip" id="dragstrip"></div>
+      <div class="apptitle">LLM Checker</div>
+
+      <div class="sb-scroll">
+        <button class="srow" data-view="recommended" aria-current="true">
+          <span class="icn" style="--i:url('assets/icons/icon-ai-search.svg')"></span>
+          <span class="nm">Recommended</span><span class="ct" data-count="recommended">—</span>
+        </button>
+        <button class="srow" data-view="installed">
+          <span class="icn" style="--i:url('assets/icons/icon-archive.svg')"></span>
+          <span class="nm">Installed</span><span class="ct" data-count="installed">—</span>
+        </button>
+        <button class="srow" data-view="settings">
+          <span class="icn" style="--i:url('assets/icons/icon-settings.svg')"></span>
+          <span class="nm">Settings</span>
+        </button>
+
+        <div class="sb-head">Runtimes</div>
+        <div id="sb-runtimes"></div>
+      </div>
+    </nav>
+
+    <div class="vsep"></div>
+
+    <!-- ===== main ===== -->
+    <main class="mn">
+      <div class="tb">
+        <div class="tb-title">
+          <div class="t" id="title">Recommended</div>
+          <div class="s" id="subtitle">Scanning…</div>
+        </div>
+        <div class="sp"></div>
+        <div class="seg" id="seg-fit">
+          <button data-fit="all" aria-pressed="true">All</button>
+          <button data-fit="fits" aria-pressed="false">Fits</button>
+        </div>
+        <label class="search"><input id="search" type="text" placeholder="Search"></label>
+        <!-- Frameless window controls — hidden on macOS (real chrome there) -->
+        <div class="winctl" id="winctl" hidden>
+          <button id="w-min" title="Minimize"><span class="g g-min"></span></button>
+          <button id="w-max" title="Maximize"><span class="g g-max"></span></button>
+          <button id="w-close" title="Close"><span class="g g-close"></span></button>
+        </div>
+      </div>
+
+      <div class="content" id="content"></div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">Copied</div>
+  <script src="app.js"></script>
+</body>
+</html>

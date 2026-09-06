@@ -14,6 +14,7 @@ function run() {
             [
                 cliPath,
                 'recommend',
+                '--simulate', 'rtx4090',
                 '--no-verbose',
                 '--runtime',
                 'vllm',
@@ -36,6 +37,13 @@ function run() {
         assert.ok(output.includes('Runtime: VLLM'), 'recommend should honor non-Ollama runtime selection');
         assert.ok(output.includes('hf download '), 'recommend should emit Hugging Face download commands');
         assert.ok(output.includes('Source: huggingface'), 'recommend should surface Hugging Face picks');
+
+        const tooSmall = spawnSync(process.execPath, [cliPath, 'recommend', '--runtime', 'vllm',
+            '--gpu', 'RTX 4090', '--ram', '4', '--vram', '1', '--no-verbose', '--category', 'coding'], {
+            encoding: 'utf8', timeout: 30000, env: { ...process.env, HOME: tempHome }
+        });
+        assert.strictEqual(tooSmall.status, 0, tooSmall.stderr);
+        assert.ok(!tooSmall.stdout.includes('ollama pull'), 'an empty vLLM ranking must not fall back to Ollama artifacts');
 
         console.log('[OK] model-registry-main-flow.test.js passed');
     } finally {

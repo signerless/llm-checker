@@ -433,7 +433,7 @@ async function testRecommendationSurfaces() {
             name: 'Dolphin Uncensored 1B',
             paramsB: 1,
             sizeGB: 1,
-            tags: ['uncensored']
+            tags: ['uncensored', 'instruct']
         }
     ];
     const safeCpuRanking = await rankModels(safetyPool, raw, {
@@ -1074,7 +1074,10 @@ function testCliHelpAndJsonSmoke() {
     );
     const registryMlx = JSON.parse(stripAnsi(registryMlxResult.stdout));
     assert.strictEqual(registryMlx.runtime, 'ollama');
-    assert.ok(registryMlx.recommendations.length > 0);
+    assert.ok(Array.isArray(registryMlx.recommendations));
+    // A local registry may have no native Ollama artifacts. HF GGUF files
+    // must not be substituted as if their filenames were Ollama pull tags.
+    assert.ok(registryMlx.recommendations.every(recommendation => recommendation.source === 'ollama'));
     assert.ok(
         registryMlx.recommendations.every((recommendation) => recommendation.runtime === 'ollama'),
         'an explicit MLX registry request must fall back to CPU-compatible Ollama artifacts'

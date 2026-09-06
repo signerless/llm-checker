@@ -779,6 +779,7 @@ module.exports = {
     normalizeOllamaRows,
     inferFormat,
     inferQuantization,
+    inferPrecision,
     inferRuntimeSupport,
     isModelArtifactFile,
     parseParamsB,

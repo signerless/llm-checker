@@ -543,7 +543,7 @@ async function runMultiGpuNormalizationUsesCombinedVram() {
 
     const recommendations = await selector.getBestModelsForHardware(hardware, allModels);
     const reasoningIds = (recommendations.reasoning?.bestModels || []).map((m) => m.model_identifier);
-    assert.ok(reasoningIds.includes('deepfit:70b'), '70B reasoning variant should be viable with 36GB aggregate VRAM');
+    assert.ok(!reasoningIds.includes('deepfit:70b'), '43GB artifact must not fit 36GB by inventing a lower precision');
 }
 
 async function runMultiGpu36GbIncludesThirtyBWhenFeasible() {
@@ -897,9 +897,9 @@ async function runCloudVariantsDoNotContaminateLocalArtifactSizes() {
     assert.ok(q8, 'q8 variant should be converted');
 
     assert.strictEqual(latest.paramsB, 80, 'Model-size metadata should override the old 7B fallback');
-    assert.strictEqual(latest.sizeByQuant.Q4_K_M, 52, 'Local Q4 artifact size should stay at 52GB');
-    assert.strictEqual(latest.sizeByQuant.Q8_0, 85, 'Local Q8 artifact size should be preserved separately');
-    assert.strictEqual(cloud.sizeByQuant.Q4_K_M, 1, 'Cloud artifact size must not leak into local variants');
+    assert.strictEqual(latest.sizeByQuant.Q4_0, 52, 'Local Q4 artifact size should stay at 52GB');
+    assert.strictEqual(q8.sizeByQuant.Q8_0, 85, 'Q8 size must stay with its own artifact');
+    assert.strictEqual(cloud.sizeByQuant.Q4_0, 1, 'Cloud artifact size must not leak into local variants');
     assert.strictEqual(q8.quant, 'Q8_0', 'Variant tag should win over incorrect generic quantization metadata');
 }
 

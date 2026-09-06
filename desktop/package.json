@@ -1,0 +1,27 @@
+{
+  "name": "llm-checker-desktop",
+  "version": "3.8.1",
+  "private": true,
+  "description": "Desktop app for LLM Checker \u2014 hardware-aware local model selection across Ollama, llama.cpp, LM Studio, vLLM, MLX and Transformers",
+  "main": "src/main/main.js",
+  "author": "Pavelevich (https://github.com/Pavelevich)",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "test:runtimes": "node test/runtimes.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "test": "node test/runtimes.test.js && node ../tests/desktop-core.test.js"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

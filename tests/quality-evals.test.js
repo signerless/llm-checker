@@ -179,14 +179,9 @@ test('a size the board did publish and disagrees with is refused', async () => {
     assert.strictEqual(q.lookup('qwen2.5-coder', 70, 'coding'), null);
 });
 
-test('a row with no published size matches the family and says so', async () => {
-    // LiveBench publishes 'deepseek-r1' with no size. Refusing it loses a real
-    // measurement, so it is admitted and flagged instead.
+test('a row without a published size cannot score a smaller checkpoint', async () => {
     const { q } = await seed();
-    const hit = q.lookup('deepseek-r1', 14, 'reasoning');
-    assert.ok(hit, 'an unsized row should still match its family');
-    assert.strictEqual(hit.sizeUnknown, true);
-    assert.strictEqual(hit.evals[0].score, 88.6);
+    assert.strictEqual(q.lookup('deepseek-r1', 14, 'reasoning'), null);
 });
 
 test('a size-matched hit is not flagged as family-only', async () => {
@@ -202,6 +197,22 @@ test('a metric is never borrowed for a category it does not measure', async () =
 test('an unknown model returns null rather than a nearest guess', async () => {
     const { q } = await seed();
     assert.strictEqual(q.lookup('not-a-real-model', 7, 'coding'), null);
+});
+
+test('base, instruct, revisions and adjacent sizes never share measurements', async () => {
+    const { db, q } = await seed();
+    const insert = db.prepare(`INSERT INTO quality_evals
+      (source_id, bench_model_name, family_key, params_b, variant_role, metric, category, raw_score)
+      VALUES ('test', ?, 'qwen2.5', ?, ?, 'hf_mmlu_pro', 'general', ?)`);
+    insert.run('Qwen/Qwen2.5-7B', 7.61, 'base', 43.65);
+    insert.run('Qwen/Qwen2.5-7B-Instruct', 7.61, 'instruct', 42.86);
+    insert.run('Qwen/Qwen2.5-8B-Instruct', 8, 'instruct', 70);
+    insert.run('Qwen/Qwen2.5-7B-Instruct-1M', 7.61, 'instruct', 35.04);
+    assert.strictEqual(q.lookup('Qwen/Qwen2.5-7B', 7, 'general').evals[0].score, 43.65);
+    assert.strictEqual(q.lookup('Qwen/Qwen2.5-7B-Instruct', 7, 'general').evals[0].score, 42.86);
+    assert.strictEqual(q.lookup('Qwen/Qwen2.5-7B-Instruct-preview', 7, 'general'), null);
+    assert.strictEqual(q.lookup('other/Qwen2.5-7B-Instruct', 7, 'general'), null);
+    assert.strictEqual(q.lookup('Qwen/Qwen2.5-7B-Instruct', 70, 'general'), null);
 });
 
 /* ---------------- cohort percentile ---------------- */
@@ -339,24 +350,24 @@ test('real SNAPPY Parquet decoding ingests both sources, preserves provenance an
     const { q } = await seed();
     assert.strictEqual((await q.ingest('hf_open_llm', { fetchImpl: fixtureFetch })).rows, 30);
     assert.strictEqual((await q.ingest('lmarena', { fetchImpl: fixtureFetch })).rows, 10);
-    const general = q.lookup('qwen2.5', 7, 'general');
+    const general = q.lookup('Qwen2.5-7B-Instruct', 7, 'general');
     assert.strictEqual(general.evals.length, 2);
     const elo = general.evals.find((r) => r.source === 'lmarena');
     assert.strictEqual(elo.score, 1000);
     assert.strictEqual(elo.scoreUnit, 'elo');
     assert.strictEqual(elo.scaleMax, null);
     assert.strictEqual(elo.sourceUrl, SOURCES.lmarena.homepage);
-    assert.strictEqual(q.lookup('qwen2.5', 70, 'general'), null);
-    assert.strictEqual(q.lookup('qwen2.5', 7, 'coding'), null);
+    assert.strictEqual(q.lookup('Qwen2.5-70B-Instruct', 70, 'general'), null);
+    assert.strictEqual(q.lookup('Qwen2.5-7B-Instruct', 7, 'coding'), null);
     assert.ok(q.stats().sources.every((source) => source.payload_sha256?.length === 64 || source.id === 'test'));
 });
 
-test('a sized result for another task cannot hide an unsized result for the requested task', async () => {
+test('an unsized row remains ineligible even when another task publishes a size', async () => {
     const { db, q } = await seed();
     db.prepare(`INSERT INTO quality_evals
       (source_id, bench_model_name, family_key, params_b, metric, category, raw_score)
       VALUES ('test', 'deepseek-r1-14b', 'deepseek-r1', 14, 'code', 'coding', 50)`).run();
-    assert.strictEqual(q.lookup('deepseek-r1', 14, 'reasoning').sizeUnknown, true);
+    assert.strictEqual(q.lookup('deepseek-r1', 14, 'reasoning'), null);
 });
 
 test('the registry consumes its configured database on both engines and reports measured task scores', async () => {
@@ -367,7 +378,7 @@ test('the registry consumes its configured database on both engines and reports 
     const { RegistryRecommender } = require('../src/data/registry-recommender');
     const recommender = new RegistryRecommender({ database: q.modelDatabase });
     await recommender.initialize();
-    const model = { name: 'qwen2.5', paramsB: 7 };
+    const model = { name: 'Qwen2.5-7B-Instruct', paramsB: 7 };
     for (const category of ['general', 'talking', 'reasoning']) {
         const hit = recommender.selector.lookupMeasuredQuality(model, category);
         assert.ok(hit && hit.score >= 45 && hit.score <= 95);

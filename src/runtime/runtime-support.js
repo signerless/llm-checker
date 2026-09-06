@@ -78,6 +78,7 @@ function slugifyModelName(text = '') {
 function getRuntimeModelRef(model = {}, runtime = 'ollama') {
     const normalized = resolveCommandRuntime(model, runtime);
     if (!normalized) return null;
+    if (normalized === 'ollama' && model.artifact?.source_id && model.artifact.source_id !== 'ollama') return null;
 
     const candidates = [
         model.hfModel,
@@ -158,6 +159,12 @@ function getRuntimePullCommand(model = {}, runtime = 'ollama') {
     if (normalized === 'llama.cpp') {
         const file = getGgufFilename(model);
         if (!file || !modelRef.includes('/')) return null;
+        if (model.artifact?.shard_files?.length) {
+            return model.artifact.shard_files.map(shard => {
+                const url = `https://huggingface.co/${modelRef}/resolve/main/${shard.split('/').map(encodeURIComponent).join('/')}`;
+                return `curl --fail --location ${shellEscapeArg(url)} --output ${shellEscapeArg(`./${shard.split('/').pop()}`)}`;
+            }).join(' && ');
+        }
         const url = model.artifact?.download_url || model.downloadUrl ||
             `https://huggingface.co/${modelRef}/resolve/main/${file.split('/').map(encodeURIComponent).join('/')}`;
         return `curl --fail --location ${shellEscapeArg(url)} --output ${shellEscapeArg(`./${file.split('/').pop()}`)}`;
@@ -182,15 +189,19 @@ function getRuntimeRunCommand(model = {}, runtime = 'ollama') {
     if (normalized === 'llama.cpp') {
         const file = getGgufFilename(model);
         if (!file) return null;
-        return `llama-cli --model ${shellEscapeArg(model.localPath || `./${file.split('/').pop()}`)} --prompt "Hello" --n-predict 64 --single-turn`;
+        const context = Number(model.context?.effective);
+        const contextOption = Number.isSafeInteger(context) && context > 0 ? ` --ctx-size ${context}` : '';
+        return `llama-cli --model ${shellEscapeArg(model.localPath || `./${file.split('/').pop()}`)}${contextOption} --prompt "Hello" --n-predict 64 --single-turn`;
     }
     if (normalized === 'transformers') {
-        const script = 'import sys; from transformers import pipeline; print(pipeline("text-generation", model=sys.argv[1])("Hello", max_new_tokens=64)[0]["generated_text"])';
+        const script = 'import sys, torch; from transformers import pipeline; device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"; print(pipeline("text-generation", model=sys.argv[1], dtype="auto", device=device)("Hello", max_new_tokens=64)[0]["generated_text"])';
         return `python -c ${shellEscapeArg(script)} ${shellEscapeArg(modelRef)}`;
     }
 
     if (normalized === 'vllm') {
-        return `python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)} --host 0.0.0.0 --port 8000`;
+        const context = Number(model.context?.effective);
+        const contextOption = Number.isSafeInteger(context) && context > 0 ? ` --max-model-len ${context}` : '';
+        return `python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)}${contextOption} --host 0.0.0.0 --port 8000`;
     }
 
     if (normalized === 'mlx') {
