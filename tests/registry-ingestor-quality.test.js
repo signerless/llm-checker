@@ -11,9 +11,39 @@
 const assert = require('assert');
 const {
     isModelArtifactFile,
+    normalizeHuggingFaceModel,
     inferQuantization,
     normalizeGpt4AllEntry
 } = require('../src/data/registry-ingestors');
+const { artifactToSelectorModel } = require('../src/data/registry-recommender');
+
+function testLanguageModelRepositoryFiltering() {
+    const weights = [{ rfilename: 'model.safetensors', size: 4e9 }];
+    for (const model of [
+        { id: 'UmeAiRT/ComfyUI-Auto-Installer-Assets', library_name: 'diffusers', tags: ['gguf', 'comfyui'] },
+        { id: 'Kijai/WanVideo_comfy', library_name: 'diffusion-single-file' },
+        { id: 'org/video-7B', pipeline_tag: 'text-to-video', tags: ['text-generation'] },
+        { id: 'org/unknown-7B', tags: ['safetensors'] },
+        { id: 'org/adapter-7B', pipeline_tag: 'text-generation', library_name: 'peft' }
+    ]) {
+        assert.strictEqual(normalizeHuggingFaceModel({ ...model, siblings: weights }), null, model.id);
+        assert.strictEqual(artifactToSelectorModel({
+            source_id: 'huggingface', repo_id: model.id, parameter_count_b: 7,
+            artifact_name: 'model.safetensors', repo_metadata: model, repo_tags: model.tags
+        }), null, `cached ${model.id} must also be rejected`);
+    }
+    for (const task of ['text-generation', 'image-text-to-text', 'feature-extraction', 'sentence-similarity']) {
+        const model = { id: 'org/valid-7B', pipeline_tag: task, siblings: weights };
+        assert.strictEqual(normalizeHuggingFaceModel(model).artifacts.length, 1);
+        assert.ok(artifactToSelectorModel({
+            source_id: 'huggingface', repo_id: model.id, parameter_count_b: 7,
+            artifact_name: 'model.safetensors', repo_metadata: model
+        }));
+    }
+    assert.ok(normalizeHuggingFaceModel({
+        id: 'org/legacy-7B-GGUF', tags: ['gguf', 'text-generation'], siblings: weights
+    }), 'legacy task tags remain supported');
+}
 
 function testArtifactFileFiltering() {
     // Real model weights -> included
@@ -61,6 +91,7 @@ function testGpt4AllCanonicalFromHfRepo() {
 }
 
 function run() {
+    testLanguageModelRepositoryFiltering();
     testArtifactFileFiltering();
     testPrecisionNotTreatedAsQuantization();
     testGpt4AllCommaSizeParses();

@@ -12,6 +12,10 @@ class ModelDatabase {
         this.dbPath = options.dbPath || path.join(os.homedir(), '.llm-checker', 'models.db');
         this.seedDbPath = options.seedDbPath || path.join(__dirname, 'seed', 'models.db');
         this.db = null;
+        this.sqliteBackend = options.sqliteBackend || 'auto';
+        if (!['auto', 'native', 'wasm'].includes(this.sqliteBackend)) {
+            throw new Error(`Unknown SQLite backend: ${this.sqliteBackend}`);
+        }
         this.initialized = false;
         this.disableRegistrySeedImport = Boolean(options.disableRegistrySeedImport);
         // Batched-write state: during a bulk sync we defer the (expensive) full
@@ -46,25 +50,37 @@ class ModelDatabase {
         }
         this.seedDatabaseIfNeeded();
 
-        // Use sql.js (optional dependency)
-        let initSqlJs;
-        try {
-            initSqlJs = require('sql.js');
-        } catch (e) {
-            throw new Error('sql.js is not installed. Install it with: npm install sql.js');
+        let DatabaseSync;
+        if (this.sqliteBackend !== 'wasm') {
+            try {
+                ({ DatabaseSync } = require('node:sqlite'));
+            } catch (error) {
+                if (this.sqliteBackend === 'native' || !['ERR_UNKNOWN_BUILTIN_MODULE', 'MODULE_NOT_FOUND'].includes(error.code)) {
+                    throw error;
+                }
+            }
         }
-        const SQL = await initSqlJs();
-
-        // Load existing database or create new
-        if (fs.existsSync(this.dbPath)) {
-            const buffer = fs.readFileSync(this.dbPath);
-            this.db = new SQL.Database(buffer);
+        this.useNativeSqlite = Boolean(DatabaseSync);
+        if (DatabaseSync) {
+            // Keep the file on disk; do not allocate a WASM heap or read it all.
+            // Opening errors must surface, rather than retrying with another engine.
+            this.db = new DatabaseSync(this.dbPath);
+            this.db.exec('PRAGMA busy_timeout = 5000');
         } else {
-            this.db = new SQL.Database();
+            let initSqlJs;
+            try {
+                initSqlJs = require('sql.js');
+            } catch {
+                throw new Error('This Node version requires sql.js. Install it with: npm install sql.js');
+            }
+            const SQL = await initSqlJs();
+            this.db = fs.existsSync(this.dbPath)
+                ? new SQL.Database(fs.readFileSync(this.dbPath))
+                : new SQL.Database();
         }
-        this.useBetterSqlite = false;
 
         this.createSchema();
+        this.migrateSpeedBenchmarks();
         this.initialized = true;
         if (!this.disableRegistrySeedImport) {
             await this.seedRegistryFromPackagedSnapshotIfNeeded();
@@ -113,14 +129,16 @@ class ModelDatabase {
             -- Benchmarks table (real performance data per hardware)
             CREATE TABLE IF NOT EXISTS benchmarks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                variant_id INTEGER NOT NULL,
+                variant_id INTEGER,
+                model_id TEXT,
+                tag TEXT,
                 hardware_fingerprint TEXT NOT NULL,
                 tokens_per_second REAL,
                 time_to_first_token REAL,
                 memory_used_gb REAL,
                 backend TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE
+                FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE SET NULL
             );
 
             -- Registry sources for multi-hub model discovery (Hugging Face,
@@ -234,7 +252,7 @@ class ModelDatabase {
             DROP INDEX IF EXISTS idx_model_artifacts_runtime;
         `;
 
-        if (this.useBetterSqlite) {
+        if (this.useNativeSqlite) {
             this.db.exec(schema);
         } else {
             this.db.run(schema);
@@ -242,11 +260,52 @@ class ModelDatabase {
         }
     }
 
+    migrateSpeedBenchmarks() {
+        if (this.all('PRAGMA table_info(benchmarks)').some((column) => column.name === 'model_id')) return;
+        // Preserve the original measurement ids/timestamps and backfill stable
+        // identities before any catalog refresh can replace variant row ids.
+        this.beginBatch();
+        try {
+            this.db.exec(`
+                SAVEPOINT migrate_speed_benchmarks;
+                CREATE TABLE benchmarks_stable (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    variant_id INTEGER,
+                    model_id TEXT,
+                    tag TEXT,
+                    hardware_fingerprint TEXT NOT NULL,
+                    tokens_per_second REAL,
+                    time_to_first_token REAL,
+                    memory_used_gb REAL,
+                    backend TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE SET NULL
+                );
+                INSERT INTO benchmarks_stable
+                SELECT b.id, v.id, v.model_id, v.tag, b.hardware_fingerprint,
+                       b.tokens_per_second, b.time_to_first_token, b.memory_used_gb,
+                       b.backend, b.created_at
+                FROM benchmarks b LEFT JOIN variants v ON v.id = b.variant_id;
+                DROP TABLE benchmarks;
+                ALTER TABLE benchmarks_stable RENAME TO benchmarks;
+                CREATE INDEX idx_benchmarks_hardware ON benchmarks(hardware_fingerprint);
+                CREATE INDEX idx_benchmarks_variant ON benchmarks(variant_id);
+                RELEASE migrate_speed_benchmarks;
+            `);
+            this._pendingSave = true;
+        } catch (error) {
+            this.db.exec('ROLLBACK TO migrate_speed_benchmarks; RELEASE migrate_speed_benchmarks;');
+            throw error;
+        } finally {
+            this.endBatch();
+        }
+    }
+
     /**
      * Save sql.js database to file
      */
     saveToFile() {
-        if (!this.useBetterSqlite && this.db) {
+        if (!this.useNativeSqlite && this.db) {
             const data = this.db.export();
             const buffer = Buffer.from(data);
             // Write to a temp file then atomically rename, so a crash/SIGINT
@@ -263,12 +322,19 @@ class ModelDatabase {
      * instead of on every row. Nestable; the outermost endBatch() flushes.
      */
     beginBatch() {
+        if (this.useNativeSqlite && this._batchDepth === 0) {
+            this.db.exec('SAVEPOINT llm_checker_batch');
+        }
         this._batchDepth += 1;
     }
 
     endBatch() {
         if (this._batchDepth > 0) {
             this._batchDepth -= 1;
+            if (this.useNativeSqlite && this._batchDepth === 0) {
+                this.db.exec('RELEASE llm_checker_batch');
+                this._pendingSave = false;
+            }
         }
         if (this._batchDepth === 0 && this._pendingSave) {
             this.saveToFile();
@@ -279,7 +345,7 @@ class ModelDatabase {
      * Execute a query (handles both sqlite implementations)
      */
     run(sql, params = []) {
-        if (this.useBetterSqlite) {
+        if (this.useNativeSqlite) {
             return this.db.prepare(sql).run(...params);
         } else {
             this.db.run(sql, params);
@@ -295,8 +361,8 @@ class ModelDatabase {
      * Get all results from a query
      */
     all(sql, params = []) {
-        if (this.useBetterSqlite) {
-            return this.db.prepare(sql).all(...params);
+        if (this.useNativeSqlite) {
+            return this.db.prepare(sql).all(...params).map((row) => ({ ...row }));
         } else {
             const stmt = this.db.prepare(sql);
             stmt.bind(params);
@@ -313,8 +379,9 @@ class ModelDatabase {
      * Get single result from a query
      */
     get(sql, params = []) {
-        if (this.useBetterSqlite) {
-            return this.db.prepare(sql).get(...params);
+        if (this.useNativeSqlite) {
+            const row = this.db.prepare(sql).get(...params);
+            return row ? { ...row } : null;
         } else {
             const results = this.all(sql, params);
             return results.length > 0 ? results[0] : null;
@@ -446,13 +513,17 @@ class ModelDatabase {
      * Add benchmark result
      */
     addBenchmark(benchmark) {
+        const variant = this.get('SELECT model_id, tag FROM variants WHERE id = ?', [benchmark.variant_id]);
+        if (!variant) throw new Error('Cannot record a benchmark for an unknown variant');
         const sql = `
-            INSERT INTO benchmarks (variant_id, hardware_fingerprint, tokens_per_second, time_to_first_token, memory_used_gb, backend)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO benchmarks (variant_id, model_id, tag, hardware_fingerprint, tokens_per_second, time_to_first_token, memory_used_gb, backend)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         this.run(sql, [
             benchmark.variant_id,
+            variant.model_id,
+            variant.tag,
             benchmark.hardware_fingerprint,
             benchmark.tokens_per_second,
             benchmark.time_to_first_token,
@@ -1177,17 +1248,22 @@ class ModelDatabase {
         };
     }
 
-    /**
-     * Clear all data
-     */
+    /** Reattach persisted telemetry after a catalog rebuild. Missing models keep
+     * their measurements, ready for a later sync that brings the tag back. */
+    reattachSpeedBenchmarks() {
+        this.run(`UPDATE benchmarks SET variant_id = (
+            SELECT v.id FROM variants v
+            WHERE v.model_id = benchmarks.model_id AND v.tag = benchmarks.tag
+        )`);
+    }
+
+    /** Clear catalog data while preserving local measurements and their keys. */
     clear() {
-        // The registry's Ollama source is derived from the local Ollama catalog.
-        // Clear only that source so a classic Ollama sync does not erase HF/GPT4All data.
         this.clearRegistrySource('ollama');
-        this.run(`DELETE FROM benchmarks`);
-        this.run(`DELETE FROM variants`);
-        this.run(`DELETE FROM models`);
-        this.run(`DELETE FROM sync_meta`);
+        this.run('UPDATE benchmarks SET variant_id = NULL');
+        this.run('DELETE FROM variants');
+        this.run('DELETE FROM models');
+        this.run('DELETE FROM sync_meta');
     }
 
     /**
@@ -1210,14 +1286,12 @@ class ModelDatabase {
      * Close database connection
      */
     close() {
-        if (this.db) {
-            if (this.useBetterSqlite) {
-                this.db.close();
-            } else {
-                this.saveToFile();
-                this.db.close();
-            }
-        }
+        if (!this.db) return;
+        while (this._batchDepth > 0) this.endBatch();
+        if (!this.useNativeSqlite) this.saveToFile();
+        this.db.close();
+        this.db = null;
+        this.initialized = false;
     }
 }
 

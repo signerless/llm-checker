@@ -7,9 +7,10 @@ const ModelDatabase = require('../src/data/model-database');
 
 async function run() {
     const seedDbPath = path.join(__dirname, '..', 'src', 'data', 'seed', 'models.db');
+    const seedTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-seed-test-'));
     const database = new ModelDatabase({
-        dbPath: seedDbPath,
-        seedDbPath: path.join(__dirname, 'missing-seed.db')
+        dbPath: path.join(seedTestDir, 'models.db'),
+        seedDbPath
     });
 
     try {
@@ -68,6 +69,7 @@ async function run() {
         console.log('[OK] model-registry-seed.test.js passed');
     } finally {
         database.close();
+        fs.rmSync(seedTestDir, { recursive: true, force: true });
     }
 }
 

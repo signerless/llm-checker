@@ -12,7 +12,9 @@ const {
     calibrationPolicySchema,
     DEFAULT_CALIBRATION_TASK
 } = require('./schemas');
-const { SUPPORTED_RUNTIMES, normalizeRuntime } = require('../runtime/runtime-support');
+const { normalizeRuntime } = require('../runtime/runtime-support');
+// Calibration adapters currently implement these three runtimes only.
+const SUPPORTED_RUNTIMES = ['ollama', 'vllm', 'mlx'];
 
 const SUPPORTED_FULL_MODE_RUNTIMES = ['ollama'];
 

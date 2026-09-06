@@ -8,10 +8,15 @@ const childProcess = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const { normalizePlatform } = require('../../utils/platform');
+const { execFileAsync, execCommandAsync } = require('../probe-exec');
 
 class CPUDetector {
     constructor() {
         this.cache = null;
+    }
+
+    usesOverriddenDetect() {
+        return this.detect !== CPUDetector.prototype.detect;
     }
 
     /**
@@ -24,6 +29,24 @@ class CPUDetector {
 
         try {
             const info = this.getCPUInfo();
+            this.cache = info;
+            return info;
+        } catch (error) {
+            return this.getFallbackInfo();
+        }
+    }
+
+    async detectAsync() {
+        if (this.usesOverriddenDetect()) {
+            return this.detect();
+        }
+
+        if (this.cache) {
+            return this.cache;
+        }
+
+        try {
+            const info = await this.getCPUInfoAsync();
             this.cache = info;
             return info;
         } catch (error) {
@@ -69,6 +92,43 @@ class CPUDetector {
         return result;
     }
 
+    async getCPUInfoAsync() {
+        const cpus = os.cpus();
+        const cpu = cpus[0] || {};
+        const [physical, maxFreq, cache, capabilities] = await Promise.all([
+            this.getPhysicalCoresAsync(),
+            this.getMaxFrequencyAsync(),
+            this.getCacheInfoAsync(),
+            this.getCapabilitiesAsync()
+        ]);
+
+        const result = {
+            brand: cpu.model || 'Unknown CPU',
+            vendor: this.detectVendor(cpu.model),
+            cores: {
+                physical,
+                logical: cpus.length,
+                performance: 0,
+                efficiency: 0
+            },
+            frequency: {
+                base: cpu.speed || 0,
+                max: maxFreq
+            },
+            cache,
+            capabilities,
+            architecture: process.arch,
+            backend: 'cpu',
+            speedCoefficient: 0
+        };
+
+        const hybrid = this.detectHybridCores(result.brand);
+        result.cores.performance = hybrid.performance;
+        result.cores.efficiency = hybrid.efficiency;
+        result.speedCoefficient = this.calculateSpeedCoefficient(result);
+        return result;
+    }
+
     /**
      * Detect CPU vendor
      */
@@ -111,6 +171,30 @@ class CPUDetector {
         return os.cpus().length;
     }
 
+    async getPhysicalCoresAsync() {
+        const platform = normalizePlatform();
+
+        try {
+            if (platform === 'darwin') {
+                const out = await execFileAsync('sysctl', ['-n', 'hw.physicalcpu'], {
+                    encoding: 'utf8',
+                    timeout: 5000
+                });
+                return parseInt(String(out).trim(), 10);
+            }
+            if (platform === 'linux') {
+                return this.getPhysicalCores();
+            }
+            if (platform === 'win32') {
+                const physicalCores = await this.getWindowsPhysicalCoreCountAsync();
+                return physicalCores || os.cpus().length;
+            }
+        } catch (e) {
+            return os.cpus().length;
+        }
+        return os.cpus().length;
+    }
+
     /**
      * Get maximum CPU frequency
      */
@@ -136,6 +220,19 @@ class CPUDetector {
             return os.cpus()[0]?.speed || 0;
         }
         return 0;
+    }
+
+    async getMaxFrequencyAsync() {
+        const platform = normalizePlatform();
+        if (platform !== 'win32') {
+            return this.getMaxFrequency();
+        }
+        try {
+            const maxClock = await this.getWindowsMaxClockSpeedAsync();
+            return maxClock || (os.cpus()[0]?.speed || 0);
+        } catch (e) {
+            return os.cpus()[0]?.speed || 0;
+        }
     }
 
     /**
@@ -230,6 +327,50 @@ class CPUDetector {
         return value && value > 0 ? value : null;
     }
 
+    async runCommandAsync(command) {
+        if (typeof this.runCommand === 'function' && this.runCommand !== CPUDetector.prototype.runCommand) {
+            return this.runCommand(command);
+        }
+        return execCommandAsync(command, {
+            encoding: 'utf8',
+            timeout: 5000,
+            shell: true
+        });
+    }
+
+    async queryWindowsNumericAsync(commands) {
+        for (const command of commands) {
+            try {
+                const output = await this.runCommandAsync(command);
+                const parsed = this.extractFirstInteger(output);
+                if (parsed !== null) {
+                    return parsed;
+                }
+            } catch (e) {
+                continue;
+            }
+        }
+        return null;
+    }
+
+    async getWindowsPhysicalCoreCountAsync() {
+        const value = await this.queryWindowsNumericAsync([
+            'wmic cpu get NumberOfCores /value',
+            'powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"',
+            'pwsh -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"'
+        ]);
+        return value && value > 0 ? value : null;
+    }
+
+    async getWindowsMaxClockSpeedAsync() {
+        const value = await this.queryWindowsNumericAsync([
+            'wmic cpu get MaxClockSpeed /value',
+            'powershell -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property MaxClockSpeed -Maximum).Maximum"',
+            'pwsh -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property MaxClockSpeed -Maximum).Maximum"'
+        ]);
+        return value && value > 0 ? value : null;
+    }
+
     /**
      * Get CPU cache information
      */
@@ -279,6 +420,35 @@ class CPUDetector {
         }
 
         return cache;
+    }
+
+    async getCacheInfoAsync() {
+        const cache = {
+            l1d: 0,
+            l1i: 0,
+            l2: 0,
+            l3: 0
+        };
+        const platform = normalizePlatform();
+
+        try {
+            if (platform === 'darwin') {
+                const [l1d, l1i, l2, l3] = await Promise.all([
+                    execFileAsync('sysctl', ['-n', 'hw.l1dcachesize'], { encoding: 'utf8', timeout: 5000 }).catch(() => '0'),
+                    execFileAsync('sysctl', ['-n', 'hw.l1icachesize'], { encoding: 'utf8', timeout: 5000 }).catch(() => '0'),
+                    execFileAsync('sysctl', ['-n', 'hw.l2cachesize'], { encoding: 'utf8', timeout: 5000 }).catch(() => '0'),
+                    execFileAsync('sysctl', ['-n', 'hw.l3cachesize'], { encoding: 'utf8', timeout: 5000 }).catch(() => '0')
+                ]);
+                cache.l1d = parseInt(String(l1d), 10) / 1024 || 0;
+                cache.l1i = parseInt(String(l1i), 10) / 1024 || 0;
+                cache.l2 = parseInt(String(l2), 10) / 1024 / 1024 || 0;
+                cache.l3 = parseInt(String(l3), 10) / 1024 / 1024 || 0;
+                return cache;
+            }
+            return this.getCacheInfo();
+        } catch (e) {
+            return cache;
+        }
     }
 
     /**
@@ -409,6 +579,65 @@ class CPUDetector {
         }
 
         // Determine best SIMD level
+        if (caps.amx) caps.bestSimd = 'AMX';
+        else if (caps.avx512) caps.bestSimd = 'AVX512';
+        else if (caps.avx2) caps.bestSimd = 'AVX2';
+        else if (caps.avx) caps.bestSimd = 'AVX';
+        else if (caps.neon) caps.bestSimd = 'NEON';
+        else if (caps.sse4_2) caps.bestSimd = 'SSE4.2';
+        else if (caps.sse2) caps.bestSimd = 'SSE2';
+
+        return caps;
+    }
+
+    async getCapabilitiesAsync() {
+        const platform = normalizePlatform();
+        if (platform !== 'darwin' || process.arch === 'arm64') {
+            return this.getCapabilities();
+        }
+
+        const caps = {
+            sse: false,
+            sse2: false,
+            sse3: false,
+            ssse3: false,
+            sse4_1: false,
+            sse4_2: false,
+            avx: false,
+            avx2: false,
+            avx512: false,
+            avx512_vnni: false,
+            amx: false,
+            fma: false,
+            f16c: false,
+            neon: false,
+            sve: false,
+            dotprod: false,
+            bestSimd: 'none'
+        };
+
+        try {
+            const [featuresRaw, leafRaw] = await Promise.all([
+                execFileAsync('sysctl', ['-n', 'machdep.cpu.features'], { encoding: 'utf8', timeout: 5000 }),
+                execFileAsync('sysctl', ['-n', 'machdep.cpu.leaf7_features'], { encoding: 'utf8', timeout: 5000 })
+            ]);
+            const features = String(featuresRaw).toLowerCase();
+            const leafFeatures = String(leafRaw).toLowerCase();
+            caps.sse = features.includes('sse');
+            caps.sse2 = features.includes('sse2');
+            caps.sse3 = features.includes('sse3');
+            caps.ssse3 = features.includes('ssse3');
+            caps.sse4_1 = features.includes('sse4.1');
+            caps.sse4_2 = features.includes('sse4.2');
+            caps.avx = features.includes('avx1.0') || features.includes('avx ');
+            caps.avx2 = leafFeatures.includes('avx2');
+            caps.fma = features.includes('fma');
+            caps.f16c = leafFeatures.includes('f16c');
+            caps.avx512 = leafFeatures.includes('avx512');
+        } catch (e) {
+            caps.sse = caps.sse2 = true;
+        }
+
         if (caps.amx) caps.bestSimd = 'AMX';
         else if (caps.avx512) caps.bestSimd = 'AVX512';
         else if (caps.avx2) caps.bestSimd = 'AVX2';

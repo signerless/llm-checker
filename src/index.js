@@ -47,7 +47,9 @@ function normalizeRecommendationRuntime(runtime = 'auto') {
         if (normalized === 'hf') return 'transformers';
         return normalized;
     }
-    return normalizeRuntime(normalized);
+    const runtimeName = normalizeRuntime(normalized);
+    if (!runtimeName) throw new Error(`Unsupported runtime: ${runtime}`);
+    return runtimeName;
 }
 
 class LLMChecker {
