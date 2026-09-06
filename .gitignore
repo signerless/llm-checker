@@ -81,3 +81,6 @@ debug.log
 # Transient feature-probe artifacts (never commit)
 .tmp-feature-check/
 .tmp-*/
+
+!desktop/test/
+!desktop/test/**/*.test.js

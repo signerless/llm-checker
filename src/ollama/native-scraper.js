@@ -569,7 +569,7 @@ class OllamaNativeScraper {
                     quantization: quantization,
                     command: `ollama pull ${tag}`,
                     estimated_size_gb: this.estimateModelSizeGB(tag),
-                    real_size_gb: realSizeGB || this.estimateModelSizeGB(tag)
+                    real_size_gb: realSizeGB || null
                 };
             });
 
@@ -586,8 +586,8 @@ class OllamaNativeScraper {
     }
 
     extractQuantizationFromTag(tag) {
-        const quantMatch = tag.match(/\b(q\d+_[km]?_?[ms]?|fp16|fp32|int8|int4)\b/i);
-        return quantMatch ? quantMatch[0].toUpperCase() : 'Q4_0'; // Default assumption
+        const quantMatch = tag.match(/\b(i?q\d+(?:_[a-z0-9]+)*|bf16|f16|f32|fp16|fp32|int8|int4)\b/i);
+        return quantMatch ? quantMatch[0].toUpperCase() : 'UNKNOWN';
     }
 
     extractRealSizeFromHTML(html, tag) {

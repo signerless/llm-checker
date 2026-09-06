@@ -2597,7 +2597,7 @@ class LLMChecker {
                     const hasRegistryRecommendations = Object.values(recommendations)
                         .some((group) => Array.isArray(group.bestModels) && group.bestModels.length > 0);
 
-                    if (hasRegistryRecommendations) {
+                    if (hasRegistryRecommendations || !['auto', 'ollama'].includes(selectedRuntime)) {
                         const summary = this.intelligentRecommender.generateRecommendationSummary(
                             recommendations,
                             hardware,
@@ -2628,6 +2628,10 @@ class LLMChecker {
                         registryRecommender.close();
                     }
                 }
+            }
+
+            if (!['auto', 'ollama'].includes(selectedRuntime)) {
+                throw new Error(`The Ollama fallback catalog cannot supply ${selectedRuntime} artifacts`);
             }
             
             // Prefer the synced SQLite catalog so `llm-checker sync` updates recommendations immediately.

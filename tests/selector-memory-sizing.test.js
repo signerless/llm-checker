@@ -55,7 +55,7 @@ function testFilterByCategoryToleratesMalformedRows() {
     assert.doesNotThrow(() => s.filterByCategory([{ model_identifier: 'x' }], 'coding'));
     assert.doesNotThrow(() => s.filterByCategory([{ model_identifier: 'x' }], 'multimodal'));
     const general = s.filterByCategory([{ model_identifier: 'x' }], 'general');
-    assert.strictEqual(general.length, 1, 'a malformed row still passes the general category');
+    assert.strictEqual(general.length, 0, 'unknown capabilities must not imply text generation');
 }
 
 function testLatestVariantDoesNotPoisonSiblingSize() {

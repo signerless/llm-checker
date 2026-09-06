@@ -1,4 +1,5 @@
 'use strict';
+const { checkpointIdentity, sameCheckpoint } = require('./checkpoint-identity');
 
 /**
  * Public benchmark scores for model QUALITY.
@@ -16,10 +17,9 @@
  * is keyed to a machine and runtime rather than a public evaluation. The
  * quality tables here remain independent of catalog and speed refreshes.
  *
- * The join key is (family_key, params_b), never a variant id: a leaderboard
- * measures an fp16 base checkpoint, while a variant is a local Q4 build of it.
- * Keeping those apart is what lets us apply an honest quantization penalty
- * instead of pretending the quantized build scored what the base did.
+ * Measurements join by checkpoint, role, revision and declared size. Family keys
+ * only define comparison cohorts; a quantized repo needs a verified base-model
+ * alias to inherit another provider's checkpoint measurements.
  */
 
 const SCHEMA = `
@@ -528,6 +528,7 @@ class QualityEvals {
             }
         });
         this._pctCache = new Map();
+        this._identityRows = null;
 
         return { source: sourceId, rows: rows.length, fetchedAt: now };
     }
@@ -539,43 +540,26 @@ class QualityEvals {
      * "unknown" and say so, rather than substituting an estimate and
      * presenting it as a measurement.
      */
-    lookup(catalogName, paramsB, category = null) {
-        const fk = familyKey(catalogName);
-        const rows = this.db.prepare(`
-            SELECT q.*, s.display_name AS source_name, s.homepage_url, s.independent
-            FROM quality_evals q JOIN quality_sources s ON s.id = q.source_id
-            WHERE q.family_key = ?
-        `).all(fk.family).filter((r) => !category || r.category === category);
-        if (!rows.length) return null;
-
-        // Prefer rows whose published size matches the build being scored.
-        const sized = rows.filter((r) => sizeMatches(r.params_b, paramsB));
-
-        // Some boards (LiveBench in particular) publish a model name with no
-        // parameter count at all — 'deepseek-r1' rather than
-        // 'DeepSeek-R1-14B'. Refusing those loses real measurements: deepseek-r1
-        // led the reasoning column on a size ESTIMATE while its actual score
-        // sat unused in the table. Those rows are admitted, flagged
-        // sizeUnknown so the UI can say the score is for the family rather
-        // than this exact build.
-        //
-        // Rows that DO publish a size and simply disagree stay rejected — that
-        // is the case where attributing a 70B score to a 7B build would be a
-        // fabrication.
-        const unsized = rows.filter((r) => r.params_b == null);
-
-        const pool = sized.length ? sized : unsized;
-        if (!pool.length) return null;
-
-        const wanted = category ? pool.filter((r) => r.category === category) : pool;
+    lookup(catalogName, paramsB, category = null, model = {}) {
+        const identity = checkpointIdentity(catalogName, paramsB, model);
+        const fk = familyKey(model.artifact?.repo_id || catalogName);
+        if (!this._identityRows) {
+            this._identityRows = this.db.prepare(`
+                SELECT q.*, s.display_name AS source_name, s.homepage_url, s.independent
+                FROM quality_evals q JOIN quality_sources s ON s.id = q.source_id
+            `).all().map(row => ({ row, identity: checkpointIdentity(row.bench_model_name, row.params_b) }));
+        }
+        const wanted = this._identityRows.filter(({ row, identity: measured }) =>
+            (!category || row.category === category) && sameCheckpoint(identity, measured)
+        ).map(({ row }) => row);
         if (!wanted.length) return null;
 
         return {
             family: fk.family,
             paramsB,
-            // True when the score describes the family and not a size-matched
-            // checkpoint. Callers must surface this rather than hide it.
-            sizeUnknown: !sized.length,
+            // Retained for output compatibility; family-only hits are ineligible.
+            sizeUnknown: false,
+            match: 'checkpoint',
             evals: wanted.map((r) => ({
                 source: r.source_id,
                 sourceName: r.source_name,
