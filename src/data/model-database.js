@@ -12,6 +12,10 @@ class ModelDatabase {
         this.dbPath = options.dbPath || path.join(os.homedir(), '.llm-checker', 'models.db');
         this.seedDbPath = options.seedDbPath || path.join(__dirname, 'seed', 'models.db');
         this.db = null;
+        this.sqliteBackend = options.sqliteBackend || 'auto';
+        if (!['auto', 'native', 'wasm'].includes(this.sqliteBackend)) {
+            throw new Error(`Unknown SQLite backend: ${this.sqliteBackend}`);
+        }
         this.initialized = false;
         this.disableRegistrySeedImport = Boolean(options.disableRegistrySeedImport);
         // Batched-write state: during a bulk sync we defer the (expensive) full
@@ -46,23 +50,34 @@ class ModelDatabase {
         }
         this.seedDatabaseIfNeeded();
 
-        // Use sql.js (optional dependency)
-        let initSqlJs;
-        try {
-            initSqlJs = require('sql.js');
-        } catch (e) {
-            throw new Error('sql.js is not installed. Install it with: npm install sql.js');
+        let DatabaseSync;
+        if (this.sqliteBackend !== 'wasm') {
+            try {
+                ({ DatabaseSync } = require('node:sqlite'));
+            } catch (error) {
+                if (this.sqliteBackend === 'native' || !['ERR_UNKNOWN_BUILTIN_MODULE', 'MODULE_NOT_FOUND'].includes(error.code)) {
+                    throw error;
+                }
+            }
         }
-        const SQL = await initSqlJs();
-
-        // Load existing database or create new
-        if (fs.existsSync(this.dbPath)) {
-            const buffer = fs.readFileSync(this.dbPath);
-            this.db = new SQL.Database(buffer);
+        this.useNativeSqlite = Boolean(DatabaseSync);
+        if (DatabaseSync) {
+            // Keep the file on disk; do not allocate a WASM heap or read it all.
+            // Opening errors must surface, rather than retrying with another engine.
+            this.db = new DatabaseSync(this.dbPath);
+            this.db.exec('PRAGMA busy_timeout = 5000');
         } else {
-            this.db = new SQL.Database();
+            let initSqlJs;
+            try {
+                initSqlJs = require('sql.js');
+            } catch {
+                throw new Error('This Node version requires sql.js. Install it with: npm install sql.js');
+            }
+            const SQL = await initSqlJs();
+            this.db = fs.existsSync(this.dbPath)
+                ? new SQL.Database(fs.readFileSync(this.dbPath))
+                : new SQL.Database();
         }
-        this.useBetterSqlite = false;
 
         this.createSchema();
         this.migrateSpeedBenchmarks();
@@ -237,7 +252,7 @@ class ModelDatabase {
             DROP INDEX IF EXISTS idx_model_artifacts_runtime;
         `;
 
-        if (this.useBetterSqlite) {
+        if (this.useNativeSqlite) {
             this.db.exec(schema);
         } else {
             this.db.run(schema);
@@ -290,7 +305,7 @@ class ModelDatabase {
      * Save sql.js database to file
      */
     saveToFile() {
-        if (!this.useBetterSqlite && this.db) {
+        if (!this.useNativeSqlite && this.db) {
             const data = this.db.export();
             const buffer = Buffer.from(data);
             // Write to a temp file then atomically rename, so a crash/SIGINT
@@ -307,12 +322,19 @@ class ModelDatabase {
      * instead of on every row. Nestable; the outermost endBatch() flushes.
      */
     beginBatch() {
+        if (this.useNativeSqlite && this._batchDepth === 0) {
+            this.db.exec('SAVEPOINT llm_checker_batch');
+        }
         this._batchDepth += 1;
     }
 
     endBatch() {
         if (this._batchDepth > 0) {
             this._batchDepth -= 1;
+            if (this.useNativeSqlite && this._batchDepth === 0) {
+                this.db.exec('RELEASE llm_checker_batch');
+                this._pendingSave = false;
+            }
         }
         if (this._batchDepth === 0 && this._pendingSave) {
             this.saveToFile();
@@ -323,7 +345,7 @@ class ModelDatabase {
      * Execute a query (handles both sqlite implementations)
      */
     run(sql, params = []) {
-        if (this.useBetterSqlite) {
+        if (this.useNativeSqlite) {
             return this.db.prepare(sql).run(...params);
         } else {
             this.db.run(sql, params);
@@ -339,8 +361,8 @@ class ModelDatabase {
      * Get all results from a query
      */
     all(sql, params = []) {
-        if (this.useBetterSqlite) {
-            return this.db.prepare(sql).all(...params);
+        if (this.useNativeSqlite) {
+            return this.db.prepare(sql).all(...params).map((row) => ({ ...row }));
         } else {
             const stmt = this.db.prepare(sql);
             stmt.bind(params);
@@ -357,8 +379,9 @@ class ModelDatabase {
      * Get single result from a query
      */
     get(sql, params = []) {
-        if (this.useBetterSqlite) {
-            return this.db.prepare(sql).get(...params);
+        if (this.useNativeSqlite) {
+            const row = this.db.prepare(sql).get(...params);
+            return row ? { ...row } : null;
         } else {
             const results = this.all(sql, params);
             return results.length > 0 ? results[0] : null;
@@ -1263,14 +1286,12 @@ class ModelDatabase {
      * Close database connection
      */
     close() {
-        if (this.db) {
-            if (this.useBetterSqlite) {
-                this.db.close();
-            } else {
-                this.saveToFile();
-                this.db.close();
-            }
-        }
+        if (!this.db) return;
+        while (this._batchDepth > 0) this.endBatch();
+        if (!this.useNativeSqlite) this.saveToFile();
+        this.db.close();
+        this.db = null;
+        this.initialized = false;
     }
 }
 
