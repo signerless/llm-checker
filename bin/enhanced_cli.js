@@ -860,9 +860,9 @@ function buildClaudeMcpSetup(useNpx = false, serverName = 'llm-checker') {
     };
 }
 
-async function runExternalCommand(command, args) {
+async function runExternalCommand(args) {
     return new Promise((resolve, reject) => {
-        const child = spawn(command, args, {
+        const child = spawn('claude', args, {
             stdio: 'inherit',
             env: process.env
         });
@@ -3344,7 +3344,7 @@ program
 
             console.log(chalk.blue('\nApplying MCP setup via Claude CLI...\n'));
             try {
-                const exitCode = await runExternalCommand('claude', primarySetup.claudeArgs);
+                const exitCode = await runExternalCommand(primarySetup.claudeArgs);
                 if (exitCode === 0) {
                     console.log(chalk.green('\nClaude MCP setup applied successfully.'));
                 } else {
