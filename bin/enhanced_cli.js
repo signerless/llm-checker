@@ -4428,6 +4428,7 @@ program
         '--calibrated [file]',
         'Use calibrated routing policy (optional file path; defaults to ~/.llm-checker/calibration-policy.{yaml,yml,json})'
     )
+    .option('--json', 'Output recommendations as JSON')
     .addHelpText(
         'after',
         `
@@ -4457,8 +4458,10 @@ Calibrated routing examples:
 `
     )
     .action(async (options) => {
-        showAsciiArt('recommend');
-        displayRecommendationCommandNote('recommend');
+        if (!options.json) {
+            showAsciiArt('recommend');
+            displayRecommendationCommandNote('recommend');
+        }
         try {
             const verboseEnabled = options.verbose !== false;
             const cpuOnly = getCpuOnlyCommandMode(options);
@@ -4580,6 +4583,40 @@ Calibrated routing examples:
             const routeDecision = calibratedPolicy
                 ? resolveCalibratedRouteDecision(calibratedPolicy, routingTask, recommendationIdentifiers)
                 : null;
+
+            if (options.json) {
+                const jsonOutput = {
+                    hardware: {
+                        tier: intelligentRecommendations.summary.hardware_tier,
+                        ram: hardware.memory?.total,
+                        gpu: hardware.gpu?.name || null,
+                        vram: hardware.gpu?.vram || null,
+                        cpu: hardware.cpu?.manufacturer
+                            ? `${hardware.cpu.manufacturer} ${hardware.cpu.brand || ''}`.trim()
+                            : hardware.cpu?.brand || null
+                    },
+                    summary: {
+                        optimizeFor: intelligentRecommendations.summary.optimize_for || 'balanced',
+                        totalModelsAnalyzed: intelligentRecommendations.totalModelsAnalyzed,
+                        hardwareTier: intelligentRecommendations.summary.hardware_tier,
+                        bestOverall: intelligentRecommendations.summary.best_overall || null,
+                        byCategory: intelligentRecommendations.summary.by_category || {}
+                    },
+                    recommendations: intelligentRecommendations.recommendations || {},
+                    routingDecision: routeDecision || null,
+                    policy: policyEvaluation
+                        ? {
+                            enforcement: policyEnforcement,
+                            evaluation: policyEvaluation
+                          }
+                        : null
+                };
+                process.stdout.write(JSON.stringify(jsonOutput, null, 2) + '\n');
+                if (policyEnforcement?.shouldBlock) {
+                    process.exit(policyEnforcement.exitCode);
+                }
+                return;
+            }
 
             // Mostrar información del sistema
             displaySystemInfo(hardware, { summary: { hardwareTier: intelligentRecommendations.summary.hardware_tier } });
