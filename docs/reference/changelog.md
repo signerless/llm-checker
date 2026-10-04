@@ -21,6 +21,13 @@ Unreleased — exact catalog metadata
 - Existing databases adopt a newer packaged snapshot; `sync` keeps the
   registry's Ollama rows instead of deleting them.
 - MCP `recommend` and `project_recommend` honor the requested category.
+- The packaged snapshot ships benchmark scores; existing databases adopt
+  them unless `quality-sync` refreshed a source more recently. New
+  `hf_eval_results` source (self-reported model-card results), and LiveBench
+  releases newer than the curated list are discovered automatically.
+- Ollama tags record their license from the manifest (`sync --exact`).
+- Base/pretrained checkpoints rank below instruct builds; Ollama aliases and
+  quantizations of one base checkpoint collapse into one recommendation.
 
 3.8.1 — ModelVet attribution (2026-08-04)
 -------------------------------------------

@@ -47,7 +47,7 @@
     "list-models": "node bin/enhanced_cli.js list-models",
     "ai-check": "node bin/enhanced_cli.js ai-check",
     "ai-run": "node bin/enhanced_cli.js ai-run",
-    "sync:seed": "node bin/enhanced_cli.js sync --force --exact --quiet && node scripts/update-seed-db.js && node scripts/update-registry-seed.js",
+    "sync:seed": "node bin/enhanced_cli.js sync --force --exact --quiet && node scripts/update-seed-db.js && node scripts/update-registry-seed.js && node scripts/update-quality-seed.js",
     "sync:registry-seed": "node scripts/update-registry-seed.js",
     "benchmark": "cd ml-model && python python/benchmark_collector.py",
     "train-ai": "cd ml-model && python python/train_model.py",

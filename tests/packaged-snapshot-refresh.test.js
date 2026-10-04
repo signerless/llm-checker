@@ -41,10 +41,18 @@ async function run() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-snapshot-refresh-'));
     try {
         const seedPath = path.join(tempDir, 'seed.db');
-        (await buildDatabase(seedPath, {
+        const seedDatabase = await buildDatabase(seedPath, {
             lastSync: '2026-09-01T00:00:00.000Z', hfIngestedAt: '2026-09-01T00:00:00.000Z',
             modelId: 'qwen3', hfRepo: 'org/new-model-GGUF'
-        })).close();
+        });
+        const { QualityEvals } = require('../src/data/quality-evals');
+        const seedQuality = new QualityEvals(seedDatabase);
+        seedQuality.db.prepare(`INSERT INTO quality_sources (id, display_name, data_url, independent, fetched_at, row_count)
+            VALUES ('livebench', 'LiveBench', 'https://livebench.ai', 1, '2026-09-01T00:00:00.000Z', 1)`).run();
+        seedQuality.db.prepare(`INSERT INTO quality_evals (source_id, bench_model_name, family_key, params_b, variant_role,
+            metric, category, raw_score, raw_scale_max) VALUES ('livebench', 'qwen3-8b', 'qwen3', 8, 'instruct',
+            'livebench_coding', 'coding', 61.5, 100)`).run();
+        seedDatabase.close();
 
         const userPath = path.join(tempDir, 'user.db');
         const user = await buildDatabase(userPath, {
@@ -66,6 +74,10 @@ async function run() {
             .map((row) => row.repo_id), ['org/new-model-GGUF'], 'newer registry source adopted');
         assert.deepStrictEqual(upgraded.all(`SELECT artifact_name FROM model_artifacts WHERE source_id = 'ollama'`)
             .map((row) => row.artifact_name), ['qwen3:8b'], 'Ollama registry rows follow the catalog');
+        assert.deepStrictEqual(upgraded.all('SELECT bench_model_name, raw_score FROM quality_evals').map((row) => ({ ...row })),
+            [{ bench_model_name: 'qwen3-8b', raw_score: 61.5 }], 'benchmark scores ship with the snapshot');
+        assert.deepStrictEqual(upgraded.all('SELECT family_key FROM catalog_families').map((row) => row.family_key), ['qwen3'],
+            'the cohort follows the imported catalog');
         const benchmark = upgraded.get('SELECT model_id, tag, tokens_per_second FROM benchmarks');
         assert.deepStrictEqual({ ...benchmark }, { model_id: 'llama3.1', tag: 'llama3.1:8b', tokens_per_second: 42 },
             'speed measurements survive');

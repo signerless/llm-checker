@@ -932,6 +932,8 @@ class ModelDatabase {
                     imported = true;
                 }
 
+                if (this.importQualityFromSnapshot(seed)) imported = true;
+
                 const hasOllamaArtifacts = this.get(`SELECT 1 AS present FROM model_artifacts WHERE source_id = 'ollama' LIMIT 1`);
                 if ((catalogIsNewer || !hasOllamaArtifacts) && this.getModelCount() > 0) {
                     this.rebuildOllamaRegistry();
@@ -968,6 +970,48 @@ class ModelDatabase {
         }
         this.reattachSpeedBenchmarks();
         this.setLastSync(seed.getLastSync());
+    }
+
+    /**
+     * Benchmark scores ship in the snapshot so a fresh install ranks by
+     * measurements, not only by parameter count. A source the user refreshed
+     * later with `quality-sync` is kept.
+     */
+    importQualityFromSnapshot(seed) {
+        const seedHasQuality = seed.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'quality_sources'`);
+        if (!seedHasQuality) return false;
+        const { QualityEvals } = require('./quality-evals');
+        const quality = new QualityEvals(this);
+        const local = new Map(this.all(`SELECT id, fetched_at FROM quality_sources`).map((row) => [row.id, row.fetched_at]));
+        let imported = false;
+        for (const source of seed.all(`SELECT * FROM quality_sources`)) {
+            const localFetchedAt = local.get(source.id);
+            if (localFetchedAt && String(localFetchedAt) >= String(source.fetched_at || '')) continue;
+            this.run(`DELETE FROM quality_evals WHERE source_id = ?`, [source.id]);
+            this.run(`
+                INSERT INTO quality_sources (id, display_name, data_url, homepage_url, independent, fetched_at, row_count, payload_sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    display_name = excluded.display_name, data_url = excluded.data_url,
+                    homepage_url = excluded.homepage_url, independent = excluded.independent,
+                    fetched_at = excluded.fetched_at, row_count = excluded.row_count,
+                    payload_sha256 = excluded.payload_sha256
+            `, [source.id, source.display_name, source.data_url, source.homepage_url, source.independent,
+                source.fetched_at, source.row_count, source.payload_sha256]);
+            for (const row of seed.all(`SELECT * FROM quality_evals WHERE source_id = ?`, [source.id])) {
+                this.run(`
+                    INSERT OR REPLACE INTO quality_evals
+                        (source_id, bench_model_name, bench_model_url, family_key, params_b, active_params_b, is_moe,
+                         variant_role, metric, category, raw_score, raw_scale_max, eval_precision, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `, [row.source_id, row.bench_model_name, row.bench_model_url, row.family_key, row.params_b,
+                    row.active_params_b, row.is_moe, row.variant_role, row.metric, row.category, row.raw_score,
+                    row.raw_scale_max, row.eval_precision, row.fetched_at]);
+            }
+            imported = true;
+        }
+        if (imported) quality.refreshCatalogCohort(this.all(`SELECT name FROM models`));
+        return imported;
     }
 
     importRegistrySource(seed, source) {

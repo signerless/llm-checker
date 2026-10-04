@@ -508,7 +508,7 @@ rules:
 | Command | Description |
 |---------|-------------|
 | `sync` | Refresh the local SQLite model catalog from Ollama |
-| `quality-sync` | Refresh public quality benchmarks from HF Open LLM, LMArena, BigCodeBench, EvalPlus, LiveBench and MMMU; supports `--sources` and `--json` |
+| `quality-sync` | Refresh public quality benchmarks from HF Open LLM, LMArena, BigCodeBench, EvalPlus, LiveBench, MMMU and Hugging Face model-card eval results; supports `--sources` and `--json` |
 | `search <query>` | Search the synced Ollama catalog; add `--registry`/`--source` to search the multi-source registry (HF + Ollama + GPT4All) with `--max-params`/`--runtime`/`--format` filters |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
 
@@ -533,7 +533,9 @@ llm-checker registry-recommend --category coding --runtime mlx
 llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
 ```
 
-Refresh the quality scores used by `check`, `recommend` and `registry-recommend`:
+The packaged snapshot ships with these scores, so a fresh install ranks by
+measurements where they exist. Refresh the quality scores used by `check`,
+`recommend` and `registry-recommend`:
 
 ```bash
 llm-checker quality-sync
@@ -544,6 +546,11 @@ HF Open LLM contributes MMLU-PRO, BBH, GPQA, MuSR, MATH Level 5 and IFEval
 from official, available, original checkpoints. It supplies no coding score.
 LMArena contributes overall human preference Elo to general and conversation
 recommendations, with attribution to its [CC-BY-4.0 dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset).
+LiveBench releases newer than the curated list are discovered from its site.
+`hf_eval_results` reads the evaluation results publishers attach to their own
+Hugging Face repos (GPQA, MMLU-Pro, HLE, SWE-bench, Terminal-Bench, AIME, ...).
+They are self-reported, labeled as not independent, and only used when no
+independent board measured the model.
 The sources are downloaded from their official Parquet snapshots without an
 account. Failed refreshes retain cached scores. Recommendations expose
 `qualitySource` as `measured` or `estimated`, including the measured source,
