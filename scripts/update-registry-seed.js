@@ -30,7 +30,13 @@ function toPositiveInt(value, fallback) {
 
 async function main() {
     const sources = readOption('sources', 'ollama,huggingface,gpt4all');
-    const hfLimit = toPositiveInt(readOption('hf-limit', '3000'), 3000);
+    const hfLimit = toPositiveInt(readOption('hf-limit', '6000'), 6000);
+    const publisherLimit = toPositiveInt(readOption('publisher-limit', '500'), 500);
+    const concurrency = toPositiveInt(readOption('concurrency', '4'), 4);
+    // The packaged snapshot is built once a week, so it pays for the per-repo
+    // requests that give exact file sizes, hashes and context windows.
+    const deep = readOption('deep', 'true') !== 'false';
+    const publishers = readOption('official', 'true') !== 'false';
     const gpt4AllLimit = toPositiveInt(readOption('gpt4all-limit', '1000'), 1000);
     const ollamaLimit = toPositiveInt(readOption('ollama-limit', '10000'), 10000);
     const minRepos = toPositiveInt(readOption('min-repos', '2500'), 2500);
@@ -70,7 +76,14 @@ async function main() {
     const collections = [];
     for (const source of selectedSources) {
         if (source === 'huggingface' || source === 'hf') {
-            collections.push(...await ingestor.collectHuggingFace({ limit: hfLimit }));
+            collections.push(...await ingestor.collectHuggingFace({
+                limit: hfLimit,
+                publishers,
+                publisherLimit,
+                fileSizes: deep,
+                configs: deep,
+                concurrency
+            }));
         } else if (source === 'gpt4all') {
             collections.push(...await ingestor.collectGpt4All({ limit: gpt4AllLimit }));
         } else if (source === 'ollama') {
