@@ -1771,10 +1771,14 @@ class DeterministicModelSelector {
         // estimate below and mark it as such on the result, so nothing ever
         // presents a guess as a measurement.
         const measured = this.lookupMeasuredQuality(model, category);
+        // A pretrained checkpoint completes text but does not follow
+        // instructions, so it is a poor assistant whatever its benchmarks.
+        const pretrainedPenalty = this.isPretrainedVariant(model) ? 15 : 0;
         if (measured) {
             let Qm = measured.score;
             Qm += this.quantPenalties[quant] ?? precisionProfile(quant).penalty;   // benchmarks are run at fp16
             Qm += this.calculateFreshnessAdjustment(model);
+            Qm -= pretrainedPenalty;
             model.qualitySource = measured.provenance;
             return Math.max(0, Math.min(100, Qm));
         }
@@ -1814,8 +1818,30 @@ class DeterministicModelSelector {
         if (category === 'coding' && !model.tags.some(tag => ['coder', 'instruct'].includes(tag))) {
             Q -= 15;
         }
+
+        // Base coder variants carry the `coder` tag, so the coding penalty
+        // above never reached them.
+        Q -= pretrainedPenalty;
         
         return Math.max(0, Math.min(100, Q));
+    }
+
+    /**
+     * Base (pretrained) checkpoints by naming convention: Ollama `-base` /
+     * `-text` tags, Hugging Face `-Base` / `-pt` repos. A name that also says
+     * instruct/chat/it is an instruction-tuned build.
+     */
+    isPretrainedVariant(model = {}) {
+        const text = [
+            model.model_identifier,
+            model.name,
+            model.artifact?.repo_id,
+            model.artifact?.artifact_name
+        ].filter(Boolean).join(' ').toLowerCase();
+        const capability = capabilitiesOf(model);
+        if (capability.embedding || capability.reranking) return false;
+        if (/instruct|chat|assistant|(?:^|[-_:/.\s])it(?=[-_:.\s]|$)/.test(text)) return false;
+        return /(?:^|[-_:/.\s])(base|text|pretrained|pt)(?=[-_:.\s]|$)/.test(text);
     }
 
     /**
