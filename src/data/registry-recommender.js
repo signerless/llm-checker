@@ -157,6 +157,7 @@ function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '')
     const source = String(sourceId || '').toLowerCase();
 
     if (source === 'ollama' || normalizedFormat === 'ollama') return 'ollama';
+    if (source === 'docker') return 'docker';
     if (normalizedFormat === 'gguf') return 'llama.cpp';
     if (normalizedFormat === 'mlx' || runtimes.includes('mlx')) return 'mlx';
     if (runtimes.includes('llama.cpp')) return 'llama.cpp';
@@ -547,7 +548,8 @@ class RegistryRecommender {
             limit: poolLimit
         });
         const modelPool = dedupeRecommendationPool(groupWeightShards(rows).map(artifactToSelectorModel)
-            .filter(model => model && (runtimeFilter !== 'ollama' || model.source === 'ollama')));
+            .filter(model => model && (runtimeFilter !== 'ollama' || model.source === 'ollama') &&
+                (!runtimeFilter || runtimeSupportedOnHardware(runtimeFilter, selectorHardware, model.artifact))));
 
         const normalizedRuntime = runtimeFilter || 'auto';
 
@@ -717,7 +719,7 @@ class RegistryRecommender {
                 ...toArray(model.artifact?.runtime_support)
             ].filter((runtime, index, values) => runtime && values.indexOf(runtime) === index);
             const runtime = runtimeCandidates.find((candidateRuntime) =>
-                runtimeSupportedOnHardware(candidateRuntime, normalizedHardware)
+                runtimeSupportedOnHardware(candidateRuntime, normalizedHardware, model.artifact)
             );
             if (!runtime) continue;
             totalEvaluated += 1;

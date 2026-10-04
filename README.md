@@ -839,6 +839,7 @@ The packaged snapshot includes:
 - exact parameter counts and dtypes from safetensors headers, GGUF architecture and context windows, observed file sizes and SHA-256 hashes, `config.json` context windows, and base-model lineage
 - one artifact per complete shard set, with the install command for exactly those files
 - GPT4All's curated catalog
+- Docker Hub's official `ai/` models for Docker Model Runner (`docker model pull ai/<model>:<tag>`), with exact tag sizes; GGUF tags run on its llama.cpp engine, `mlx` tags on Apple Silicon and safetensors tags on NVIDIA GPUs
 - pull counts, tag counts, license/gated flags, tasks, and modalities
 
 Values a source does not publish stay unknown; they are never filled with estimates.
@@ -847,8 +848,9 @@ Refresh it any time:
 
 ```bash
 llm-checker sync                     # add --exact for registry byte sizes and quantizations
-llm-checker registry-sync --sources ollama,huggingface,gpt4all
+llm-checker registry-sync --sources ollama,huggingface,gpt4all,docker
 llm-checker registry-sync --official --deep   # official publishers, exact file sizes and context windows
+llm-checker registry-recommend --category coding --runtime docker
 llm-checker registry-search qwen --runtime auto --max-size 8
 llm-checker registry-recommend --category coding --runtime auto --max-size 8
 ```

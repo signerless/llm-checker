@@ -20,8 +20,18 @@ const SOURCE_DEFINITIONS = {
         name: 'GPT4All Catalog',
         base_url: 'https://github.com/nomic-ai/gpt4all',
         source_type: 'curated_catalog'
+    },
+    docker: {
+        id: 'docker',
+        name: 'Docker Hub AI models',
+        base_url: 'https://hub.docker.com/u/ai',
+        source_type: 'runtime_registry'
     }
 };
+
+const DOCKER_HUB_API = 'https://hub.docker.com/v2/repositories';
+// Docker's `ai/` namespace also packages image, video and speech models.
+const DOCKER_NON_LANGUAGE_REPO = /stable-diffusion|flux|diffusion|cosmos|whisper|kokoro|tts|speech|wan2/i;
 
 const HUGGING_FACE_BASE_URL = 'https://huggingface.co';
 const HUGGING_FACE_MODEL_API = `${HUGGING_FACE_BASE_URL}/api/models`;
@@ -749,6 +759,84 @@ function ollamaParameterCountB(storedB, tag) {
     return Math.max(stated, fromTag) || null;
 }
 
+/**
+ * One Docker Model Runner tag (`ai/qwen3:8B-Q4_K_M`). Tags sharing a digest
+ * are one download and arrive merged, with the others as aliases.
+ */
+function normalizeDockerTag(repository, tag, aliases = []) {
+    const repoName = String(repository.name || '');
+    const modelId = `ai/${repoName}`;
+    const tagName = String(tag.name || '');
+    const reference = `${modelId}:${tagName}`;
+    const repoKey = makeScopedId('docker', modelId);
+    const sizeBytes = Number(tag.full_size) > 0 ? Number(tag.full_size) : null;
+    const nameText = [repoName, tagName, ...aliases].join(' ');
+    // GGUF tags run on the llama.cpp engine; `-safetensors` tags and `-vllm`
+    // repos on vLLM; `mlx` tags on MLX.
+    const format = /mlx/i.test(tagName) ? 'mlx'
+        : (/safetensors/i.test(tagName) || /-vllm$/i.test(repoName)) ? 'safetensors' : 'gguf';
+    const quantization = inferQuantization(nameText);
+    const precision = inferPrecision(nameText);
+    const parameterCountB = parseParamsB(tagName, ...aliases, repoName);
+    if (!sizeMatchesParameters(sizeBytes, parameterCountB, quantization || precision)) return null;
+    const describe = { id: modelId, model_name: repoName, description: repository.description || '', tags: [tagName, ...aliases] };
+    const tasks = inferTasks(describe);
+    const modalities = inferModalities(describe);
+    const updatedAt = tag.last_updated || repository.last_updated || '';
+    return {
+        source: SOURCE_DEFINITIONS.docker,
+        repos: [{
+            id: repoKey,
+            source_id: 'docker',
+            repo_id: modelId,
+            namespace: 'ai',
+            canonical_model_id: modelId,
+            display_name: modelId,
+            url: `https://hub.docker.com/r/${modelId}`,
+            license: 'unknown',
+            gated: false,
+            requires_auth: false,
+            downloads: Number(repository.pull_count) || 0,
+            likes: Number(repository.star_count) || 0,
+            tags: [],
+            tasks,
+            modalities,
+            last_modified: repository.last_updated || '',
+            metadata: compactObject({ description: repository.description || '' })
+        }],
+        artifacts: [{
+            id: makeArtifactId('docker', modelId, tagName),
+            source_id: 'docker',
+            repo_key: repoKey,
+            repo_id: modelId,
+            canonical_model_id: modelId,
+            artifact_name: reference,
+            filename: '',
+            format,
+            quantization,
+            precision,
+            parameter_count_b: parameterCountB,
+            active_parameter_count_b: parseActiveParamsB(tagName, repoName),
+            size_bytes: sizeBytes,
+            size_gb: bytesToGB(sizeBytes),
+            context_length: null,
+            runtime_support: ['docker'],
+            tasks,
+            modalities,
+            download_url: `https://hub.docker.com/r/${modelId}`,
+            install_command: `docker model pull ${reference}`,
+            sha256: '',
+            etag: tag.digest || '',
+            license: 'unknown',
+            gated: false,
+            requires_auth: false,
+            downloads: Number(repository.pull_count) || 0,
+            updated_at: updatedAt,
+            metadata: compactObject({ aliases: aliases.length ? aliases : undefined })
+        }]
+    };
+}
+
 function normalizeOllamaRows(model, variant) {
     const modelId = model.id || model.model_identifier;
     const tag = variant.tag || modelId;
@@ -932,7 +1020,7 @@ class RegistryIngestor {
             throw new Error('RegistryIngestor requires a database instance');
         }
 
-        const sources = String(options.sources || 'ollama,huggingface,gpt4all')
+        const sources = String(options.sources || 'ollama,huggingface,gpt4all,docker')
             .split(',')
             .map((source) => source.trim().toLowerCase())
             .filter(Boolean);
@@ -964,6 +1052,8 @@ class RegistryIngestor {
                 }));
             } else if (source === 'gpt4all') {
                 collections.push(...await this.collectGpt4All({ limit: limits.gpt4all }));
+            } else if (source === 'docker') {
+                collections.push(...await this.collectDocker({ limit: options.dockerLimit }));
             } else if (source === 'ollama') {
                 collections.push(...this.collectOllamaFromDatabase({ limit: limits.ollama }));
             } else {
@@ -1151,6 +1241,74 @@ class RegistryIngestor {
             .filter(Boolean);
     }
 
+    // Anonymous Docker Hub reads stop at an offset of 100, so each listing is
+    // read in both name orders; the union covers up to 200 entries.
+    async fetchDockerListing(url) {
+        const entries = new Map();
+        for (const ordering of ['name', '-name']) {
+            const listingUrl = `${url}${url.includes('?') ? '&' : '?'}page_size=100&ordering=${ordering}`;
+            let response;
+            for (let attempt = 0; ; attempt += 1) {
+                response = await this.fetchImpl(listingUrl, { headers: { Accept: 'application/json' } });
+                if (response.status !== 429 || attempt >= this.maxRetries) break;
+                // X-RateLimit-Reset is an epoch time in seconds.
+                const reset = Number(response.headers?.get?.('x-ratelimit-reset'));
+                const waitSeconds = Number(response.headers?.get?.('retry-after')) ||
+                    (reset > 0 ? Math.max(1, reset - Math.floor(Date.now() / 1000)) : 60);
+                this.onProgress({ source: 'docker', message: `Rate limited; waiting ${waitSeconds}s` });
+                await this.sleep(Math.min(waitSeconds, 300) * 1000);
+            }
+            if (!response.ok) throw new Error(`Docker Hub request failed: HTTP ${response.status}`);
+            const payload = await response.json();
+            for (const entry of toArray(payload.results)) {
+                if (entry?.name && !entries.has(entry.name)) entries.set(entry.name, entry);
+            }
+            if (!(Number(payload.count) > 100)) break;
+        }
+        return [...entries.values()];
+    }
+
+    async collectDocker(options = {}) {
+        const limit = Number(options.limit) > 0 ? Number(options.limit) : 1000;
+        this.onProgress({ source: 'docker', message: 'Fetching Docker Hub ai/ models' });
+        const repositories = (await this.fetchDockerListing(`${DOCKER_HUB_API}/ai/`))
+            .filter((repository) => !DOCKER_NON_LANGUAGE_REPO.test(repository.name))
+            .sort((a, b) => (Number(b.pull_count) || 0) - (Number(a.pull_count) || 0))
+            .slice(0, limit);
+        const collections = [];
+        for (const repository of repositories) {
+            const tags = await this.fetchDockerListing(`${DOCKER_HUB_API}/ai/${repository.name}/tags`);
+            const byDigest = new Map();
+            for (const tag of tags) {
+                if (!(Number(tag.full_size) > 0)) continue;
+                const key = tag.digest || tag.name;
+                if (!byDigest.has(key)) byDigest.set(key, []);
+                byDigest.get(key).push(tag);
+            }
+            // Docker re-pushed some tags with different capitalisation
+            // (`4B-Q4_K_M` and `4b-q4_K_M`); the newest push of a name wins.
+            const byName = new Map();
+            for (const group of byDigest.values()) {
+                // `latest` and the size-only tag are aliases of a quantized tag.
+                const ranked = [...group].sort((a, b) =>
+                    (a.name === 'latest') - (b.name === 'latest') || b.name.length - a.name.length);
+                const [primary, ...rest] = ranked;
+                const key = primary.name.toLowerCase();
+                const existing = byName.get(key);
+                if (existing && String(existing.primary.last_updated || '') >= String(primary.last_updated || '')) {
+                    existing.aliases.push(...rest.map((tag) => tag.name));
+                    continue;
+                }
+                byName.set(key, { primary, aliases: [...(existing?.aliases || []), ...rest.map((tag) => tag.name)] });
+            }
+            for (const { primary, aliases } of byName.values()) {
+                const collection = normalizeDockerTag(repository, primary, aliases.sort());
+                if (collection) collections.push(collection);
+            }
+        }
+        return collections;
+    }
+
     collectOllamaFromDatabase(options = {}) {
         const limit = Number(options.limit) > 0 ? Number(options.limit) : 1000;
         const rows = this.database.all(`
@@ -1299,6 +1457,7 @@ module.exports = {
     isSupportedHuggingFaceModel,
     normalizeGpt4AllEntry,
     normalizeOllamaRows,
+    normalizeDockerTag,
     inferFormat,
     inferQuantization,
     inferPrecision,
