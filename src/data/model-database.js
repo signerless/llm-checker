@@ -909,6 +909,18 @@ class ModelDatabase {
 
         await seed.initialize();
         let imported = false;
+        // Native SQLite copies whole tables with INSERT ... SELECT from the
+        // attached snapshot; row-by-row upserts took ~10 s for ~50k rows (and
+        // remain the path for the sql.js backend). ATTACH must precede the batch.
+        this._packagedAttached = false;
+        if (this.useNativeSqlite) {
+            try {
+                this.db.prepare('ATTACH DATABASE ? AS packaged').run(this.seedDbPath);
+                this._packagedAttached = true;
+            } catch {
+                this._packagedAttached = false;
+            }
+        }
         try {
             this.beginBatch();
             try {
@@ -950,14 +962,35 @@ class ModelDatabase {
             }
             return imported;
         } finally {
+            if (this._packagedAttached) {
+                this.db.exec('DETACH DATABASE packaged');
+                this._packagedAttached = false;
+            }
             seed.close();
         }
+    }
+
+    /** Copy the attached snapshot's rows of `table`, over the columns both share. */
+    copyFromPackaged(table, where = '', params = [], { skipColumns = [] } = {}) {
+        const packaged = new Set(this.all(`PRAGMA packaged.table_info(${table})`).map((column) => column.name));
+        const columns = this.all(`PRAGMA main.table_info(${table})`).map((column) => column.name)
+            .filter((name) => packaged.has(name) && !skipColumns.includes(name));
+        if (columns.length === 0) return;
+        const list = columns.map((name) => `"${name}"`).join(', ');
+        this.run(`INSERT OR REPLACE INTO main.${table} (${list}) SELECT ${list} FROM packaged.${table} ${where}`, params);
     }
 
     importOllamaCatalog(seed) {
         this.run('UPDATE benchmarks SET variant_id = NULL');
         this.run('DELETE FROM variants');
         this.run('DELETE FROM models');
+        if (this._packagedAttached) {
+            this.copyFromPackaged('models');
+            this.copyFromPackaged('variants', '', [], { skipColumns: ['id'] });
+            this.reattachSpeedBenchmarks();
+            this.setLastSync(seed.getLastSync());
+            return;
+        }
         for (const model of seed.all(`SELECT * FROM models`)) {
             this.upsertModel({ ...model, capabilities: this.parseJson(model.capabilities, []) });
         }
@@ -988,6 +1021,12 @@ class ModelDatabase {
             const localFetchedAt = local.get(source.id);
             if (localFetchedAt && String(localFetchedAt) >= String(source.fetched_at || '')) continue;
             this.run(`DELETE FROM quality_evals WHERE source_id = ?`, [source.id]);
+            if (this._packagedAttached) {
+                this.copyFromPackaged('quality_sources', 'WHERE id = ?', [source.id]);
+                this.copyFromPackaged('quality_evals', 'WHERE source_id = ?', [source.id], { skipColumns: ['id'] });
+                imported = true;
+                continue;
+            }
             this.run(`
                 INSERT INTO quality_sources (id, display_name, data_url, homepage_url, independent, fetched_at, row_count, payload_sha256)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1016,6 +1055,12 @@ class ModelDatabase {
 
     importRegistrySource(seed, source) {
         this.clearRegistrySource(source.id);
+        if (this._packagedAttached) {
+            this.copyFromPackaged('registry_sources', 'WHERE id = ?', [source.id]);
+            this.copyFromPackaged('registry_repos', 'WHERE source_id = ?', [source.id]);
+            this.copyFromPackaged('model_artifacts', 'WHERE source_id = ?', [source.id]);
+            return;
+        }
         this.upsertRegistrySource({ ...source, metadata: this.parseJson(source.metadata, {}) });
         for (const repo of seed.all(`SELECT * FROM registry_repos WHERE source_id = ?`, [source.id])) {
             this.upsertRegistryRepo({
