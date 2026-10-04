@@ -1887,16 +1887,21 @@ class DeterministicModelSelector {
         // first. LiveBench closes the gap for reasoning, creative and chat —
         // the three categories that previously had no task signal at all and
         // therefore ranked purely by model size.
+        // Self-reported model-card results (hf_eval_*) come last: they only
+        // speak for models no independent board has measured.
         const BENCH_FOR_CATEGORY = {
             coding: [
                 'bcb_hard_instruct', 'bcb_instruct', 'livebench_coding',
                 'livebench_agentic_coding', 'humaneval_plus', 'mbpp_plus', 'bcb_complete',
+                'hf_eval_swe_bench_verified', 'hf_eval_terminal_bench_2_1', 'hf_eval_terminal_bench_2_0',
+                'hf_eval_swe_bench_pro',
             ],
-            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr'],
+            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr',
+                'hf_eval_gpqa_diamond', 'hf_eval_hle', 'hf_eval_aime_2026', 'hf_eval_hmmt_feb_2026', 'hf_eval_gsm8k'],
             creative: ['livebench_language'],
-            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if'],
-            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis'],
-            multimodal: ['mmmu_val'],
+            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if', 'hf_eval_ifeval'],
+            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis', 'hf_eval_mmlu_pro'],
+            multimodal: ['mmmu_val', 'hf_eval_mmmu'],
         };
         const wanted = BENCH_FOR_CATEGORY[category];
         if (!wanted) return null;   // no benchmark speaks to this category yet

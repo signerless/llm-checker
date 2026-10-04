@@ -5429,7 +5429,7 @@ program
 program
     .command('quality-sync')
     .description('Refresh public benchmark scores used for model quality recommendations')
-    .option('-s, --sources <list>', 'Comma-separated sources: hf_open_llm,lmarena,bigcodebench,evalplus,livebench,mmmu')
+    .option('-s, --sources <list>', 'Comma-separated sources: hf_open_llm,lmarena,bigcodebench,evalplus,livebench,mmmu,hf_eval_results')
     .option('--db <path>', 'Model database path (defaults to the local catalog)')
     .option('-j, --json', 'Output the sync and coverage report as JSON')
     .action(async (options) => {
