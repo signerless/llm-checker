@@ -5,7 +5,7 @@
 **Intelligent Ollama Model Selector**
 
 AI-powered CLI that analyzes your hardware and recommends optimal LLM models.  
-Deterministic scoring across a packaged **multi-source registry** (Hugging Face + Ollama + GPT4All, **33k+ exact artifacts**) and the Ollama catalog, with live sync, runtime targeting, and hardware-calibrated memory estimation.
+Deterministic scoring across a packaged **multi-source registry** (Hugging Face + ModelScope + Ollama + Docker Hub + GPT4All, **55k+ exact artifacts** from 10k+ repositories) and the Ollama catalog, with live sync, runtime targeting, and hardware-calibrated memory estimation.
 
 [![npm version](https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
 [![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
@@ -39,7 +39,7 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 | | Feature | Description |
 |:---:|---|---|
 | **200+** | Packaged Model Catalog | Ships with a synced Ollama SQLite catalog and can refresh from Ollama on demand |
-| **33k+** | Multi-Source Registry | Exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All with per-source commands and runtime targeting |
+| **55k+** | Multi-Source Registry | Exact installable/downloadable artifacts from Hugging Face, ModelScope, Ollama, Docker Hub, and GPT4All with observed sizes, per-source commands and runtime targeting |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
