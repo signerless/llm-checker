@@ -175,7 +175,7 @@ Assist path: Integrated/shared-memory GPU detected, runtime remains CPU
 
 ### **7. Exact Artifact Hunter - "Give me the precise file to download"** (v3.7.0+)
 
-The multi-source registry indexes exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All, and returns the literal command to get each one.
+The multi-source registry indexes exact installable/downloadable artifacts from Hugging Face, Ollama, GPT4All, ModelScope, and Docker Hub's `ai/` models, and returns the literal command to get each one.
 
 ```bash
 # Best exact artifacts for your hardware, any runtime
@@ -184,6 +184,7 @@ llm-checker registry-recommend --category coding
 # Target a specific runtime (Apple-native MLX, server-side vLLM, etc.)
 llm-checker registry-recommend --category reasoning --runtime vllm
 llm-checker registry-recommend --category coding --runtime mlx
+llm-checker registry-recommend --category general --runtime docker   # Docker Model Runner
 
 # Search the registry directly with filters
 llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
@@ -191,11 +192,13 @@ llm-checker registry-search llama --format gguf --quant Q4_K_M --max-size 8
 
 # Refresh the registry snapshot from the live sources
 llm-checker registry-sync
+llm-checker registry-sync --official --deep          # official publishers, exact sizes and context windows
+llm-checker registry-sync --sources modelscope       # ModelScope, where huggingface.co is unreachable
 ```
 
 **Why it matters**:
-- Recommendations come with the exact command to install/download each artifact (`hf download org/model`, `ollama pull model:tag`).
-- `--runtime` targets Ollama / vLLM / MLX / llama.cpp / Transformers so you only see artifacts you can actually run.
+- Recommendations come with the exact command to install/download each artifact (`hf download org/model`, `ollama pull model:tag`, `modelscope download --model org/model`, `docker model pull ai/model:tag`).
+- `--runtime` targets Ollama / vLLM / MLX / llama.cpp / Transformers / Docker Model Runner so you only see artifacts you can actually run.
 - Memory fit is computed from each model's **total** parameter count (all Mixture-of-Experts experts stay resident), so a large MoE is never falsely reported as fitting small hardware.
 
 ---
