@@ -162,7 +162,8 @@ function artifactToSelectorModel(row) {
         ...(row.repo_metadata || {}),
         tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
     })) return null;
-    const shardedFile = row.source_id === 'huggingface' && isShardedWeightFile(row.filename || row.artifact_name);
+    const shardedFile = row.source_id === 'huggingface' &&
+        (Boolean(row.shard_files?.length) || isShardedWeightFile(row.filename || row.artifact_name));
     const identifier = shardedFile && row.format !== 'gguf'
         ? (row.canonical_model_id || row.repo_id)
         : (row.artifact_name || row.filename || row.canonical_model_id || row.repo_id);

@@ -96,6 +96,8 @@ async function main() {
     ingestor.storeCollections(collections);
 
     const stats = database.getRegistryStats();
+    // Replacing sources leaves free pages that would ship in the npm package.
+    database.vacuum();
     database.close();
 
     console.log(`Registry seed updated: ${path.relative(rootDir, seedDbPath)}`);
