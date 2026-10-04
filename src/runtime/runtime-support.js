@@ -188,14 +188,21 @@ function getRuntimePullCommand(model = {}, runtime = 'ollama') {
     const normalized = resolveCommandRuntime(model, runtime);
     const modelRef = getRuntimeModelRef(model, normalized);
     if (!normalized || !modelRef) return null;
-    if (normalized === 'transformers') return `hf download ${shellEscapeArg(modelRef)}`;
+    // ModelScope mirrors Hugging Face's layout but downloads from its own hub.
+    const fromModelScope = model.artifact?.source_id === 'modelscope';
+    if (normalized === 'transformers') {
+        return fromModelScope
+            ? `modelscope download --model ${shellEscapeArg(modelRef)}`
+            : `hf download ${shellEscapeArg(modelRef)}`;
+    }
     if (normalized === 'docker') return `docker model pull ${shellEscapeArg(modelRef)}`;
     if (normalized === 'llama.cpp') {
         const file = getGgufFilename(model);
         if (!file || !modelRef.includes('/')) return null;
         if (model.artifact?.shard_files?.length) {
+            const base = fromModelScope ? `https://www.modelscope.cn/models/${modelRef}/resolve/master` : `https://huggingface.co/${modelRef}/resolve/main`;
             return model.artifact.shard_files.map(shard => {
-                const url = `https://huggingface.co/${modelRef}/resolve/main/${shard.split('/').map(encodeURIComponent).join('/')}`;
+                const url = `${base}/${shard.split('/').map(encodeURIComponent).join('/')}`;
                 return `curl --fail --location ${shellEscapeArg(url)} --output ${shellEscapeArg(`./${shard.split('/').pop()}`)}`;
             }).join(' && ');
         }
@@ -205,7 +212,9 @@ function getRuntimePullCommand(model = {}, runtime = 'ollama') {
     }
 
     if (normalized === 'vllm') {
-        return `huggingface-cli download ${shellEscapeArg(modelRef)}`;
+        return fromModelScope
+            ? `modelscope download --model ${shellEscapeArg(modelRef)}`
+            : `huggingface-cli download ${shellEscapeArg(modelRef)}`;
     }
 
     if (normalized === 'mlx') {
@@ -238,7 +247,9 @@ function getRuntimeRunCommand(model = {}, runtime = 'ollama') {
     if (normalized === 'vllm') {
         const context = Number(model.context?.effective);
         const contextOption = Number.isSafeInteger(context) && context > 0 ? ` --max-model-len ${context}` : '';
-        return `python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)}${contextOption} --host 0.0.0.0 --port 8000`;
+        // vLLM resolves repo ids on ModelScope when VLLM_USE_MODELSCOPE is set.
+        const hubPrefix = model.artifact?.source_id === 'modelscope' ? 'VLLM_USE_MODELSCOPE=True ' : '';
+        return `${hubPrefix}python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)}${contextOption} --host 0.0.0.0 --port 8000`;
     }
 
     if (normalized === 'mlx') {
@@ -271,7 +282,7 @@ function resolveCommandRuntime(model, runtime) {
     const preferred = normalizeRuntime(model.preferredRuntime || model.runtime || null);
     if (preferred && preferred !== 'auto') return preferred;
     if (getGgufFilename(model) || model.artifact?.format === 'gguf') return 'llama.cpp';
-    if (model.hfModel || model.hfId || model.huggingfaceId || model.artifact?.source_id === 'huggingface') return 'transformers';
+    if (model.hfModel || model.hfId || model.huggingfaceId || ['huggingface', 'modelscope'].includes(model.artifact?.source_id)) return 'transformers';
     return 'ollama';
 }
 

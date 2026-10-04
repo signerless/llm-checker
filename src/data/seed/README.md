@@ -21,6 +21,9 @@ The snapshot includes:
   artifact.
 - Docker Hub's official `ai/` models for Docker Model Runner, one artifact per
   distinct tag digest with its exact size.
+- ModelScope's most downloaded language models (1500 by default), with file
+  sizes, hashes and context windows from each repo's file list and
+  `config.json`.
 
 Refresh cadence: weekly via `.github/workflows/update-model-db.yml`
 (`npm run sync:seed`). Set the `HF_TOKEN` repository secret to raise the

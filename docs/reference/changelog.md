@@ -26,6 +26,9 @@ Unreleased — exact catalog metadata
   `hf_eval_results` source (self-reported model-card results), and LiveBench
   releases newer than the curated list are discovered automatically.
 - Ollama tags record their license from the manifest (`sync --exact`).
+- New registry source: ModelScope (`--sources modelscope`), with exact file
+  sizes, hashes, `config.json` context windows and `modelscope download` /
+  `VLLM_USE_MODELSCOPE` commands.
 - New registry source and runtime: Docker Model Runner (`docker`), from
   Docker Hub's official `ai/` namespace, with pull/run commands and
   format-aware hardware checks (MLX tags on Apple Silicon, vLLM tags on
