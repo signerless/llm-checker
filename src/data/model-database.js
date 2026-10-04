@@ -7,6 +7,16 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
+// Most tags of a model share one license; sizes can differ (qwen2.5:3b ships
+// under the Qwen Research License, its other sizes under Apache 2.0).
+function dominantLicense(variants) {
+    const counts = new Map();
+    for (const variant of variants) {
+        if (variant.license) counts.set(variant.license, (counts.get(variant.license) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
+}
+
 class ModelDatabase {
     constructor(options = {}) {
         this.dbPath = options.dbPath || path.join(os.homedir(), '.llm-checker', 'models.db');
@@ -132,6 +142,7 @@ class ModelDatabase {
                 digest TEXT,
                 size_bytes INTEGER,
                 blob_sha256 TEXT,
+                license TEXT,
                 FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE,
                 UNIQUE(model_id, tag)
             );
@@ -276,7 +287,7 @@ class ModelDatabase {
      */
     migrateVariantColumns() {
         const existing = new Set(this.all('PRAGMA table_info(variants)').map((column) => column.name));
-        const columns = [['digest', 'TEXT'], ['size_bytes', 'INTEGER'], ['blob_sha256', 'TEXT']]
+        const columns = [['digest', 'TEXT'], ['size_bytes', 'INTEGER'], ['blob_sha256', 'TEXT'], ['license', 'TEXT']]
             .filter(([name]) => !existing.has(name));
         if (columns.length === 0) return;
         this.beginBatch();
@@ -514,8 +525,8 @@ class ModelDatabase {
     upsertVariant(variant) {
         const sql = `
             INSERT INTO variants (model_id, tag, params_b, quant, size_gb, context_length, input_types, is_moe, expert_count,
-                digest, size_bytes, blob_sha256)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                digest, size_bytes, blob_sha256, license)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(model_id, tag) DO UPDATE SET
                 params_b = excluded.params_b,
                 quant = excluded.quant,
@@ -526,7 +537,8 @@ class ModelDatabase {
                 expert_count = excluded.expert_count,
                 digest = excluded.digest,
                 size_bytes = excluded.size_bytes,
-                blob_sha256 = excluded.blob_sha256
+                blob_sha256 = excluded.blob_sha256,
+                license = excluded.license
         `;
 
         const sizeBytes = Number(variant.size_bytes);
@@ -544,7 +556,8 @@ class ModelDatabase {
             variant.expert_count || null,
             variant.digest || null,
             Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : null,
-            variant.blob_digest || variant.blob_sha256 || null
+            variant.blob_digest || variant.blob_sha256 || null,
+            variant.license || null
         ]);
     }
 
@@ -1262,7 +1275,8 @@ class ModelDatabase {
                 is_moe: Boolean(variant.is_moe),
                 expert_count: variant.expert_count,
                 digest: variant.digest || null,
-                size_bytes: variant.size_bytes || null
+                size_bytes: variant.size_bytes || null,
+                license: variant.license || null
             });
             variantsByModel.set(variant.model_id, list);
         }
@@ -1297,7 +1311,7 @@ class ModelDatabase {
                 source: 'ollama_sqlite_database',
                 registry: 'ollama.com',
                 version: model.updated_at || model.last_updated || 'unknown',
-                license: 'unknown',
+                license: dominantLicense(variantsByModel.get(model.id) || []),
                 digest: 'unknown'
             };
         });

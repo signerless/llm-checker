@@ -17,6 +17,8 @@ class EnhancedOllamaScraper {
         // Registry manifests give exact bytes and quantizations at the cost of
         // two requests per distinct tag digest; off unless asked for.
         this.exact = Boolean(options.exact);
+        // License blobs are shared by many tags; classify each digest once.
+        this.licenseCache = new Map();
 
         // Progress tracking
         this.onProgress = options.onProgress || (() => {});
@@ -399,6 +401,12 @@ class EnhancedOllamaScraper {
                     if (manifest.config?.digest) {
                         config = JSON.parse(await this.httpGet(`${this.registryURL}/v2/library/${modelId}/blobs/${manifest.config.digest}`));
                     }
+                    const licenseLayers = layers.filter((layer) => /\.license$/.test(String(layer.mediaType)) && layer.digest);
+                    const licenses = [];
+                    for (const layer of licenseLayers) {
+                        licenses.push(await this.fetchLicense(modelId, layer.digest));
+                    }
+                    const license = licenses.find((id) => id && id !== 'other') || licenses[0] || null;
                     const params = this.extractParams(String(config.model_type || '').toLowerCase());
                     const quant = this.normalizeFileType(config.file_type);
                     const families = [config.model_family, ...(config.model_families || [])].map((family) => String(family || '').toLowerCase());
@@ -408,6 +416,7 @@ class EnhancedOllamaScraper {
                         if (params) variant.params_b = params;
                         if (quant) variant.quant = quant;
                         if (modelLayer?.digest) variant.blob_digest = modelLayer.digest;
+                        if (license) variant.license = license;
                         if (families.some((family) => /moe/.test(family))) variant.is_moe = true;
                         if (weights.some((layer) => /\.projector$/.test(String(layer.mediaType))) &&
                             !variant.input_types.includes('image')) {
@@ -420,6 +429,50 @@ class EnhancedOllamaScraper {
             }
         };
         await Promise.all(Array.from({ length: Math.min(this.concurrency, groups.length) }, worker));
+    }
+
+    async fetchLicense(modelId, digest) {
+        if (!this.licenseCache.has(digest)) {
+            this.licenseCache.set(digest, this.httpGet(`${this.registryURL}/v2/library/${modelId}/blobs/${digest}`)
+                .then((text) => this.classifyLicense(text))
+                .catch(() => null));
+        }
+        return this.licenseCache.get(digest);
+    }
+
+    /**
+     * Map a license text to a short identifier (SPDX where one exists). A
+     * license the patterns do not recognise is reported as 'other', never
+     * guessed.
+     */
+    classifyLicense(text = '') {
+        const head = String(text).slice(0, 4000).replace(/\s+/g, ' ');
+        const rules = [
+            [/LLAMA 4 COMMUNITY LICENSE/i, 'llama4'],
+            [/LLAMA 3\.3 COMMUNITY LICENSE/i, 'llama3.3'],
+            [/LLAMA 3\.2 COMMUNITY LICENSE/i, 'llama3.2'],
+            [/LLAMA 3\.1 COMMUNITY LICENSE/i, 'llama3.1'],
+            [/LLAMA 3 COMMUNITY LICENSE/i, 'llama3'],
+            [/LLAMA 2 COMMUNITY LICENSE/i, 'llama2'],
+            [/Gemma Terms of Use/i, 'gemma'],
+            [/Qwen RESEARCH LICENSE/i, 'qwen-research'],
+            [/Tongyi Qianwen|Qwen LICENSE AGREEMENT/i, 'qwen'],
+            [/DEEPSEEK LICENSE AGREEMENT|DeepSeek License Agreement/i, 'deepseek'],
+            [/NVIDIA Open Model License/i, 'nvidia-open-model-license'],
+            [/Mistral AI Research License/i, 'mrl'],
+            [/Attribution-NonCommercial-ShareAlike 4\.0/i, 'cc-by-nc-sa-4.0'],
+            [/Attribution-NonCommercial 4\.0/i, 'cc-by-nc-4.0'],
+            [/Attribution-ShareAlike 4\.0/i, 'cc-by-sa-4.0'],
+            [/Creative Commons Attribution 4\.0|Attribution 4\.0 International/i, 'cc-by-4.0'],
+            [/OpenRAIL/i, 'openrail'],
+            [/Apache License,? Version 2\.0/i, 'apache-2.0'],
+            [/\bMIT License\b|Permission is hereby granted, free of charge/i, 'mit'],
+            [/GNU AFFERO GENERAL PUBLIC LICENSE/i, 'agpl-3.0'],
+            [/GNU GENERAL PUBLIC LICENSE/i, 'gpl-3.0'],
+            [/Redistribution and use in source and binary forms/i, 'bsd-3-clause']
+        ];
+        const match = rules.find(([pattern]) => pattern.test(head));
+        return match ? match[1] : (head.trim() ? 'other' : null);
     }
 
     normalizeFileType(fileType) {

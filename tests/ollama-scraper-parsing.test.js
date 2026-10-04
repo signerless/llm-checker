@@ -135,10 +135,12 @@ async function testRegistryEnrichment() {
                 layers: [
                     { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${'d'.repeat(64)}`, size: 3_000_000_000 },
                     { mediaType: 'application/vnd.ollama.image.projector', digest: 'sha256:proj', size: 800_000_000 },
+                    { mediaType: 'application/vnd.ollama.image.license', digest: 'sha256:license', size: 8432 },
                     { mediaType: 'application/vnd.ollama.image.template', digest: 'sha256:tpl', size: 358 }
                 ]
             });
         }
+        if (url.endsWith('/blobs/sha256:license')) return '  Gemma Terms of Use\n  Last modified: February 21, 2024';
         if (url.endsWith('/blobs/sha256:config')) {
             return JSON.stringify({ model_family: 'gemma3', model_type: '4.3B', file_type: 'Q4_K_M' });
         }
@@ -149,7 +151,7 @@ async function testRegistryEnrichment() {
         { tag: 'gemma3:4b', digest: 'a2af6cc3eb7f', params_b: 4, quant: null, input_types: ['text'] }
     ];
     await scraper.enrichFromRegistry('gemma3', variants);
-    assert.strictEqual(requests.length, 2, 'one manifest and one config per digest');
+    assert.strictEqual(requests.length, 3, 'one manifest, config and license per digest');
     assert.strictEqual(requests[0].headers.Accept, 'application/vnd.docker.distribution.manifest.v2+json');
     for (const variant of variants) {
         assert.strictEqual(variant.size_bytes, 3_800_000_000, 'model and projector layers');
@@ -157,6 +159,22 @@ async function testRegistryEnrichment() {
         assert.strictEqual(variant.params_b, 4.3);
         assert.strictEqual(variant.blob_digest, `sha256:${'d'.repeat(64)}`);
         assert.ok(variant.input_types.includes('image'), 'a projector layer accepts images');
+        assert.strictEqual(variant.license, 'gemma', 'the license layer is classified');
+    }
+}
+
+function testLicenseClassification() {
+    const scraper = new EnhancedOllamaScraper({ onError: () => {} });
+    const cases = {
+        'LLAMA 3.1 COMMUNITY LICENSE AGREEMENT Llama 3.1 Version Release Date': 'llama3.1',
+        'Qwen RESEARCH LICENSE AGREEMENT  Release Date: September 19, 2024': 'qwen-research',
+        '                  Apache License\n                  Version 2.0, January 2004': 'apache-2.0',
+        'MIT License  Copyright (c) 2023 DeepSeek  Permission is hereby granted, free of charge': 'mit',
+        'Creative Commons Attribution-NonCommercial 4.0 International Public License': 'cc-by-nc-4.0',
+        'Some bespoke terms of use': 'other'
+    };
+    for (const [text, expected] of Object.entries(cases)) {
+        assert.strictEqual(scraper.classifyLicense(text), expected, text);
     }
 }
 
@@ -165,6 +183,7 @@ async function run() {
     testTagRows();
     testNoFabricatedValues();
     await testRegistryEnrichment();
+    testLicenseClassification();
     console.log('ollama-scraper-parsing.test.js: OK');
 }
 

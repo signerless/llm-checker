@@ -792,7 +792,7 @@ function normalizeOllamaRows(model, variant) {
             canonical_model_id: modelId,
             display_name: model.name || modelId,
             url: model.url || `https://ollama.com/library/${modelId}`,
-            license: 'unknown',
+            license: model.license || variant.license || 'unknown',
             gated: false,
             requires_auth: false,
             downloads: Number(model.pulls) || 0,
@@ -830,7 +830,7 @@ function normalizeOllamaRows(model, variant) {
             install_command: `ollama pull ${tag}`,
             sha256: /^[a-f0-9]{64}$/.test(blobSha256) ? blobSha256 : '',
             etag: variant.digest || '',
-            license: 'unknown',
+            license: variant.license || 'unknown',
             gated: false,
             requires_auth: false,
             downloads: Number(model.pulls) || 0,
@@ -1166,7 +1166,8 @@ class RegistryIngestor {
                 v.expert_count,
                 v.digest,
                 v.size_bytes,
-                v.blob_sha256
+                v.blob_sha256,
+                v.license AS variant_license
             FROM models m
             JOIN variants v ON v.model_id = m.id
             ORDER BY m.pulls DESC, v.params_b DESC, v.size_gb ASC
@@ -1201,9 +1202,20 @@ class RegistryIngestor {
             }
         }
 
+        const licenseCounts = new Map();
+        for (const { row } of unique) {
+            if (!row.variant_license) continue;
+            const counts = licenseCounts.get(row.id) || new Map();
+            counts.set(row.variant_license, (counts.get(row.variant_license) || 0) + 1);
+            licenseCounts.set(row.id, counts);
+        }
+        const modelLicense = (id) => [...(licenseCounts.get(id) || new Map()).entries()]
+            .sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+
         return unique.map(({ row, aliases }) => {
             const model = {
                 id: row.id,
+                license: modelLicense(row.id),
                 name: row.name,
                 capabilities: row.capabilities,
                 namespace: row.namespace,
@@ -1225,6 +1237,7 @@ class RegistryIngestor {
                 digest: row.digest,
                 size_bytes: row.size_bytes,
                 blob_sha256: row.blob_sha256,
+                license: row.variant_license,
                 aliases: aliases.sort()
             };
             return normalizeOllamaRows(model, variant);
