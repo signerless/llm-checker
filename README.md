@@ -5,7 +5,7 @@
 **Intelligent Ollama Model Selector**
 
 AI-powered CLI that analyzes your hardware and recommends optimal LLM models.  
-Deterministic scoring across a packaged **multi-source registry** (Hugging Face + Ollama + GPT4All, **33k+ exact artifacts**) and the Ollama catalog, with live sync, runtime targeting, and hardware-calibrated memory estimation.
+Deterministic scoring across a packaged **multi-source registry** (Hugging Face + ModelScope + Ollama + Docker Hub + GPT4All, **55k+ exact artifacts** from 10k+ repositories) and the Ollama catalog, with live sync, runtime targeting, and hardware-calibrated memory estimation.
 
 [![npm version](https://img.shields.io/npm/v/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
 [![npm downloads](https://img.shields.io/npm/dm/llm-checker?style=flat-square&color=0066FF)](https://www.npmjs.com/package/llm-checker)
@@ -39,7 +39,7 @@ Choosing the right LLM for your hardware is complex. With thousands of model var
 | | Feature | Description |
 |:---:|---|---|
 | **200+** | Packaged Model Catalog | Ships with a synced Ollama SQLite catalog and can refresh from Ollama on demand |
-| **33k+** | Multi-Source Registry | Exact installable/downloadable artifacts from Hugging Face, Ollama, and GPT4All with per-source commands and runtime targeting |
+| **55k+** | Multi-Source Registry | Exact installable/downloadable artifacts from Hugging Face, ModelScope, Ollama, Docker Hub, and GPT4All with observed sizes, per-source commands and runtime targeting |
 | **4D** | Scoring Engine | Quality, Speed, Fit, Context &mdash; weighted by use case |
 | **Multi-GPU** | Hardware Detection | Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel Arc, CPU, integrated/dedicated inventory visibility |
 | **Calibrated** | Memory Estimation | Bytes-per-parameter formula validated against real Ollama sizes |
@@ -508,7 +508,7 @@ rules:
 | Command | Description |
 |---------|-------------|
 | `sync` | Refresh the local SQLite model catalog from Ollama |
-| `quality-sync` | Refresh public quality benchmarks from HF Open LLM, LMArena, BigCodeBench, EvalPlus, LiveBench and MMMU; supports `--sources` and `--json` |
+| `quality-sync` | Refresh public quality benchmarks from HF Open LLM, LMArena, BigCodeBench, EvalPlus, LiveBench, MMMU and Hugging Face model-card eval results; supports `--sources` and `--json` |
 | `search <query>` | Search the synced Ollama catalog; add `--registry`/`--source` to search the multi-source registry (HF + Ollama + GPT4All) with `--max-params`/`--runtime`/`--format` filters |
 | `smart-recommend` | Advanced recommendations using the full scoring engine |
 
@@ -533,7 +533,9 @@ llm-checker registry-recommend --category coding --runtime mlx
 llm-checker registry-search qwen --source huggingface --runtime vllm --max-params 24
 ```
 
-Refresh the quality scores used by `check`, `recommend` and `registry-recommend`:
+The packaged snapshot ships with these scores, so a fresh install ranks by
+measurements where they exist. Refresh the quality scores used by `check`,
+`recommend` and `registry-recommend`:
 
 ```bash
 llm-checker quality-sync
@@ -544,6 +546,11 @@ HF Open LLM contributes MMLU-PRO, BBH, GPQA, MuSR, MATH Level 5 and IFEval
 from official, available, original checkpoints. It supplies no coding score.
 LMArena contributes overall human preference Elo to general and conversation
 recommendations, with attribution to its [CC-BY-4.0 dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset).
+LiveBench releases newer than the curated list are discovered from its site.
+`hf_eval_results` reads the evaluation results publishers attach to their own
+Hugging Face repos (GPQA, MMLU-Pro, HLE, SWE-bench, Terminal-Bench, AIME, ...).
+They are self-reported, labeled as not independent, and only used when no
+independent board measured the model.
 The sources are downloaded from their official Parquet snapshots without an
 account. Failed refreshes retain cached scores. Recommendations expose
 `qualitySource` as `measured` or `estimated`, including the measured source,
@@ -823,28 +830,34 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 ## Model Catalog
 
-LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog plus a multi-source registry of exact downloadable/installable model artifacts. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install.
+LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog plus a multi-source registry of exact downloadable/installable model artifacts. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install. After an upgrade, an existing database adopts the newer snapshot unless you synced that part more recently yourself.
 
-The packaged snapshot currently includes:
+The packaged snapshot includes:
 
-- 229 Ollama models
-- 7176 variants
-- 3259 multi-source registry repositories
-- 33729 exact model artifacts from Hugging Face, Ollama, and GPT4All
-- Hugging Face top 3000 repositories by downloads, fetched with API pagination
-- pull counts
-- tag counts
-- last-updated metadata
-- variant params, quantization, size, context, runtime, install commands, download URLs, license/gated flags, tasks, and modalities when available
+- every locally runnable Ollama library tag (cloud-only tags are excluded), with the exact download size, quantization and parameter count from `registry.ollama.ai`, and the context window and input types from the tags page
+- Hugging Face repositories ranked by downloads within each language task (text generation, image-text-to-text, embeddings), plus the catalogs of official model publishers
+- exact parameter counts and dtypes from safetensors headers, GGUF architecture and context windows, observed file sizes and SHA-256 hashes, `config.json` context windows, and base-model lineage
+- one artifact per complete shard set, with the install command for exactly those files
+- GPT4All's curated catalog
+- ModelScope's most downloaded language models with exact file sizes, hashes and `config.json` context windows, installable with `modelscope download` where huggingface.co is unreachable
+- Docker Hub's official `ai/` models for Docker Model Runner (`docker model pull ai/<model>:<tag>`), with exact tag sizes; GGUF tags run on its llama.cpp engine, `mlx` tags on Apple Silicon and safetensors tags on NVIDIA GPUs
+- pull counts, tag counts, license/gated flags, tasks, and modalities
+
+Values a source does not publish stay unknown; they are never filled with estimates.
 
 Refresh it any time:
 
 ```bash
-llm-checker sync
-llm-checker registry-sync --sources ollama,huggingface,gpt4all
+llm-checker sync                     # add --exact for registry byte sizes and quantizations
+llm-checker registry-sync --sources ollama,huggingface,gpt4all,docker
+llm-checker registry-sync --sources modelscope --modelscope-limit 1500
+llm-checker registry-sync --official --deep   # official publishers, exact file sizes and context windows
+llm-checker registry-recommend --category coding --runtime docker
 llm-checker registry-search qwen --runtime auto --max-size 8
 llm-checker registry-recommend --category coding --runtime auto --max-size 8
 ```
+
+Set `HF_TOKEN` to use your Hugging Face account's larger rate-limit window and read gated repos' metadata.
 
 For release maintainers, the packaged seed can be regenerated from the synced local DB and registry APIs:
 

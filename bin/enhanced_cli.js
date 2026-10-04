@@ -427,9 +427,9 @@ function parsePositiveNumberOption(value, fallback = null) {
 // Allowed enum values for the registry commands. Invalid values must be rejected
 // with a clear error instead of silently returning "no results" or falling back
 // to the built-in catalog.
-const REGISTRY_SOURCES = ['ollama', 'huggingface', 'gpt4all'];
+const REGISTRY_SOURCES = ['ollama', 'huggingface', 'gpt4all', 'docker', 'modelscope'];
 const REGISTRY_FORMATS = ['gguf', 'safetensors', 'mlx', 'ollama', 'pytorch', 'pytorch_bin', 'ggml'];
-const REGISTRY_RUNTIMES = ['auto', 'all', '*', 'ollama', 'llama.cpp', 'transformers', 'vllm', 'mlx'];
+const REGISTRY_RUNTIMES = ['auto', 'all', '*', 'ollama', 'llama.cpp', 'transformers', 'vllm', 'mlx', 'docker'];
 const REGISTRY_OPTIMIZE = ['balanced', 'speed', 'quality', 'context', 'coding'];
 
 function assertRegistryEnum(label, value, allowed) {
@@ -5378,6 +5378,7 @@ program
     .description('Sync the model database from Ollama registry (scrapes all models)')
     .option('-f, --force', 'Force full sync even if recent data exists')
     .option('--incremental', 'Only sync new and updated models')
+    .option('--exact', 'Read exact sizes and quantizations from registry.ollama.ai (two requests per distinct tag)')
     .option('-q, --quiet', 'Suppress progress output')
     .action(async (options) => {
         if (!options.quiet) showAsciiArt('sync');
@@ -5387,6 +5388,7 @@ program
 
         try {
             const syncManager = new SyncManager({
+                exact: Boolean(options.exact),
                 onProgress: (info) => {
                     if (!options.quiet && spinner) {
                         if (info.phase === 'complete') {
@@ -5427,7 +5429,7 @@ program
 program
     .command('quality-sync')
     .description('Refresh public benchmark scores used for model quality recommendations')
-    .option('-s, --sources <list>', 'Comma-separated sources: hf_open_llm,lmarena,bigcodebench,evalplus,livebench,mmmu')
+    .option('-s, --sources <list>', 'Comma-separated sources: hf_open_llm,lmarena,bigcodebench,evalplus,livebench,mmmu,hf_eval_results')
     .option('--db <path>', 'Model database path (defaults to the local catalog)')
     .option('-j, --json', 'Output the sync and coverage report as JSON')
     .action(async (options) => {
@@ -5474,14 +5476,18 @@ program
 
 program
     .command('registry-sync')
-    .description('Sync the multi-source model registry (Ollama, Hugging Face, GPT4All)')
-    .option('-s, --sources <list>', 'Comma-separated sources: ollama,huggingface,gpt4all', 'ollama,huggingface,gpt4all')
+    .description('Sync the multi-source model registry (Ollama, Hugging Face, GPT4All, Docker Hub, ModelScope)')
+    .option('-s, --sources <list>', 'Comma-separated sources: ollama,huggingface,gpt4all,docker,modelscope', 'ollama,huggingface,gpt4all,docker')
     .option('-l, --limit <n>', 'Fallback maximum records per source')
     .option('--hf-limit <n>', 'Maximum Hugging Face repos to ingest', '3000')
     .option('--ollama-limit <n>', 'Maximum Ollama artifacts to ingest', '10000')
     .option('--gpt4all-limit <n>', 'Maximum GPT4All entries to ingest', '1000')
+    .option('--modelscope-limit <n>', 'Maximum ModelScope repos to ingest (one or two requests each)', '1500')
     .option('--query <text>', 'Hugging Face search query')
     .option('--task <task>', 'Hugging Face task/filter, for example text-generation or text-embeddings-inference')
+    .option('--official', 'Also sweep the catalogs of official Hugging Face model publishers')
+    .option('--publisher-limit <n>', 'Maximum repos per official publisher with --official', '500')
+    .option('--deep', 'Fetch exact Hugging Face file sizes, hashes and config.json context windows (one or two requests per repo)')
     .option('--dry-run', 'Fetch and normalize without writing to the database')
     .option('-q, --quiet', 'Suppress progress output')
     .option('-j, --json', 'Output as JSON')
@@ -5512,8 +5518,13 @@ program
                 hfLimit: parsePositiveNumberOption(options.hfLimit, 3000),
                 ollamaLimit: parsePositiveNumberOption(options.ollamaLimit, 10000),
                 gpt4allLimit: parsePositiveNumberOption(options.gpt4allLimit, 1000),
+                modelscopeLimit: parsePositiveNumberOption(options.modelscopeLimit, 1500),
                 query: options.query,
                 task: options.task,
+                publishers: Boolean(options.official),
+                publisherLimit: parsePositiveNumberOption(options.publisherLimit, 500),
+                fileSizes: Boolean(options.deep),
+                configs: Boolean(options.deep),
                 dryRun: Boolean(options.dryRun)
             });
             const stats = options.dryRun ? null : database.getRegistryStats();
@@ -5563,9 +5574,9 @@ program
 program
     .command('registry-search [query]')
     .description('Search exact downloadable/installable artifacts in the multi-source model registry')
-    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all')
+    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all, docker, modelscope')
     .option('--format <format>', 'Filter by artifact format: gguf, safetensors, mlx, ollama')
-    .option('--runtime <runtime>', 'Filter by runtime support: auto, ollama, llama.cpp, transformers, vllm, mlx')
+    .option('--runtime <runtime>', 'Filter by runtime support: auto, ollama, llama.cpp, transformers, vllm, mlx, docker')
     .option('--quant <type>', 'Filter by quantization, for example Q4_K_M or Q8_0')
     .option('--max-size <gb>', 'Maximum artifact size in GB')
     .option('--min-params <billion>', 'Minimum parameter count in billions')
@@ -5586,8 +5597,8 @@ program
     .description('Recommend the best exact model artifacts from the multi-source registry for this hardware')
     .option('-c, --category <category>', 'Task category (general, coding, reasoning, embeddings, multimodal)', 'general')
     .option('--optimize <profile>', 'Optimization profile (balanced|speed|quality|context|coding)', 'balanced')
-    .option('--runtime <runtime>', 'Runtime target: auto, ollama, llama.cpp, vllm, mlx, transformers', 'auto')
-    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all')
+    .option('--runtime <runtime>', 'Runtime target: auto, ollama, llama.cpp, vllm, mlx, transformers, docker', 'auto')
+    .option('-s, --source <source>', 'Filter by source: ollama, huggingface, gpt4all, docker, modelscope')
     .option('--format <format>', 'Filter by artifact format: gguf, safetensors, mlx, ollama')
     .option('--quant <type>', 'Filter by quantization, for example Q4_K_M or Q8_0')
     .option('--max-size <gb>', 'Maximum artifact size in GB')

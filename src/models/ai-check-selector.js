@@ -876,11 +876,19 @@ Return JSON with this structure:
      * Convert Ollama model format to deterministic selector format
      */
     convertOllamaModelToDeterministicFormat(ollamaModel) {
+        // The synced catalog records the default tag's parameters, size,
+        // context window and inputs; the heuristics below fill only what a
+        // catalog without them lacks.
+        const variants = Array.isArray(ollamaModel.variants) ? ollamaModel.variants : [];
+        const mainVariant = variants.find((variant) => variant.tag === `${ollamaModel.model_identifier}:latest`) ||
+            variants.find((variant) => Number(variant.params_b) > 0) || null;
+        const observed = (value) => (Number(value) > 0 ? Number(value) : null);
+
         // Extract size from model identifier
         const sizeMatch = ollamaModel.model_identifier.match(/(\d+\.?\d*)[bm]/i);
         const sizeNum = sizeMatch ? parseFloat(sizeMatch[1]) : 7; // Default 7B
         const sizeUnit = sizeMatch ? sizeMatch[0].slice(-1).toLowerCase() : 'b';
-        const paramsB = sizeUnit === 'm' ? sizeNum / 1000 : sizeNum;
+        const paramsB = observed(mainVariant?.params_b) || (sizeUnit === 'm' ? sizeNum / 1000 : sizeNum);
         
         // Extract family
         const modelId = ollamaModel.model_identifier.toLowerCase();
@@ -897,7 +905,9 @@ Return JSON with this structure:
         
         // Determine modalities
         const modalities = ['text'];
-        if (modelId.includes('llava') || modelId.includes('vision') || modelId.includes('vl')) {
+        const variantInputs = Array.isArray(mainVariant?.input_types) ? mainVariant.input_types.map(String) : [];
+        if (variantInputs.includes('image') || modelId.includes('llava') || modelId.includes('vision') ||
+            /(?:^|[^a-z])vl(?:[^a-z]|$)|\dvl(?:[^a-z]|$)/.test(modelId)) {
             modalities.push('vision');
         }
         
@@ -916,15 +926,17 @@ Return JSON with this structure:
         else if (family.includes('mistral')) ctxMax = 32768;
         else if (family.includes('gemma')) ctxMax = 8192;
         
+        if (observed(mainVariant?.context_length)) ctxMax = observed(mainVariant.context_length);
+
         // Estimate model size in GB (rough approximation)
-        const sizeGB = paramsB * 0.6; // ~0.6GB per billion parameters for Q4_K_M
+        const sizeGB = observed(mainVariant?.size_gb) || paramsB * 0.6; // ~0.6GB per billion parameters for Q4_K_M
         
         return {
             name: ollamaModel.model_name,
             family: family,
             paramsB: paramsB,
             ctxMax: ctxMax,
-            quant: 'Q4_K_M', // Default quantization
+            quant: mainVariant?.quant || 'Q4_K_M', // Default quantization
             sizeGB: sizeGB,
             modalities: modalities,
             tags: tags,
