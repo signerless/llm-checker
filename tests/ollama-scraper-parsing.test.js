@@ -171,11 +171,16 @@ function testLicenseClassification() {
         '                  Apache License\n                  Version 2.0, January 2004': 'apache-2.0',
         'MIT License  Copyright (c) 2023 DeepSeek  Permission is hereby granted, free of charge': 'mit',
         'Creative Commons Attribution-NonCommercial 4.0 International Public License': 'cc-by-nc-4.0',
+        'STABILITY AI NON-COMMERCIAL RESEARCH COMMUNITY LICENSE AGREEMENT Dated: December 06, 2023': 'stabilityai-nc-research',
+        '# Mistral AI Non-Production License ## 1. Scope and acceptance': 'mnpl',
+        'The glm-4-9b License 1. 定义': 'glm-4',
         'Some bespoke terms of use': 'other'
     };
     for (const [text, expected] of Object.entries(cases)) {
         assert.strictEqual(scraper.classifyLicense(text), expected, text);
     }
+    assert.strictEqual(scraper.classifyLicense('# Llama Code Acceptable Use Policy Meta is committed to'), null,
+        'an acceptable-use policy is not a license');
 }
 
 async function run() {

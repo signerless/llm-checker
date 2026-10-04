@@ -447,6 +447,8 @@ class EnhancedOllamaScraper {
      */
     classifyLicense(text = '') {
         const head = String(text).slice(0, 4000).replace(/\s+/g, ' ');
+        // An acceptable-use policy ships beside the license; it is not one.
+        if (/^\W*(?:[\w.-]+ )?(?:Llama [\w.]+ )?Acceptable Use Policy/i.test(head.trim())) return null;
         const rules = [
             [/LLAMA 4 COMMUNITY LICENSE/i, 'llama4'],
             [/LLAMA 3\.3 COMMUNITY LICENSE/i, 'llama3.3'],
@@ -460,6 +462,17 @@ class EnhancedOllamaScraper {
             [/DEEPSEEK LICENSE AGREEMENT|DeepSeek License Agreement/i, 'deepseek'],
             [/NVIDIA Open Model License/i, 'nvidia-open-model-license'],
             [/Mistral AI Research License/i, 'mrl'],
+            [/Mistral AI Non-Production License/i, 'mnpl'],
+            [/STABILITY AI NON-COMMERCIAL RESEARCH COMMUNITY LICENSE/i, 'stabilityai-nc-research'],
+            [/STABILITY AI COMMUNITY LICENSE/i, 'stabilityai-community'],
+            [/MICROSOFT RESEARCH LICENSE/i, 'msrla'],
+            [/glm-4[\w.-]* License/i, 'glm-4'],
+            [/NVIDIA AI Foundation Models Community License/i, 'nvidia-ai-foundation-models'],
+            [/EXAONE AI Model License/i, 'exaone'],
+            [/Databricks Open Model License/i, 'databricks-open-model'],
+            [/Health AI Developer Foundations Terms of Use/i, 'health-ai-developer-foundations'],
+            [/Yi Series Models Community License/i, 'yi'],
+            [/Falcon[\w .-]* LICENSE/i, 'falcon'],
             [/Attribution-NonCommercial-ShareAlike 4\.0/i, 'cc-by-nc-sa-4.0'],
             [/Attribution-NonCommercial 4\.0/i, 'cc-by-nc-4.0'],
             [/Attribution-ShareAlike 4\.0/i, 'cc-by-sa-4.0'],
