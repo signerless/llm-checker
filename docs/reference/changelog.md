@@ -1,6 +1,27 @@
 Changelog
 =========
 
+Unreleased — exact catalog metadata
+-------------------------------------
+
+- Hugging Face ingestion lists repos per language task and sweeps official
+  publishers, so the limit is spent on models the recommender can rank. The
+  weekly snapshot build had failed since July because the global download
+  ranking left too few language-model repos.
+- Exact parameter counts, dtypes, GGUF context windows and lineage come from
+  the Hub's `expand[]` metadata; `registry-sync --deep` adds observed file
+  sizes, SHA-256 hashes and `config.json` context windows. Complete shard sets
+  are one artifact; projectors, importance matrices and duplicate exports are
+  not artifacts. Official Mistral releases (no pipeline tag) are included.
+- The Ollama sync reads each tag's size, context window, input types and
+  digest, excludes cloud-only tags, and no longer invents sizes, Q4_0 or
+  4096-token defaults. `sync --exact` reads byte sizes, quantizations and
+  parameter counts from `registry.ollama.ai`.
+- Recommendations use each Ollama tag's own context window and inputs.
+- Existing databases adopt a newer packaged snapshot; `sync` keeps the
+  registry's Ollama rows instead of deleting them.
+- MCP `recommend` and `project_recommend` honor the requested category.
+
 3.8.1 — ModelVet attribution (2026-08-04)
 -------------------------------------------
 

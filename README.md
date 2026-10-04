@@ -823,28 +823,30 @@ llm-checker search qwen --quant Q4_K_M --max-size 8
 
 ## Model Catalog
 
-LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog plus a multi-source registry of exact downloadable/installable model artifacts. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install.
+LLM Checker ships with a pre-synced SQLite snapshot of the Ollama catalog plus a multi-source registry of exact downloadable/installable model artifacts. On first run, that snapshot is copied to `~/.llm-checker/models.db`, so recommendations and catalog search work immediately after npm install. After an upgrade, an existing database adopts the newer snapshot unless you synced that part more recently yourself.
 
-The packaged snapshot currently includes:
+The packaged snapshot includes:
 
-- 229 Ollama models
-- 7176 variants
-- 3259 multi-source registry repositories
-- 33729 exact model artifacts from Hugging Face, Ollama, and GPT4All
-- Hugging Face top 3000 repositories by downloads, fetched with API pagination
-- pull counts
-- tag counts
-- last-updated metadata
-- variant params, quantization, size, context, runtime, install commands, download URLs, license/gated flags, tasks, and modalities when available
+- every locally runnable Ollama library tag (cloud-only tags are excluded), with the exact download size, quantization and parameter count from `registry.ollama.ai`, and the context window and input types from the tags page
+- Hugging Face repositories ranked by downloads within each language task (text generation, image-text-to-text, embeddings), plus the catalogs of official model publishers
+- exact parameter counts and dtypes from safetensors headers, GGUF architecture and context windows, observed file sizes and SHA-256 hashes, `config.json` context windows, and base-model lineage
+- one artifact per complete shard set, with the install command for exactly those files
+- GPT4All's curated catalog
+- pull counts, tag counts, license/gated flags, tasks, and modalities
+
+Values a source does not publish stay unknown; they are never filled with estimates.
 
 Refresh it any time:
 
 ```bash
-llm-checker sync
+llm-checker sync                     # add --exact for registry byte sizes and quantizations
 llm-checker registry-sync --sources ollama,huggingface,gpt4all
+llm-checker registry-sync --official --deep   # official publishers, exact file sizes and context windows
 llm-checker registry-search qwen --runtime auto --max-size 8
 llm-checker registry-recommend --category coding --runtime auto --max-size 8
 ```
+
+Set `HF_TOKEN` to use your Hugging Face account's larger rate-limit window and read gated repos' metadata.
 
 For release maintainers, the packaged seed can be regenerated from the synced local DB and registry APIs:
 
