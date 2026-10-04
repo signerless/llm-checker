@@ -647,8 +647,17 @@ class QualityEvals {
                 SELECT q.*, s.display_name AS source_name, s.homepage_url, s.independent
                 FROM quality_evals q JOIN quality_sources s ON s.id = q.source_id
             `).all().map(row => ({ row, identity: checkpointIdentity(row.bench_model_name, row.params_b) }));
+            // sameCheckpoint requires equal labels, so only rows sharing the
+            // label can match. Scanning every row per candidate made a
+            // recommendation over the full catalog take ~50 s.
+            this._identityIndex = new Map();
+            for (const entry of this._identityRows) {
+                const bucket = this._identityIndex.get(entry.identity.label) || [];
+                bucket.push(entry);
+                this._identityIndex.set(entry.identity.label, bucket);
+            }
         }
-        const wanted = this._identityRows.filter(({ row, identity: measured }) =>
+        const wanted = (this._identityIndex.get(identity.label) || []).filter(({ row, identity: measured }) =>
             (!category || row.category === category) && sameCheckpoint(identity, measured)
         ).map(({ row }) => row);
         if (!wanted.length) return null;
