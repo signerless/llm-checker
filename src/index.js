@@ -52,6 +52,14 @@ function normalizeRecommendationRuntime(runtime = 'auto') {
     return runtimeName;
 }
 
+// Shape a known parameter count like the `[text, number]` match the
+// name-based size detection produces.
+function variantParams(paramsB) {
+    if (!(Number(paramsB) > 0)) return null;
+    const rounded = Math.round(Number(paramsB) * 10) / 10;
+    return [`${rounded}b`, String(rounded)];
+}
+
 class LLMChecker {
     constructor(options = {}) {
         this.cpuOnly = resolveCpuOnlyMode(options.cpuOnly);
@@ -400,7 +408,14 @@ class LLMChecker {
         
         // Use the specified use case, default to 'general'
         const useCase = options.useCase || 'general';
-        const results = await selector.selectBestModels(hardware, staticModels, useCase, 100, {
+        // Rank the same catalog as other platforms, not only the static list.
+        let pool = staticModels;
+        try {
+            pool = (await this.buildCombinedModelPool(staticModels, ollamaIntegration, options)).allUniqueModels;
+        } catch (error) {
+            this.logger.warn('Catalog unavailable for Apple Silicon analysis; using static models', { error: error.message });
+        }
+        const results = await selector.selectBestModels(hardware, pool, useCase, 100, {
             includeUncensored: options.includeUncensored === true,
             ...(Object.prototype.hasOwnProperty.call(options, 'cpuOnly')
                 ? { cpuOnly: options.cpuOnly }
@@ -583,6 +598,81 @@ class LLMChecker {
         return integration;
     }
 
+    /**
+     * The static definitions merged with the synced SQLite catalog, which
+     * carries every Ollama model with its real tag sizes. Every platform path
+     * ranks this same pool.
+     */
+    async buildCombinedModelPool(staticModels, ollamaIntegration, options = {}) {
+        const includeUncensored = options.includeUncensored === true;
+        const eligibleStaticModels = filterModelsBySafety(staticModels, { includeUncensored });
+        // 1. Obtener TODOS los modelos de la base de datos de Ollama
+        const ollamaData = await this.loadOllamaModelData();
+        const rawOllamaModels = ollamaData.models || [];
+        const allOllamaModels = filterModelsBySafety(rawOllamaModels, { includeUncensored });
+        const eligibleOllamaIntegration = filterOllamaIntegrationBySafety(ollamaIntegration, {
+            includeUncensored,
+            referenceModels: [...staticModels, ...rawOllamaModels]
+        });
+        this.logger.info(`Found ${allOllamaModels.length} models in Ollama database`);
+
+        // 2. Crear una lista combinada de todos los modelos únicos
+        const allModelsMap = new Map();
+        
+        // Agregar modelos estáticos
+        eligibleStaticModels.forEach(model => {
+            allModelsMap.set(
+                model.name,
+                attachModelProvenance(
+                    {
+                        ...model,
+                        source: 'static_database',
+                        isOllamaInstalled: false
+                    },
+                    { source: 'static_database' }
+                )
+            );
+        });
+        
+        // Agregar modelos de Ollama (con prioridad si ya existen)
+        allOllamaModels.forEach(ollamaModel => {
+            const modelKey = this.findBestMatchingKey(ollamaModel, allModelsMap);
+            
+            if (modelKey) {
+                // Mejorar modelo existente con datos de Ollama
+                const existing = allModelsMap.get(modelKey);
+                allModelsMap.set(
+                    modelKey,
+                    attachModelProvenance(
+                        {
+                            ...existing,
+                            ...this.createEnhancedModelFromOllama(ollamaModel, existing),
+                            source: 'enhanced_with_ollama'
+                        },
+                        { source: 'enhanced_with_ollama' }
+                    )
+                );
+            } else {
+                // Crear nuevo modelo desde datos de Ollama
+                const newModel = attachModelProvenance(
+                    {
+                        ...this.createModelFromOllamaData(ollamaModel),
+                        source: 'ollama_database'
+                    },
+                    { source: 'ollama_database' }
+                );
+                allModelsMap.set(newModel.name, {
+                    ...newModel,
+                    source: 'ollama_database'
+                });
+            }
+        });
+        
+        const allUniqueModels = Array.from(allModelsMap.values());
+        this.logger.info(`Combined total: ${allUniqueModels.length} unique models`);
+        return { allUniqueModels, eligibleOllamaIntegration };
+    }
+
     async analyzeWithMathematicalHeuristics(hardware, staticModels, ollamaIntegration, options = {}) {
         this.logger.info('Using mathematical heuristics combining database + local models');
         const includeUncensored = options.includeUncensored === true;
@@ -593,70 +683,9 @@ class LLMChecker {
         });
         
         try {
-            // 1. Obtener TODOS los modelos de la base de datos de Ollama
-            const ollamaData = await this.loadOllamaModelData();
-            const rawOllamaModels = ollamaData.models || [];
-            const allOllamaModels = filterModelsBySafety(rawOllamaModels, { includeUncensored });
-            eligibleOllamaIntegration = filterOllamaIntegrationBySafety(ollamaIntegration, {
-                includeUncensored,
-                referenceModels: [...staticModels, ...rawOllamaModels]
-            });
-            this.logger.info(`Found ${allOllamaModels.length} models in Ollama database`);
-
-            // 2. Crear una lista combinada de todos los modelos únicos
-            const allModelsMap = new Map();
-            
-            // Agregar modelos estáticos
-            eligibleStaticModels.forEach(model => {
-                allModelsMap.set(
-                    model.name,
-                    attachModelProvenance(
-                        {
-                            ...model,
-                            source: 'static_database',
-                            isOllamaInstalled: false
-                        },
-                        { source: 'static_database' }
-                    )
-                );
-            });
-            
-            // Agregar modelos de Ollama (con prioridad si ya existen)
-            allOllamaModels.forEach(ollamaModel => {
-                const modelKey = this.findBestMatchingKey(ollamaModel, allModelsMap);
-                
-                if (modelKey) {
-                    // Mejorar modelo existente con datos de Ollama
-                    const existing = allModelsMap.get(modelKey);
-                    allModelsMap.set(
-                        modelKey,
-                        attachModelProvenance(
-                            {
-                                ...existing,
-                                ...this.createEnhancedModelFromOllama(ollamaModel, existing),
-                                source: 'enhanced_with_ollama'
-                            },
-                            { source: 'enhanced_with_ollama' }
-                        )
-                    );
-                } else {
-                    // Crear nuevo modelo desde datos de Ollama
-                    const newModel = attachModelProvenance(
-                        {
-                            ...this.createModelFromOllamaData(ollamaModel),
-                            source: 'ollama_database'
-                        },
-                        { source: 'ollama_database' }
-                    );
-                    allModelsMap.set(newModel.name, {
-                        ...newModel,
-                        source: 'ollama_database'
-                    });
-                }
-            });
-            
-            const allUniqueModels = Array.from(allModelsMap.values());
-            this.logger.info(`Combined total: ${allUniqueModels.length} unique models`);
+            const pool = await this.buildCombinedModelPool(staticModels, ollamaIntegration, options);
+            const allUniqueModels = pool.allUniqueModels;
+            eligibleOllamaIntegration = pool.eligibleOllamaIntegration;
 
             // 3. Usar el nuevo selector multi-objetivo
             const MultiObjectiveSelector = require('./ai/multi-objective-selector');
@@ -899,8 +928,17 @@ class LLMChecker {
     }
     
     createModelFromOllamaData(ollamaModel) {
+        const variants = Array.isArray(ollamaModel.variants) ? ollamaModel.variants : [];
+        const mainVariant = variants.find(v =>
+            v.tag === ollamaModel.model_identifier ||
+            v.tag === `${ollamaModel.model_identifier}:latest`
+        ) || variants[0] || null;
+        // The synced catalog records each tag's parameter count; the name-based
+        // guesses below are only for catalogs that lack it.
+        const variantParamsB = Number(mainVariant?.params_b) > 0 ? Number(mainVariant.params_b) : null;
+
         // Improved size detection with multiple patterns and fallbacks
-        let sizeMatch = ollamaModel.model_identifier.match(/(\d+\.?\d*)[bm]/i);
+        let sizeMatch = variantParams(variantParamsB) || ollamaModel.model_identifier.match(/(\d+\.?\d*)[bm]/i);
         
         // Try alternative patterns if first doesn't work
         if (!sizeMatch) {
@@ -925,20 +963,15 @@ class LLMChecker {
         let realStorageSize = null;
         let selectedTag = ollamaModel.model_identifier;
         let selectedDigest = null;
-        if (ollamaModel.variants && ollamaModel.variants.length > 0) {
-            // Find the main variant (usually the first one or one matching the base model name)
-            const mainVariant = ollamaModel.variants.find(v => 
-                v.tag === ollamaModel.model_identifier || 
-                v.tag === `${ollamaModel.model_identifier}:latest`
-            ) || ollamaModel.variants[0];
-            
-            if (mainVariant && mainVariant.real_size_gb) {
-                realStorageSize = mainVariant.real_size_gb;
+        if (mainVariant) {
+            const observedSize = Number(mainVariant.real_size_gb ?? mainVariant.size_gb);
+            if (Number.isFinite(observedSize) && observedSize > 0) {
+                realStorageSize = observedSize;
             }
-            if (mainVariant && mainVariant.tag) {
+            if (mainVariant.tag) {
                 selectedTag = mainVariant.tag;
             }
-            selectedDigest = mainVariant?.digest || mainVariant?.sha256 || null;
+            selectedDigest = mainVariant.digest || mainVariant.sha256 || null;
         }
         
         let category = 'medium';
@@ -961,8 +994,10 @@ class LLMChecker {
             specialization: specialization,
             frameworks: ['ollama', 'vllm', 'mlx'],
             requirements: {
-                ram: Math.ceil(sizeNum * 0.6) || 2,
-                vram: Math.ceil(sizeNum * 0.4) || 0,
+                // The weights plus ~20% for the KV cache and runtime when the
+                // download size is known.
+                ram: realStorageSize ? Math.ceil(realStorageSize * 1.2) : (Math.ceil(sizeNum * 0.6) || 2),
+                vram: realStorageSize ? Math.ceil(realStorageSize) : (Math.ceil(sizeNum * 0.4) || 0),
                 cpu_cores: Math.min(8, Math.max(2, Math.ceil(sizeNum / 2))),
                 storage: realStorageSize || Math.ceil(sizeNum * 0.7) || 1
             },
