@@ -102,6 +102,8 @@ async function testMigrationAndStorage() {
 
 function testPretrainedVariantsRankBelowInstructBuilds() {
     const selector = new DeterministicModelSelector();
+    // Compare the estimates only; the local catalog may hold measured scores.
+    selector.qualityEvals = null;
     const model = (tag) => ({
         model_identifier: tag, name: tag, paramsB: 7, family: 'qwen2.5', tags: ['coder'], pulls: 0,
         capabilities: ['coding']
