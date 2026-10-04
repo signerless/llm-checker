@@ -51,7 +51,8 @@ async function testMigrationAndStorage() {
             context_length: 131072,
             input_types: ['text', 'image'],
             digest: 'a2af6cc3eb7f',
-            blob_digest: `sha256:${'d'.repeat(64)}`
+            blob_digest: `sha256:${'d'.repeat(64)}`,
+            license: 'gemma'
         });
         database.upsertVariant({
             model_id: 'gemma3', tag: 'gemma3:1b', params_b: 1, quant: 'Q4_K_M', size_gb: 0.759,
@@ -72,6 +73,10 @@ async function testMigrationAndStorage() {
         assert.strictEqual(artifact.size_bytes, 3_800_000_000);
         assert.strictEqual(artifact.sha256, 'd'.repeat(64));
         assert.strictEqual(artifact.etag, 'a2af6cc3eb7f');
+        assert.strictEqual(artifact.license, 'gemma', 'the tag license reaches the registry');
+        assert.strictEqual(collection.repos[0].license, 'gemma', 'the model takes its most common tag license');
+        assert.strictEqual(fourB.license, 'gemma');
+        assert.strictEqual(model.license, 'gemma');
         assert.ok(artifact.modalities.includes('vision'), 'the tag accepts images');
 
         database.upsertVariant({
