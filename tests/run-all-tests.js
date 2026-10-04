@@ -35,6 +35,7 @@ const TESTS = [
     { name: 'Model registry ingestors', file: 'model-registry-ingestors.test.js', category: 'Recommendations' },
     { name: 'Registry ingestor quality', file: 'registry-ingestor-quality.test.js', category: 'Recommendations' },
     { name: 'Hugging Face registry metadata', file: 'registry-hf-metadata.test.js', category: 'Recommendations' },
+    { name: 'Docker Model Runner registry', file: 'registry-docker.test.js', category: 'Runtime' },
     { name: 'Ollama scraper parsing', file: 'ollama-scraper-parsing.test.js', category: 'Ollama' },
     { name: 'Catalog variant metadata', file: 'catalog-variant-metadata.test.js', category: 'Recommendations' },
     { name: 'Packaged snapshot refresh', file: 'packaged-snapshot-refresh.test.js', category: 'Recommendations' },

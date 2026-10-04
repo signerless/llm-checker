@@ -26,6 +26,10 @@ Unreleased — exact catalog metadata
   `hf_eval_results` source (self-reported model-card results), and LiveBench
   releases newer than the curated list are discovered automatically.
 - Ollama tags record their license from the manifest (`sync --exact`).
+- New registry source and runtime: Docker Model Runner (`docker`), from
+  Docker Hub's official `ai/` namespace, with pull/run commands and
+  format-aware hardware checks (MLX tags on Apple Silicon, vLLM tags on
+  NVIDIA).
 - Base/pretrained checkpoints rank below instruct builds; Ollama aliases and
   quantizations of one base checkpoint collapse into one recommendation.
 

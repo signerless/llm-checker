@@ -47,6 +47,15 @@ const MOE_RUNTIME_PROFILES = Object.freeze({
         offloadOverhead: 0.09,
         maxEffectiveGain: 2.30,
         notes: ['portable backend path', 'higher routing overhead', 'manual offload tuning']
+    }),
+    // Docker Model Runner serves GGUF tags with its bundled llama.cpp engine.
+    docker: Object.freeze({
+        runtime: 'docker',
+        routingOverhead: 0.20,
+        communicationOverhead: 0.14,
+        offloadOverhead: 0.09,
+        maxEffectiveGain: 2.30,
+        notes: ['llama.cpp engine in a container', 'higher routing overhead', 'manual offload tuning']
     })
 });
 
@@ -61,7 +70,9 @@ const RUNTIME_ALIASES = Object.freeze({
     mlx_lm: 'mlx',
     'llama.cpp': 'llama.cpp',
     llamacpp: 'llama.cpp',
-    llama_cpp: 'llama.cpp'
+    llama_cpp: 'llama.cpp',
+    docker: 'docker',
+    'docker-model-runner': 'docker'
 });
 
 function parseBillionsValue(rawValue) {

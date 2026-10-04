@@ -19,6 +19,8 @@ The snapshot includes:
   model publishers. Each repo's file sizes and SHA-256 hashes come from the tree
   API and its context window from `config.json`. A complete shard set is one
   artifact.
+- Docker Hub's official `ai/` models for Docker Model Runner, one artifact per
+  distinct tag digest with its exact size.
 
 Refresh cadence: weekly via `.github/workflows/update-model-db.yml`
 (`npm run sync:seed`). Set the `HF_TOKEN` repository secret to raise the

@@ -29,7 +29,7 @@ function toPositiveInt(value, fallback) {
 }
 
 async function main() {
-    const sources = readOption('sources', 'ollama,huggingface,gpt4all');
+    const sources = readOption('sources', 'ollama,huggingface,gpt4all,docker');
     const hfLimit = toPositiveInt(readOption('hf-limit', '6000'), 6000);
     const publisherLimit = toPositiveInt(readOption('publisher-limit', '500'), 500);
     const concurrency = toPositiveInt(readOption('concurrency', '4'), 4);
@@ -86,6 +86,8 @@ async function main() {
             }));
         } else if (source === 'gpt4all') {
             collections.push(...await ingestor.collectGpt4All({ limit: gpt4AllLimit }));
+        } else if (source === 'docker') {
+            collections.push(...await ingestor.collectDocker());
         } else if (source === 'ollama') {
             collections.push(...ingestor.collectOllamaFromDatabase({ limit: ollamaLimit }));
         } else {
