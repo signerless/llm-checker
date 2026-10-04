@@ -739,6 +739,16 @@ function normalizeGpt4AllEntry(entry) {
     };
 }
 
+// The catalog's count is exact when it came from the registry (15.7B for a
+// `:16b` tag). A tag that states a far larger size marks an older catalog that
+// stored one expert of a mixture (7B for `8x7b`).
+function ollamaParameterCountB(storedB, tag) {
+    const stated = Number(storedB) > 0 ? Number(storedB) : 0;
+    const fromTag = parseParamsB(tag) || 0;
+    if (stated && !(fromTag > stated * 1.5)) return stated;
+    return Math.max(stated, fromTag) || null;
+}
+
 function normalizeOllamaRows(model, variant) {
     const modelId = model.id || model.model_identifier;
     const tag = variant.tag || modelId;
@@ -808,7 +818,7 @@ function normalizeOllamaRows(model, variant) {
             format: 'ollama',
             quantization: variant.quant || inferQuantization(tag),
             precision: inferPrecision(variant.quant, tag),
-            parameter_count_b: Math.max(Number(variant.params_b) || 0, parseParamsB(tag) || 0) || null,
+            parameter_count_b: ollamaParameterCountB(variant.params_b, tag),
             active_parameter_count_b: null,
             size_bytes: sizeBytes,
             size_gb: sizeBytes ? bytesToGB(sizeBytes) : (Number(variant.size_gb) || null),
@@ -827,6 +837,7 @@ function normalizeOllamaRows(model, variant) {
             updated_at: model.updated_at || model.last_updated || '',
             metadata: {
                 input_types: variant.input_types || '["text"]',
+                aliases: Array.isArray(variant.aliases) && variant.aliases.length ? variant.aliases : undefined,
                 is_moe: Boolean(variant.is_moe),
                 expert_count: variant.expert_count || null,
                 description: model.description || ''
@@ -1162,7 +1173,35 @@ class RegistryIngestor {
             LIMIT ?
         `, [limit]);
 
-        return rows.map((row) => {
+        // Tags sharing a manifest digest are one download (`llama3.1:latest`,
+        // `llama3.1:8b`, `llama3.1:8b-instruct-q4_K_M`). Keep the most explicit
+        // short name and record the others as aliases.
+        const preferred = (a, b) => {
+            const latest = (row) => /:latest$/.test(row.tag);
+            if (latest(a) !== latest(b)) return latest(a) ? b : a;
+            return a.tag.length <= b.tag.length ? a : b;
+        };
+        const byDigest = new Map();
+        const unique = [];
+        for (const row of rows) {
+            if (!row.digest) {
+                unique.push({ row, aliases: [] });
+                continue;
+            }
+            const key = `${row.id}|${row.digest}`;
+            const entry = byDigest.get(key);
+            if (!entry) {
+                const created = { row, aliases: [] };
+                byDigest.set(key, created);
+                unique.push(created);
+            } else {
+                const keep = preferred(entry.row, row);
+                entry.aliases.push(keep === row ? entry.row.tag : row.tag);
+                entry.row = keep;
+            }
+        }
+
+        return unique.map(({ row, aliases }) => {
             const model = {
                 id: row.id,
                 name: row.name,
@@ -1185,7 +1224,8 @@ class RegistryIngestor {
                 expert_count: row.expert_count,
                 digest: row.digest,
                 size_bytes: row.size_bytes,
-                blob_sha256: row.blob_sha256
+                blob_sha256: row.blob_sha256,
+                aliases: aliases.sort()
             };
             return normalizeOllamaRows(model, variant);
         });

@@ -73,10 +73,39 @@ async function testMigrationAndStorage() {
         assert.strictEqual(artifact.sha256, 'd'.repeat(64));
         assert.strictEqual(artifact.etag, 'a2af6cc3eb7f');
         assert.ok(artifact.modalities.includes('vision'), 'the tag accepts images');
+
+        database.upsertVariant({
+            model_id: 'gemma3', tag: 'gemma3:latest', params_b: 4.3, quant: 'Q4_K_M', size_gb: 3.539,
+            context_length: 131072, input_types: ['text', 'image'], digest: 'a2af6cc3eb7f'
+        });
+        database.upsertVariant({
+            model_id: 'gemma3', tag: 'gemma3:4b-it-q4_K_M', params_b: 4.3, quant: 'Q4_K_M', size_gb: 3.539,
+            context_length: 131072, input_types: ['text', 'image'], digest: 'a2af6cc3eb7f'
+        });
+        const artifacts = new RegistryIngestor({ database }).collectOllamaFromDatabase({ limit: 10 })
+            .map((entry) => entry.artifacts[0]);
+        const sameDigest = artifacts.filter((entry) => entry.etag === 'a2af6cc3eb7f');
+        assert.strictEqual(sameDigest.length, 1, 'aliases of one download are one artifact');
+        assert.strictEqual(sameDigest[0].artifact_name, 'gemma3:4b', 'the short explicit tag is kept');
+        assert.deepStrictEqual(sameDigest[0].metadata.aliases, ['gemma3:4b-it-q4_K_M', 'gemma3:latest']);
+        assert.strictEqual(sameDigest[0].parameter_count_b, 4.3, 'the exact count beats the nominal 4b');
         database.close();
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+}
+
+function testPretrainedVariantsRankBelowInstructBuilds() {
+    const selector = new DeterministicModelSelector();
+    const model = (tag) => ({
+        model_identifier: tag, name: tag, paramsB: 7, family: 'qwen2.5', tags: ['coder'], pulls: 0,
+        capabilities: ['coding']
+    });
+    const base = selector.calculateQualityPrior(model('qwen2.5-coder:7b-base-q4_K_M'), 'Q4_K_M', 'coding');
+    const instruct = selector.calculateQualityPrior(model('qwen2.5-coder:7b-instruct-q4_K_M'), 'Q4_K_M', 'coding');
+    assert.strictEqual(instruct - base, 15, 'a base coder checkpoint is not an assistant');
+    assert.strictEqual(selector.isPretrainedVariant({ model_identifier: 'nomic-embed-text', capabilities: ['embeddings'] }), false,
+        'embedding models are not base checkpoints');
 }
 
 function testSelectorReadsPerTagMetadata() {
@@ -103,6 +132,7 @@ function testSelectorReadsPerTagMetadata() {
 async function run() {
     await testMigrationAndStorage();
     testSelectorReadsPerTagMetadata();
+    testPretrainedVariantsRankBelowInstructBuilds();
     console.log('catalog-variant-metadata.test.js: OK');
 }
 

@@ -84,6 +84,31 @@ function writeDeterministicOllamaCache(homeDir) {
     );
 }
 
+// The CLI prefers the SQLite catalog, which would otherwise be copied from the
+// packaged snapshot and make the ranking depend on its contents. A catalog
+// synced "now" is newer than any packaged snapshot, so it is kept as is.
+async function writeDeterministicCatalogDatabase(homeDir) {
+    const ModelDatabase = require('../src/data/model-database');
+    const database = new ModelDatabase({
+        dbPath: path.join(homeDir, '.llm-checker', 'models.db'),
+        seedDbPath: path.join(homeDir, 'missing-seed.db'),
+        disableRegistrySeedImport: true
+    });
+    await database.initialize();
+    database.upsertModel({ id: 'qwen2.5-coder', name: 'qwen2.5-coder', capabilities: ['coding'], pulls: 1000 });
+    database.upsertVariant({
+        model_id: 'qwen2.5-coder', tag: 'qwen2.5-coder:7b', params_b: 7.6, quant: 'Q4_K_M',
+        size_gb: 4.4, context_length: 32768, input_types: ['text']
+    });
+    database.upsertModel({ id: 'llama3.2', name: 'llama3.2', capabilities: ['chat'], pulls: 1000 });
+    database.upsertVariant({
+        model_id: 'llama3.2', tag: 'llama3.2:3b', params_b: 3.2, quant: 'Q4_K_M',
+        size_gb: 1.9, context_length: 131072, input_types: ['text']
+    });
+    database.setLastSync(new Date().toISOString());
+    database.close();
+}
+
 function copyFixtureSuite(tempDir) {
     const fixturePath = path.join(DOC_FIXTURES_DIR, 'sample-suite.jsonl');
     const suitePath = path.join(tempDir, 'sample-suite.jsonl');
@@ -91,7 +116,7 @@ function copyFixtureSuite(tempDir) {
     return suitePath;
 }
 
-function run() {
+async function run() {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-calibration-e2e-'));
     const homeDir = path.join(tempDir, 'home');
     fs.mkdirSync(homeDir, { recursive: true });
@@ -99,6 +124,7 @@ function run() {
     try {
         const suitePath = copyFixtureSuite(tempDir);
         writeDeterministicOllamaCache(homeDir);
+        await writeDeterministicCatalogDatabase(homeDir);
 
         const resultPath = path.join(tempDir, 'calibration-result.json');
         const policyPath = path.join(tempDir, 'calibration-policy.yaml');
@@ -182,13 +208,11 @@ function run() {
 }
 
 if (require.main === module) {
-    try {
-        run();
-    } catch (error) {
+    run().catch((error) => {
         console.error('calibration-e2e-integration.test.js: FAILED');
         console.error(error);
         process.exit(1);
-    }
+    });
 }
 
 module.exports = { run };

@@ -141,6 +141,16 @@ function shardInstallCommand(row, shardedFile) {
     return `hf download ${row.repo_id}`;
 }
 
+// GGUF/MLX/AWQ repos of one checkpoint name it as their quantized base, from
+// the Hub's lineage metadata or the `base_model:quantized:` tag.
+function quantizedBaseModel(repoMetadata = {}, repoTags = []) {
+    if (repoMetadata.base_relation === 'quantized' && repoMetadata.base_model) {
+        return String(repoMetadata.base_model).toLowerCase();
+    }
+    const tag = toArray(repoTags).find((value) => /^base_model:quantized:/i.test(String(value)));
+    return tag ? String(tag).replace(/^base_model:quantized:/i, '').toLowerCase() : null;
+}
+
 function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '') {
     const runtimes = toArray(runtimeSupport).map((runtime) => String(runtime).toLowerCase());
     const normalizedFormat = String(format || '').toLowerCase();
@@ -239,6 +249,7 @@ function artifactToSelectorModel(row) {
     return {
         name: displayName,
         model_name: displayName,
+        baseModel: quantizedBaseModel(repoMetadata, repoTags),
         model_identifier: identifier,
         family: inferFamily(`${displayName} ${identifier}`),
         paramsB,
@@ -311,6 +322,9 @@ const SOURCE_DIVERSITY_FLOOR = 55;
 // `layers-N.safetensors` shard of one HF repo).
 function modelDiversityKey(candidate) {
     const meta = (candidate && candidate.meta) || {};
+    // Every quantization of one base checkpoint is the same model, whichever
+    // repo publishes it (unsloth, bartowski, lmstudio-community, ...).
+    if (meta.baseModel) return `base|${meta.baseModel}`;
     const name = String(meta.name || meta.model_identifier || '')
         .toLowerCase()
         .replace(/:.*$/, '')   // drop an ollama :tag
