@@ -5378,6 +5378,7 @@ program
     .description('Sync the model database from Ollama registry (scrapes all models)')
     .option('-f, --force', 'Force full sync even if recent data exists')
     .option('--incremental', 'Only sync new and updated models')
+    .option('--exact', 'Read exact sizes and quantizations from registry.ollama.ai (two requests per distinct tag)')
     .option('-q, --quiet', 'Suppress progress output')
     .action(async (options) => {
         if (!options.quiet) showAsciiArt('sync');
@@ -5387,6 +5388,7 @@ program
 
         try {
             const syncManager = new SyncManager({
+                exact: Boolean(options.exact),
                 onProgress: (info) => {
                     if (!options.quiet && spinner) {
                         if (info.phase === 'complete') {
@@ -5482,6 +5484,9 @@ program
     .option('--gpt4all-limit <n>', 'Maximum GPT4All entries to ingest', '1000')
     .option('--query <text>', 'Hugging Face search query')
     .option('--task <task>', 'Hugging Face task/filter, for example text-generation or text-embeddings-inference')
+    .option('--official', 'Also sweep the catalogs of official Hugging Face model publishers')
+    .option('--publisher-limit <n>', 'Maximum repos per official publisher with --official', '500')
+    .option('--deep', 'Fetch exact Hugging Face file sizes, hashes and config.json context windows (one or two requests per repo)')
     .option('--dry-run', 'Fetch and normalize without writing to the database')
     .option('-q, --quiet', 'Suppress progress output')
     .option('-j, --json', 'Output as JSON')
@@ -5514,6 +5519,10 @@ program
                 gpt4allLimit: parsePositiveNumberOption(options.gpt4allLimit, 1000),
                 query: options.query,
                 task: options.task,
+                publishers: Boolean(options.official),
+                publisherLimit: parsePositiveNumberOption(options.publisherLimit, 500),
+                fileSizes: Boolean(options.deep),
+                configs: Boolean(options.deep),
                 dryRun: Boolean(options.dryRun)
             });
             const stats = options.dryRun ? null : database.getRegistryStats();

@@ -766,7 +766,9 @@ class DeterministicModelSelector {
         if (baseText.includes('instruct')) derivedTags.add('instruct');
         if (baseText.includes('chat') || baseText.includes('assistant') || baseText.includes('conversation')) derivedTags.add('chat');
         if (baseText.includes('embed')) derivedTags.add('embedding');
-        if (baseText.includes('vision') || baseText.includes('vl') || baseText.includes('multimodal') || baseText.includes('image')) derivedTags.add('vision');
+        // A bare 'vl' substring matched words such as "level" and "vllm".
+        if (baseText.includes('vision') || /(?:^|[^a-z])vlm?(?:[^a-z]|$)|\dvl(?:[^a-z]|$)/.test(baseText) ||
+            baseText.includes('multimodal') || baseText.includes('image')) derivedTags.add('vision');
         if (baseText.includes('reason') || baseText.includes('math') || baseText.includes('logic')) derivedTags.add('reasoning');
         if (baseText.includes('creative') || baseText.includes('story') || baseText.includes('roleplay')) derivedTags.add('creative');
 
@@ -776,6 +778,11 @@ class DeterministicModelSelector {
         if (ollamaModel.primary_category === 'multimodal') derivedTags.add('vision');
         if (ollamaModel.primary_category === 'reasoning') derivedTags.add('reasoning');
         if (ollamaModel.primary_category === 'creative') derivedTags.add('creative');
+
+        // When the catalog records image input per tag (gemma3:1b is text-only,
+        // gemma3:4b is not), that beats model-level hints.
+        const tagLevelInputs = variants.some((variant) =>
+            Array.isArray(variant.input_types) && variant.input_types.map(String).some((type) => /^(image|vision)$/i.test(type)));
 
         const hasConcreteVariants = variants.some((variant) => this.variantHasConcreteSizeOrParams(variant));
         const selectableVariants = hasConcreteVariants
@@ -790,7 +797,13 @@ class DeterministicModelSelector {
             const moeMetadata = this.extractMoEMetadata(ollamaModel, variant, paramsB, baseText);
 
             const variantSizeGB = this.extractVariantSizeGB(variant, paramsB);
-            const modalities = this.inferModalities(ollamaModel, variantTag);
+            const modalities = tagLevelInputs
+                ? (variant.input_types.map(String).some((type) => /^(image|vision)$/i.test(type)) ? ['text', 'vision'] : ['text'])
+                : this.inferModalities(ollamaModel, variantTag);
+            // Context windows differ per tag (gemma3:1b 32K, gemma3:4b 128K).
+            const variantContextLength = Number(variant.context_length) > 0
+                ? this.parseContextLength(variant.context_length)
+                : contextLength;
             const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
             const sizeByQuant = {};
 
@@ -830,7 +843,7 @@ class DeterministicModelSelector {
                 active_params_b: normalizedActiveParamsB,
                 expert_count: normalizedExpertCount,
                 experts_active_per_token: normalizedExpertsActive,
-                ctxMax: contextLength,
+                ctxMax: variantContextLength,
                 quant,
                 sizeGB: variantSizeGB,
                 modalities,

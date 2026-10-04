@@ -12,6 +12,7 @@ class SyncManager {
         this.scraper = options.scraper || new EnhancedOllamaScraper({
             concurrency: options.concurrency || 5,
             rateLimitMs: options.rateLimitMs || 200,
+            exact: Boolean(options.exact),
             onProgress: options.onProgress || this.defaultOnProgress.bind(this),
             onError: options.onError || console.error
         });
@@ -66,6 +67,7 @@ class SyncManager {
             });
 
             this.db.reattachSpeedBenchmarks();
+            this.db.rebuildOllamaRegistry();
 
             // Update sync timestamp
             this.db.setLastSync(new Date().toISOString());
@@ -131,11 +133,11 @@ class SyncManager {
         for (const { id } of newModels) {
             try {
                 const model = await this.scraper.scrapeModelDetails(id);
-                if (model) {
+                const variants = model ? await this.scraper.scrapeModelTags(id) : [];
+                // Cloud-only models have no locally runnable tag.
+                if (model && variants.length > 0) {
                     this.db.upsertModel(model);
                     added++;
-
-                    const variants = await this.scraper.scrapeModelTags(id);
                     for (const variant of variants) {
                         this.db.upsertVariant(variant);
                     }
@@ -180,6 +182,8 @@ class SyncManager {
                 this.onError(`Error updating ${id}: ${error.message}`);
             }
         }
+
+            if (added > 0 || updated > 0) this.db.rebuildOllamaRegistry();
 
             // Update sync timestamp
             this.db.setLastSync(new Date().toISOString());
