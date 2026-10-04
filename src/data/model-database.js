@@ -86,6 +86,7 @@ class ModelDatabase {
             return;
         }
         this.createSchema();
+        this.migrateVariantColumns();
         this.migrateSpeedBenchmarks();
         this.initialized = true;
         if (!this.disableRegistrySeedImport) {
@@ -128,6 +129,9 @@ class ModelDatabase {
                 is_moe INTEGER DEFAULT 0,
                 expert_count INTEGER,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                digest TEXT,
+                size_bytes INTEGER,
+                blob_sha256 TEXT,
                 FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE,
                 UNIQUE(model_id, tag)
             );
@@ -263,6 +267,23 @@ class ModelDatabase {
         } else {
             this.db.run(schema);
             this.saveToFile();
+        }
+    }
+
+    /**
+     * Older databases predate the per-tag manifest digest and exact byte size.
+     * The columns are nullable, so adding them keeps every existing row valid.
+     */
+    migrateVariantColumns() {
+        const existing = new Set(this.all('PRAGMA table_info(variants)').map((column) => column.name));
+        const columns = [['digest', 'TEXT'], ['size_bytes', 'INTEGER'], ['blob_sha256', 'TEXT']]
+            .filter(([name]) => !existing.has(name));
+        if (columns.length === 0) return;
+        this.beginBatch();
+        try {
+            for (const [name, type] of columns) this.run(`ALTER TABLE variants ADD COLUMN ${name} ${type}`);
+        } finally {
+            this.endBatch();
         }
     }
 
@@ -492,8 +513,9 @@ class ModelDatabase {
      */
     upsertVariant(variant) {
         const sql = `
-            INSERT INTO variants (model_id, tag, params_b, quant, size_gb, context_length, input_types, is_moe, expert_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO variants (model_id, tag, params_b, quant, size_gb, context_length, input_types, is_moe, expert_count,
+                digest, size_bytes, blob_sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(model_id, tag) DO UPDATE SET
                 params_b = excluded.params_b,
                 quant = excluded.quant,
@@ -501,19 +523,28 @@ class ModelDatabase {
                 context_length = excluded.context_length,
                 input_types = excluded.input_types,
                 is_moe = excluded.is_moe,
-                expert_count = excluded.expert_count
+                expert_count = excluded.expert_count,
+                digest = excluded.digest,
+                size_bytes = excluded.size_bytes,
+                blob_sha256 = excluded.blob_sha256
         `;
 
+        const sizeBytes = Number(variant.size_bytes);
         this.run(sql, [
             variant.model_id,
             variant.tag,
             variant.params_b || null,
             variant.quant || null,
             variant.size_gb || null,
-            variant.context_length || 4096,
+            // An unknown context window stays unknown; consumers apply their
+            // own conservative default instead of reading a stored guess.
+            Number(variant.context_length) > 0 ? Math.round(Number(variant.context_length)) : null,
             JSON.stringify(variant.input_types || ['text']),
             variant.is_moe ? 1 : 0,
-            variant.expert_count || null
+            variant.expert_count || null,
+            variant.digest || null,
+            Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : null,
+            variant.blob_digest || variant.blob_sha256 || null
         ]);
     }
 
@@ -823,12 +854,37 @@ class ModelDatabase {
         };
     }
 
+    /**
+     * A cheap identity for the packaged snapshot: its size plus the SQLite
+     * header's change counter and page count. npm resets file times, so the
+     * modification time cannot tell two releases apart.
+     */
+    packagedSnapshotFingerprint() {
+        const header = Buffer.alloc(32);
+        const fd = fs.openSync(this.seedDbPath, 'r');
+        try {
+            fs.readSync(fd, header, 0, 32, 0);
+        } finally {
+            fs.closeSync(fd);
+        }
+        return `${fs.statSync(this.seedDbPath).size}:${header.subarray(24, 32).toString('hex')}`;
+    }
+
+    /**
+     * Bring an existing user database up to a newer packaged snapshot. Only the
+     * user's first run used to receive the snapshot, so upgrades never saw a
+     * refreshed catalog. Each part is replaced only when the snapshot is newer
+     * than the local copy, so a user's own `sync` / `registry-sync` wins, and
+     * speed measurements are kept.
+     */
     async seedRegistryFromPackagedSnapshotIfNeeded() {
         if (!this.seedDbPath || !fs.existsSync(this.seedDbPath)) return false;
         if (path.resolve(this.dbPath) === path.resolve(this.seedDbPath)) return false;
 
+        const fingerprint = this.packagedSnapshotFingerprint();
+        const recorded = this.get(`SELECT value FROM sync_meta WHERE key = 'packaged_snapshot'`)?.value;
         const currentArtifacts = this.get(`SELECT COUNT(*) as count FROM model_artifacts`)?.count || 0;
-        if (currentArtifacts > 0) return false;
+        if (recorded === fingerprint && currentArtifacts > 0) return false;
 
         const seed = new ModelDatabase({
             dbPath: this.seedDbPath,
@@ -839,53 +895,109 @@ class ModelDatabase {
         });
 
         await seed.initialize();
+        let imported = false;
         try {
-            const seedArtifacts = seed.get(`SELECT COUNT(*) as count FROM model_artifacts`)?.count || 0;
-            if (seedArtifacts === 0) return false;
-
-            const sources = seed.all(`SELECT * FROM registry_sources`);
-            const repos = seed.all(`SELECT * FROM registry_repos`);
-            const artifacts = seed.all(`SELECT * FROM model_artifacts`);
-
             this.beginBatch();
             try {
-                for (const source of sources) {
-                    this.upsertRegistrySource({
-                        ...source,
-                        metadata: this.parseJson(source.metadata, {})
-                    });
+                const seedLastSync = seed.getLastSync();
+                const localLastSync = this.getLastSync();
+                const catalogIsNewer = Boolean(seedLastSync) && (!localLastSync || String(seedLastSync) > String(localLastSync));
+                if (catalogIsNewer && (seed.getModelCount() > 0)) {
+                    this.importOllamaCatalog(seed);
+                    imported = true;
                 }
 
-                for (const repo of repos) {
-                    this.upsertRegistryRepo({
-                        ...repo,
-                        gated: Boolean(repo.gated),
-                        requires_auth: Boolean(repo.requires_auth),
-                        tags: this.parseJson(repo.tags, []),
-                        tasks: this.parseJson(repo.tasks, []),
-                        modalities: this.parseJson(repo.modalities, ['text']),
-                        metadata: this.parseJson(repo.metadata, {})
-                    });
+                const localSources = new Map(this.all(`SELECT id, last_ingested_at FROM registry_sources`)
+                    .map((row) => [row.id, row.last_ingested_at]));
+                for (const source of seed.all(`SELECT * FROM registry_sources`)) {
+                    // Ollama registry rows are derived from the local catalog below.
+                    if (source.id === 'ollama') continue;
+                    const hasRows = this.get(`SELECT 1 AS present FROM model_artifacts WHERE source_id = ? LIMIT 1`, [source.id]);
+                    const local = localSources.get(source.id);
+                    if (hasRows && local && String(local) >= String(source.last_ingested_at || '')) continue;
+                    this.importRegistrySource(seed, source);
+                    imported = true;
                 }
 
-                for (const artifact of artifacts) {
-                    this.upsertModelArtifact({
-                        ...artifact,
-                        gated: Boolean(artifact.gated),
-                        requires_auth: Boolean(artifact.requires_auth),
-                        runtime_support: this.parseJson(artifact.runtime_support, []),
-                        tasks: this.parseJson(artifact.tasks, []),
-                        modalities: this.parseJson(artifact.modalities, ['text']),
-                        metadata: this.parseJson(artifact.metadata, {})
-                    });
+                const hasOllamaArtifacts = this.get(`SELECT 1 AS present FROM model_artifacts WHERE source_id = 'ollama' LIMIT 1`);
+                if ((catalogIsNewer || !hasOllamaArtifacts) && this.getModelCount() > 0) {
+                    this.rebuildOllamaRegistry();
+                    imported = true;
                 }
+
+                this.run(`
+                    INSERT INTO sync_meta (key, value, updated_at)
+                    VALUES ('packaged_snapshot', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+                `, [fingerprint]);
             } finally {
                 this.endBatch();
             }
-
-            return true;
+            return imported;
         } finally {
             seed.close();
+        }
+    }
+
+    importOllamaCatalog(seed) {
+        this.run('UPDATE benchmarks SET variant_id = NULL');
+        this.run('DELETE FROM variants');
+        this.run('DELETE FROM models');
+        for (const model of seed.all(`SELECT * FROM models`)) {
+            this.upsertModel({ ...model, capabilities: this.parseJson(model.capabilities, []) });
+        }
+        for (const variant of seed.all(`SELECT * FROM variants`)) {
+            this.upsertVariant({
+                ...variant,
+                input_types: this.parseJson(variant.input_types, ['text']),
+                blob_sha256: variant.blob_sha256 || null
+            });
+        }
+        this.reattachSpeedBenchmarks();
+        this.setLastSync(seed.getLastSync());
+    }
+
+    importRegistrySource(seed, source) {
+        this.clearRegistrySource(source.id);
+        this.upsertRegistrySource({ ...source, metadata: this.parseJson(source.metadata, {}) });
+        for (const repo of seed.all(`SELECT * FROM registry_repos WHERE source_id = ?`, [source.id])) {
+            this.upsertRegistryRepo({
+                ...repo,
+                gated: Boolean(repo.gated),
+                requires_auth: Boolean(repo.requires_auth),
+                tags: this.parseJson(repo.tags, []),
+                tasks: this.parseJson(repo.tasks, []),
+                modalities: this.parseJson(repo.modalities, ['text']),
+                metadata: this.parseJson(repo.metadata, {})
+            });
+        }
+        for (const artifact of seed.all(`SELECT * FROM model_artifacts WHERE source_id = ?`, [source.id])) {
+            this.upsertModelArtifact({
+                ...artifact,
+                gated: Boolean(artifact.gated),
+                requires_auth: Boolean(artifact.requires_auth),
+                runtime_support: this.parseJson(artifact.runtime_support, []),
+                tasks: this.parseJson(artifact.tasks, []),
+                modalities: this.parseJson(artifact.modalities, ['text']),
+                metadata: this.parseJson(artifact.metadata, {})
+            });
+        }
+    }
+
+    /**
+     * The registry's Ollama rows mirror the local Ollama catalog. A catalog
+     * refresh clears them, so they are rebuilt here; otherwise registry-based
+     * recommendations lose every Ollama model until the next registry-sync.
+     */
+    rebuildOllamaRegistry() {
+        const { RegistryIngestor } = require('./registry-ingestors');
+        const ingestor = new RegistryIngestor({ database: this });
+        this.beginBatch();
+        try {
+            this.clearRegistrySource('ollama');
+            ingestor.storeCollections(ingestor.collectOllamaFromDatabase({ limit: 1e9 }));
+        } finally {
+            this.endBatch();
         }
     }
 
@@ -1148,7 +1260,9 @@ class ModelDatabase {
                 context_length: variant.context_length,
                 input_types: Array.isArray(inputTypes) ? inputTypes : ['text'],
                 is_moe: Boolean(variant.is_moe),
-                expert_count: variant.expert_count
+                expert_count: variant.expert_count,
+                digest: variant.digest || null,
+                size_bytes: variant.size_bytes || null
             });
             variantsByModel.set(variant.model_id, list);
         }

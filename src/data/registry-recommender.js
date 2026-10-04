@@ -106,6 +106,13 @@ function groupWeightShards(rows) {
     const groups = new Map();
     const output = [];
     for (const row of rows) {
+        // Current ingestors store one row per complete shard set; older
+        // databases still hold one row per shard and are grouped below.
+        const ingestedShards = row.metadata?.shard_files;
+        if (Array.isArray(ingestedShards) && ingestedShards.length > 0) {
+            output.push({ ...row, shard_files: ingestedShards, shards_complete: true });
+            continue;
+        }
         const file = row.filename || row.artifact_name || '';
         const match = file.match(/^(.*)-(\d{5,})-of-(\d{5,})\.(safetensors|bin|gguf)$/i);
         if (!match) { output.push(row); continue; }
@@ -124,6 +131,14 @@ function groupWeightShards(rows) {
             size_gb: sizes.every(size => size > 0 && Number.isFinite(size)) ? sizes.reduce((a, b) => a + b, 0) : null });
     }
     return output;
+}
+
+// A GGUF shard set ingested as one artifact carries an `--include` command for
+// just its files; other shard sets need the whole repo (config and tokenizer).
+function shardInstallCommand(row, shardedFile) {
+    if (!shardedFile || !row.repo_id) return row.install_command || '';
+    if (row.format === 'gguf' && row.metadata?.shard_files && row.install_command) return row.install_command;
+    return `hf download ${row.repo_id}`;
 }
 
 function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '') {
@@ -242,7 +257,7 @@ function artifactToSelectorModel(row) {
         version: shardedFile ? (row.repo_id || identifier) : (row.artifact_name || row.filename || identifier),
         license: row.license || 'unknown',
         digest: row.sha256 || row.etag || 'unknown',
-        installCommand: shardedFile && row.repo_id ? `hf download ${row.repo_id}` : (row.install_command || ''),
+        installCommand: shardInstallCommand(row, shardedFile),
         downloadUrl: shardedFile ? (row.repo_url || '') : (row.download_url || ''),
         preferredRuntime,
         artifact: row,
@@ -253,7 +268,7 @@ function artifactToSelectorModel(row) {
             license: row.license || 'unknown',
             digest: row.sha256 || row.etag || 'unknown',
             download_url: shardedFile ? (row.repo_url || '') : (row.download_url || ''),
-            install_command: shardedFile && row.repo_id ? `hf download ${row.repo_id}` : (row.install_command || ''),
+            install_command: shardInstallCommand(row, shardedFile),
             repo_url: row.repo_url || ''
         }
     };
