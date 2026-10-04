@@ -134,7 +134,36 @@ function testSelectorReadsPerTagMetadata() {
     assert.deepStrictEqual(byTag['gemma3:4b'].modalities, ['text', 'vision']);
 }
 
+function testLegacyCommandsReadCatalogFacts() {
+    const catalogModel = {
+        model_identifier: 'gemma3', model_name: 'gemma3',
+        variants: [{ tag: 'gemma3:latest', params_b: 4.3, quant: 'Q4_K_M', size_gb: 3.1, context_length: 131072,
+            input_types: ['text', 'image'], digest: 'a2af6cc3eb7f' }]
+    };
+
+    const LLMChecker = require('../src/index');
+    const checkModel = new LLMChecker({ verbose: false }).createModelFromOllamaData(catalogModel);
+    assert.strictEqual(checkModel.size, '4.3B', 'check uses the tag parameter count, not a family guess of 7B');
+    assert.strictEqual(checkModel.requirements.storage, 3.1);
+
+    const AICheckSelector = require('../src/models/ai-check-selector');
+    const aiCheckModel = new AICheckSelector().convertOllamaModelToDeterministicFormat(catalogModel);
+    assert.deepStrictEqual(
+        [aiCheckModel.paramsB, aiCheckModel.sizeGB, aiCheckModel.ctxMax, aiCheckModel.modalities],
+        [4.3, 3.1, 131072, ['text', 'vision']], 'ai-check reads the default tag'
+    );
+
+    const IntelligentSelector = require('../src/ai/intelligent-selector');
+    const Selector = IntelligentSelector.IntelligentModelSelector || IntelligentSelector;
+    const selector = new Selector();
+    selector.setCatalogFacts(new Map([['gemma3:latest', { params_b: 4.3, size_gb: 3.1, context_length: 131072, quant: 'Q4_K_M' }]]));
+    const aiRunModel = selector.getModelInfo('gemma3');
+    assert.deepStrictEqual([aiRunModel.parameters, aiRunModel.size_gb, aiRunModel.context_length, aiRunModel.source],
+        [4.3, 3.1, 131072, 'catalog'], 'ai-run reads the catalog instead of estimating 7B');
+}
+
 async function run() {
+    testLegacyCommandsReadCatalogFacts();
     await testMigrationAndStorage();
     testSelectorReadsPerTagMetadata();
     testPretrainedVariantsRankBelowInstructBuilds();

@@ -505,7 +505,44 @@ class IntelligentModelSelector {
         };
     }
 
+    /**
+     * Facts from the synced catalog, keyed by tag (`qwen3:8b`) and by model
+     * (`qwen3`, its default tag). They replace this file's hand-written sizes,
+     * which cover 14 old models, and the name-based estimate for the rest.
+     */
+    setCatalogFacts(facts) {
+        this.catalogFacts = facts instanceof Map ? facts : new Map();
+    }
+
+    lookupCatalogFacts(modelId) {
+        if (!this.catalogFacts || !modelId) return null;
+        const id = String(modelId).toLowerCase();
+        return this.catalogFacts.get(id) || this.catalogFacts.get(`${id}:latest`) ||
+            this.catalogFacts.get(id.replace(/:latest$/, '')) || null;
+    }
+
     getModelInfo(modelId) {
+        const curated = this.getCuratedModelInfo(modelId);
+        const facts = this.lookupCatalogFacts(modelId);
+        if (!facts) return curated || this.estimateModelInfo(modelId);
+
+        const base = curated || this.estimateModelInfo(modelId);
+        const parameters = facts.params_b || base.parameters;
+        const sizeGB = facts.size_gb || base.size_gb;
+        return {
+            ...base,
+            id: modelId,
+            size_gb: sizeGB,
+            parameters,
+            memory_requirement: facts.size_gb ? facts.size_gb * 1.2 : base.memory_requirement,
+            context_length: facts.context_length || base.context_length,
+            quantization: facts.quant || base.quantization,
+            inference_speed: parameters > 13 ? 'slow' : parameters > 7 ? 'medium' : 'fast',
+            source: 'catalog'
+        };
+    }
+
+    getCuratedModelInfo(modelId) {
         // Direct match
         if (this.modelDatabase[modelId]) {
             return { ...this.modelDatabase[modelId], id: modelId };
@@ -521,8 +558,7 @@ class IntelligentModelSelector {
             }
         }
 
-        // Fallback - estimate from model name
-        return this.estimateModelInfo(modelId);
+        return null;
     }
 
     estimateModelInfo(modelId) {

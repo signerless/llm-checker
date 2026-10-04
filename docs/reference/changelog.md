@@ -32,6 +32,12 @@ Unreleased — exact catalog metadata
   NVIDIA).
 - Base/pretrained checkpoints rank below instruct builds; Ollama aliases and
   quantizations of one base checkpoint collapse into one recommendation.
+- `check` on Apple Silicon ranks the synced catalog like other platforms
+  instead of only the 26 static definitions; `check`, `ai-check` and `ai-run`
+  read each model's real parameter count, size and context window instead of
+  guessing from its name. The curated fallback catalog was refreshed from
+  registry data (wrong families and non-existent tags fixed), and the unused
+  `scripts/update-models.js`, which injected invented models, was removed.
 
 3.8.1 — ModelVet attribution (2026-08-04)
 -------------------------------------------
