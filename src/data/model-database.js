@@ -1406,6 +1406,17 @@ class ModelDatabase {
         this.run(`DELETE FROM registry_sources`);
     }
 
+    /** Rebuild the file without free pages; used when packaging the snapshot. */
+    vacuum() {
+        if (this.readOnly || this._batchDepth > 0) throw new Error('VACUUM needs a writable database outside a batch');
+        if (this.useNativeSqlite) {
+            this.db.exec('VACUUM');
+        } else {
+            this.db.run('VACUUM');
+            this.saveToFile();
+        }
+    }
+
     /**
      * Close database connection
      */

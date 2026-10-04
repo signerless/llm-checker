@@ -74,8 +74,8 @@ function testExactMetadataAndLineage() {
         config_info: { context_length: 40960 },
         siblings: [1, 2, 3].map((index) => ({
             rfilename: `model-0000${index}-of-00003.safetensors`,
-            size: 1e9,
-            lfs: { oid: 'a'.repeat(64), size: 1e9 }
+            size: 5.5e9,
+            lfs: { oid: 'a'.repeat(64), size: 5.5e9 }
         })).concat([
             { rfilename: 'pytorch_model-00001-of-00001.bin', size: 3e9 },
             { rfilename: 'original/consolidated.00.pth', size: 3e9 },
@@ -87,7 +87,7 @@ function testExactMetadataAndLineage() {
     assert.strictEqual(artifact.parameter_count_b, 8.191, 'safetensors header gives exact parameters');
     assert.strictEqual(artifact.precision, 'BF16', 'dominant dtype gives the precision');
     assert.strictEqual(artifact.context_length, 40960);
-    assert.strictEqual(artifact.size_bytes, 3e9, 'shard sizes are summed');
+    assert.strictEqual(artifact.size_bytes, 16.5e9, 'shard sizes are summed');
     assert.deepStrictEqual(artifact.metadata.shard_files, [
         'model-00001-of-00003.safetensors', 'model-00002-of-00003.safetensors', 'model-00003-of-00003.safetensors'
     ]);
@@ -98,7 +98,7 @@ function testExactMetadataAndLineage() {
 
     const [row] = groupWeightShards([{ ...artifact, size_gb: artifact.size_gb }]);
     const selectorModel = artifactToSelectorModel({ ...row, repo_metadata: collection.repos[0].metadata });
-    assert.ok(selectorModel.sizeGB > 2.7 && selectorModel.sizeGB < 2.9, 'an ingested shard set supplies an observed size');
+    assert.ok(selectorModel.sizeGB > 15.3 && selectorModel.sizeGB < 15.4, 'an ingested shard set supplies an observed size');
     assert.strictEqual(selectorModel.artifact.shard_files.length, 3);
 }
 
@@ -145,6 +145,38 @@ function testZeroBasedShardsAndFloatFormats() {
     assert.strictEqual(collection.artifacts[0].precision, 'FP4');
     assert.strictEqual(collection.artifacts[0].quantization, '', 'an 8-bit tag is not an INT8 quantization of an FP4 model');
     assert.strictEqual(collection.artifacts[0].metadata.quant_method, 'mxfp4');
+}
+
+function testFileSizesAndParameterCountsAgree() {
+    const collection = normalizeHuggingFaceModel({
+        id: 'cortexso/deepseek-r1',
+        pipeline_tag: 'text-generation',
+        tags: ['gguf'],
+        gguf: { total: 70554000000, architecture: 'llama' },
+        siblings: [
+            { rfilename: 'deepseek-r1-distill-llama-8b-q4_k_m.gguf', size: 4.92e9 },
+            { rfilename: 'deepseek-r1-distill-llama-70b-q4_k_m.gguf', size: 42.5e9 },
+            { rfilename: 'unnamed-q4_k_m.gguf', size: 4.92e9 },
+            { rfilename: 'mtp-deepseek-r1-q4_k_m.gguf', size: 1e9 },
+            { rfilename: 'deepseek-r1.lora.gguf', size: 1e8 }
+        ]
+    });
+    const byName = Object.fromEntries(collection.artifacts.map((artifact) => [artifact.artifact_name, artifact]));
+    assert.strictEqual(byName['deepseek-r1-distill-llama-8b-q4_k_m.gguf'].parameter_count_b, 8,
+        'the file name, not the largest model in the repo, gives the size');
+    assert.strictEqual(byName['deepseek-r1-distill-llama-70b-q4_k_m.gguf'].parameter_count_b, 70.554,
+        'an agreeing header count is kept');
+    assert.ok(!byName['unnamed-q4_k_m.gguf'], '4.9 GB cannot hold 70B parameters at Q4');
+    assert.ok(!byName['mtp-deepseek-r1-q4_k_m.gguf'], 'speculative-decoding heads are not models');
+    assert.ok(!byName['deepseek-r1.lora.gguf'], 'LoRA adapters in GGUF are not models');
+
+    const qwen = normalizeHuggingFaceModel({
+        id: 'Qwen/Qwen2-1.5B-Instruct-GGUF',
+        pipeline_tag: 'text-generation',
+        gguf: { total: 1543714304 },
+        siblings: [{ rfilename: 'qwen2-1_5b-instruct-q4_k_m.gguf', size: 986048768 }]
+    });
+    assert.strictEqual(qwen.artifacts[0].parameter_count_b, 1.544, '"1_5b" is 1.5B, not 5B');
 }
 
 function testRepositoriesWithoutPipelineTag() {
@@ -243,6 +275,7 @@ async function run() {
     testExactMetadataAndLineage();
     testGgufRepository();
     testZeroBasedShardsAndFloatFormats();
+    testFileSizesAndParameterCountsAgree();
     testRepositoriesWithoutPipelineTag();
     testBoundedTaskPatterns();
     testConfigSummary();

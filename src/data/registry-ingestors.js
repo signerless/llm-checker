@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fetch = require('../utils/fetch');
+const { precisionProfile } = require('../models/ranking-contract');
 
 const SOURCE_DEFINITIONS = {
     huggingface: {
@@ -131,7 +132,8 @@ function parseNumberWithUnit(rawValue) {
     if (rawValue === null || rawValue === undefined) return null;
     if (typeof rawValue === 'number' && Number.isFinite(rawValue)) return rawValue;
 
-    const text = String(rawValue).replace(/,/g, '').trim().toLowerCase();
+    // Some exporters write the decimal point as an underscore ("qwen2-1_5b").
+    const text = String(rawValue).replace(/,/g, '').replace(/(\d)_(\d+\s*[bm]\b)/gi, '$1.$2').trim().toLowerCase();
     if (!text) return null;
 
     if (/^\d+(?:\.\d+)?$/.test(text)) {
@@ -396,7 +398,13 @@ function isModelArtifactFile(filename) {
     // "models": LoRA/PEFT adapters (a few MB but inherit the repo's param count) and
     // optimizer/training state.
     if (/(^|[/_-])adapter[_-]?(model|config)/.test(lower)) return false;
-    if (/(^|[/_-])(lora|optimizer|scheduler|rng_state|trainer_state|training_args)/.test(lower)) return false;
+    if (/(^|[/_.-])(lora|optimizer|scheduler|rng_state|trainer_state|training_args)/.test(lower)) return false;
+    // Speculative-decoding heads (MTP, DFlash, DSpark, EAGLE, draft) and
+    // stand-alone vision towers ship next to a model but are not the model.
+    if (/(^|[/_.-])(mtp|draft|dflash\d*|dspark|eagle\d*|value_head)([/_.-]|$)/.test(lower)) return false;
+    if (/(^|[/_.-])(vision|audio|speech)[-_]?(encoder|tower)([/_.-]|$)/.test(lower) || /[-_]vision\.safetensors$/.test(lower)) return false;
+    // Training checkpoints, adapters and evaluation artifacts live in subfolders.
+    if (/(^|\/)(checkpoints?|checkpoint-\d+|adapters?|mm_projector|eval|layers)\//.test(lower)) return false;
     // Vision projectors and importance matrices are companions of a GGUF model,
     // not runnable models. OpenVINO/ONNX exports and Meta's `original/` native
     // checkpoint duplicate the repo's weights in formats no listed runtime loads.
@@ -420,7 +428,9 @@ function buildHuggingFaceDownloadUrl(repoId, filename, revision = 'main') {
     return `https://huggingface.co/${repoId}/resolve/${revision || 'main'}/${encodedPath}`;
 }
 
-const SHARD_PATTERN = /^(.*)-(\d{5,})-of-(\d{5,})\.(safetensors|bin|gguf)$/i;
+// Most exporters zero-pad shard numbers to five digits; Kimi-K2 writes
+// `model-1-of-61.safetensors`.
+const SHARD_PATTERN = /^(.*)-(\d+)-of-(\d+)\.(safetensors|bin|gguf)$/i;
 
 function extractBaseModel(model = {}) {
     const lineage = model.baseModels;
@@ -474,6 +484,28 @@ function dropDuplicateWeightSets(files) {
     if (!files.some(isTransformersSafetensors)) return files;
     return files.filter((file) => !/\.(bin|pt|pth)$/i.test(file.filename) || /\.gguf$|ggml/i.test(file.filename))
         .filter((file) => !/(^|\/)consolidated[^/]*\.safetensors$/i.test(file.filename));
+}
+
+// A size in the file's own name describes that file; collection repos hold
+// several models and the repo-level count belongs to the largest. The exact
+// header count is kept when it agrees with the name.
+function fileParameterCountB(filename, repoParamsB) {
+    const basename = String(filename || '').split('/').pop();
+    const fileParamsB = parseParamsB(basename);
+    if (!fileParamsB) return repoParamsB || null;
+    if (!repoParamsB) return fileParamsB;
+    return Math.abs(fileParamsB - repoParamsB) / Math.max(fileParamsB, repoParamsB) <= 0.25 ? repoParamsB : fileParamsB;
+}
+
+// Lowest plausible bytes per parameter: a quarter of the precision profile's
+// nominal size (mixed FP8/FP4 checkpoints and mislabeled AWQ repos sit near
+// half), or below 1-bit packing when the precision is unknown. Partial files
+// such as one layer or one shard of a set fall far below either.
+function sizeMatchesParameters(sizeBytes, paramsB, precision) {
+    if (!(Number(sizeBytes) > 0) || !(Number(paramsB) > 0)) return true;
+    const nominal = precisionProfile(precision).bytes;
+    const floor = nominal ? nominal * 0.25 : 0.08;
+    return Number(sizeBytes) / (Number(paramsB) * 1e9) >= floor;
 }
 
 function normalizeHuggingFaceModel(model) {
@@ -580,6 +612,11 @@ function normalizeHuggingFaceModel(model) {
         // never the GGUF files a repo may ship alongside them.
         const quantization = inferQuantization(filename) || (isGguf ? inferQuantization(tagText) : repoQuantization);
         const precision = inferPrecision(filename) || (isGguf ? inferPrecision(tagText, quantization) : repoPrecision);
+        const parameterCountB = fileParameterCountB(filename, repoParamsB);
+        // A file far too small for its stated parameters at its precision is
+        // another model (a distill in a collection repo, a draft head); its
+        // size would make a large model look like it fits small hardware.
+        if (!sizeMatchesParameters(sizeBytes, parameterCountB, quantization || precision)) continue;
         const artifactName = filename;
         artifacts.push({
             id: makeArtifactId('huggingface', repoId, artifactName),
@@ -592,7 +629,7 @@ function normalizeHuggingFaceModel(model) {
             format,
             quantization,
             precision,
-            parameter_count_b: Math.max(parseParamsB(filename) || 0, repoParamsB || 0) || null,
+            parameter_count_b: parameterCountB,
             active_parameter_count_b: activeParamsB,
             size_bytes: sizeBytes,
             size_gb: bytesToGB(sizeBytes),
