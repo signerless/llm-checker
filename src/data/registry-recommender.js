@@ -138,7 +138,7 @@ function groupWeightShards(rows) {
 function shardInstallCommand(row, shardedFile) {
     if (!shardedFile || !row.repo_id) return row.install_command || '';
     if (row.format === 'gguf' && row.metadata?.shard_files && row.install_command) return row.install_command;
-    return `hf download ${row.repo_id}`;
+    return row.source_id === 'modelscope' ? `modelscope download --model ${row.repo_id}` : `hf download ${row.repo_id}`;
 }
 
 // GGUF/MLX/AWQ repos of one checkpoint name it as their quantized base, from
@@ -173,7 +173,7 @@ function artifactToSelectorModel(row) {
         ...(row.repo_metadata || {}),
         tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
     })) return null;
-    const shardedFile = row.source_id === 'huggingface' &&
+    const shardedFile = ['huggingface', 'modelscope'].includes(row.source_id) &&
         (Boolean(row.shard_files?.length) || isShardedWeightFile(row.filename || row.artifact_name));
     const identifier = shardedFile && row.format !== 'gguf'
         ? (row.canonical_model_id || row.repo_id)

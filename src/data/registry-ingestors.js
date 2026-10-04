@@ -26,8 +26,22 @@ const SOURCE_DEFINITIONS = {
         name: 'Docker Hub AI models',
         base_url: 'https://hub.docker.com/u/ai',
         source_type: 'runtime_registry'
+    },
+    modelscope: {
+        id: 'modelscope',
+        name: 'ModelScope',
+        base_url: 'https://www.modelscope.cn',
+        source_type: 'model_hub'
     }
 };
+
+const MODELSCOPE_API = 'https://www.modelscope.cn/openapi/v1/models';
+const MODELSCOPE_TASK_PLAN = [
+    { task: 'text-generation', pipeline: 'text-generation', share: 0.75 },
+    { task: 'image-text-to-text', pipeline: 'image-text-to-text', share: 0.17 },
+    { task: 'feature-extraction', pipeline: 'feature-extraction', share: 0.04 },
+    { task: 'sentence-embedding', pipeline: 'sentence-similarity', share: 0.04 }
+];
 
 const DOCKER_HUB_API = 'https://hub.docker.com/v2/repositories';
 // Docker's `ai/` namespace also packages image, video and speech models.
@@ -414,7 +428,8 @@ function isModelArtifactFile(filename) {
     if (/(^|[/_.-])(mtp|draft|dflash\d*|dspark|eagle\d*|value_head)([/_.-]|$)/.test(lower)) return false;
     if (/(^|[/_.-])(vision|audio|speech)[-_]?(encoder|tower)([/_.-]|$)/.test(lower) || /[-_]vision\.safetensors$/.test(lower)) return false;
     // Training checkpoints, adapters and evaluation artifacts live in subfolders.
-    if (/(^|\/)(checkpoints?|checkpoint-\d+|adapters?|mm_projector|eval|layers)\//.test(lower)) return false;
+    if (/(^|\/)(checkpoints?|checkpoint-\d+|adapters?|mm_projector|eval|layers|chunks?)\//.test(lower) ||
+        /(^|\/)chunk-\d+\./.test(lower)) return false;
     // Vision projectors and importance matrices are companions of a GGUF model,
     // not runnable models. OpenVINO/ONNX exports and Meta's `original/` native
     // checkpoint duplicate the repo's weights in formats no listed runtime loads.
@@ -837,6 +852,62 @@ function normalizeDockerTag(repository, tag, aliases = []) {
     };
 }
 
+/**
+ * A ModelScope repo shares Hugging Face's layout (safetensors, GGUF, shard
+ * sets), so it goes through the same normalisation and is then re-addressed:
+ * its own ids, `resolve/master` download URLs and `modelscope download`
+ * commands, for users who cannot reach huggingface.co.
+ */
+function normalizeModelScopeModel(model, files, pipelineTag, configInfo = null) {
+    const repoId = model.id;
+    const tags = toArray(model.tags);
+    const libraries = tags.filter((tag) => /^library:/.test(tag)).map((tag) => tag.slice(8));
+    const hubShape = {
+        id: repoId,
+        sha: 'master',
+        downloads: model.downloads,
+        likes: model.likes,
+        pipeline_tag: pipelineTag,
+        library_name: libraries.includes('gguf') ? 'gguf' : (libraries.some((lib) => /^transformers?$/.test(lib)) ? 'transformers' : ''),
+        tags: [...tags, ...(model.license ? [`license:${model.license}`] : [])],
+        cardData: model.license ? { license: model.license } : null,
+        gated: Boolean(model.gated),
+        lastModified: model.last_modified || '',
+        createdAt: model.created_at || '',
+        description: model.description || '',
+        safetensors: Number(model.params) > 0 ? { total: Number(model.params) } : null,
+        config_info: configInfo || undefined,
+        siblings: toArray(files).filter((file) => file && file.Type !== 'tree' && file.Path).map((file) => ({
+            rfilename: file.Path,
+            size: Number(file.Size) || null,
+            lfs: file.Sha256 ? { oid: file.Sha256 } : undefined
+        }))
+    };
+    const collection = normalizeHuggingFaceModel(hubShape);
+    if (!collection) return null;
+    const repoKey = makeScopedId('modelscope', repoId);
+    const toModelScopeCommand = (command) => String(command || '').replace(/^hf download /, 'modelscope download --model ');
+    return {
+        source: SOURCE_DEFINITIONS.modelscope,
+        repos: collection.repos.map((repo) => ({
+            ...repo,
+            id: repoKey,
+            source_id: 'modelscope',
+            url: `https://www.modelscope.cn/models/${repoId}`,
+            sha: ''
+        })),
+        artifacts: collection.artifacts.map((artifact) => ({
+            ...artifact,
+            id: makeArtifactId('modelscope', repoId, artifact.artifact_name),
+            source_id: 'modelscope',
+            repo_key: repoKey,
+            download_url: `https://www.modelscope.cn/models/${repoId}/resolve/master/${artifact.filename.split('/').map(encodeURIComponent).join('/')}`,
+            install_command: toModelScopeCommand(artifact.install_command),
+            metadata: { ...artifact.metadata, repo_sha: undefined }
+        }))
+    };
+}
+
 function normalizeOllamaRows(model, variant) {
     const modelId = model.id || model.model_identifier;
     const tag = variant.tag || modelId;
@@ -1054,6 +1125,11 @@ class RegistryIngestor {
                 collections.push(...await this.collectGpt4All({ limit: limits.gpt4all }));
             } else if (source === 'docker') {
                 collections.push(...await this.collectDocker({ limit: options.dockerLimit }));
+            } else if (source === 'modelscope') {
+                collections.push(...await this.collectModelScope({
+                    limit: options.modelscopeLimit,
+                    concurrency: options.concurrency
+                }));
             } else if (source === 'ollama') {
                 collections.push(...this.collectOllamaFromDatabase({ limit: limits.ollama }));
             } else {
@@ -1309,6 +1385,63 @@ class RegistryIngestor {
         return collections;
     }
 
+    async collectModelScope(options = {}) {
+        const limit = Number(options.limit) > 0 ? Number(options.limit) : 1500;
+        const concurrency = Number(options.concurrency) > 0 ? Number(options.concurrency) : 4;
+        const listed = [];
+        const seen = new Set();
+        for (const entry of MODELSCOPE_TASK_PLAN) {
+            const budget = Math.max(1, Math.round(limit * entry.share));
+            let fetched = 0;
+            for (let page = 1; fetched < budget; page += 1) {
+                const url = `${MODELSCOPE_API}?page_size=50&page_number=${page}&sort=downloads&filter.task=${encodeURIComponent(entry.task)}`;
+                this.onProgress({ source: 'modelscope', message: `Fetching ${url}` });
+                const response = await this.fetchImpl(url, { headers: { Accept: 'application/json' } });
+                if (!response.ok) throw new Error(`ModelScope request failed: HTTP ${response.status}`);
+                const models = toArray((await response.json())?.data?.models);
+                if (models.length === 0) break;
+                for (const model of models) {
+                    if (fetched >= budget) break;
+                    fetched += 1;
+                    if (!model?.id || seen.has(model.id)) continue;
+                    seen.add(model.id);
+                    listed.push({ model, pipeline: entry.pipeline });
+                }
+            }
+        }
+
+        const collections = [];
+        let done = 0;
+        await mapWithConcurrency(listed, concurrency, async ({ model, pipeline }) => {
+            try {
+                const response = await this.fetchImpl(
+                    `https://www.modelscope.cn/api/v1/models/${model.id}/repo/files?Recursive=true`,
+                    { headers: { Accept: 'application/json' } }
+                );
+                if (response.ok) {
+                    const files = (await response.json())?.Data?.Files;
+                    let configInfo = null;
+                    if (toArray(files).some((file) => file?.Path === 'config.json')) {
+                        const config = await this.fetchImpl(
+                            `https://www.modelscope.cn/models/${model.id}/resolve/master/config.json`,
+                            { headers: { Accept: 'application/json' } }
+                        );
+                        if (config.ok) configInfo = summarizeModelConfig(safeJsonParse(await config.text()));
+                    }
+                    const collection = normalizeModelScopeModel(model, files, pipeline, configInfo);
+                    if (collection && collection.artifacts.length) collections.push(collection);
+                }
+            } catch (error) {
+                this.onProgress({ source: 'modelscope', message: `Skipped ${model.id}: ${error.message}` });
+            }
+            done += 1;
+            if (done % 100 === 0 || done === listed.length) {
+                this.onProgress({ source: 'modelscope', message: `Listed files for ${done}/${listed.length} repositories` });
+            }
+        });
+        return collections;
+    }
+
     collectOllamaFromDatabase(options = {}) {
         const limit = Number(options.limit) > 0 ? Number(options.limit) : 1000;
         const rows = this.database.all(`
@@ -1458,6 +1591,7 @@ module.exports = {
     normalizeGpt4AllEntry,
     normalizeOllamaRows,
     normalizeDockerTag,
+    normalizeModelScopeModel,
     inferFormat,
     inferQuantization,
     inferPrecision,
