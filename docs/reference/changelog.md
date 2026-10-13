@@ -1,8 +1,31 @@
 Changelog
 =========
 
-Unreleased — exact catalog metadata
--------------------------------------
+3.8.2: Exact catalog metadata and hardware fixes (2026-10-13)
+---------------------------------------------------------------
+
+Fixes merged since 3.8.1:
+
+- Strix Halo and other AMD APUs: unified memory is recognized, and 256 MB
+  iGPU apertures are no longer read as 256 GB (#113, #134).
+- Uncensored models are only recommended when you ask for them (#114).
+- `ai-check` reuses the canonical GPU detection, and `gpu-plan` no longer
+  counts the same GPU twice across backends (#116, #117).
+- New `--cpu-only` mode forces CPU/RAM execution even when a GPU is
+  detected (#119).
+- Independent hardware probes run in parallel (#127).
+- Local speed measurements survive catalog rebuilds (#128).
+- All six benchmark sources feed model recommendations (#129).
+- Non-language repositories are excluded from recommendations (#131).
+- Evaluation counts are reported per category (#132).
+- The registry uses native SQLite, with a WASM fallback on older Node
+  versions (#133).
+- llama.cpp, Transformers and explicit runtime choices are honored (#135).
+- Ranking artifacts, benchmark identity and desktop compatibility (#136).
+- Two hardware tests simulate Linux explicitly, so the suite also passes on
+  macOS.
+
+Exact catalog metadata (#138):
 
 - Hugging Face ingestion lists repos per language task and sweeps official
   publishers, so the limit is spent on models the recommender can rank. The

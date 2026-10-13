@@ -1,6 +1,6 @@
 {
   "name": "llm-checker-desktop",
-  "version": "3.8.1",
+  "version": "3.8.2",
   "private": true,
   "description": "Desktop app for LLM Checker \u2014 hardware-aware local model selection across Ollama, llama.cpp, LM Studio, vLLM, MLX and Transformers",
   "main": "src/main/main.js",
