@@ -1,9 +1,12 @@
-const SUPPORTED_RUNTIMES = ['ollama', 'vllm', 'mlx', 'llama.cpp', 'transformers'];
+const SUPPORTED_RUNTIMES = ['ollama', 'vllm', 'mlx', 'llama.cpp', 'transformers', 'docker'];
 const { normalizePlatform, isTermuxEnvironment } = require('../utils/platform');
 
 function normalizeRuntime(runtime = 'ollama') {
     const normalized = String(runtime ?? '').trim().toLowerCase();
-    const aliases = { llamacpp: 'llama.cpp', llama_cpp: 'llama.cpp', hf: 'transformers', all: 'auto', '*': 'auto' };
+    const aliases = {
+        llamacpp: 'llama.cpp', llama_cpp: 'llama.cpp', hf: 'transformers', all: 'auto', '*': 'auto',
+        'docker-model-runner': 'docker', dmr: 'docker'
+    };
     const name = aliases[normalized] || normalized;
     return name === 'auto' || SUPPORTED_RUNTIMES.includes(name) ? name : null;
 }
@@ -14,6 +17,7 @@ function getRuntimeDisplayName(runtime = 'ollama') {
     if (normalized === 'mlx') return 'MLX-LM';
     if (normalized === 'llama.cpp') return 'llama.cpp';
     if (normalized === 'transformers') return 'Transformers';
+    if (normalized === 'docker') return 'Docker Model Runner';
     if (normalized === 'auto') return 'Automatic';
     return normalized === 'ollama' ? 'Ollama' : 'Unknown runtime';
 }
@@ -42,12 +46,29 @@ function isAppleSiliconHardware(hardware = {}) {
     return hasAppleChipSignal;
 }
 
-function runtimeSupportedOnHardware(runtime = 'ollama', hardware = {}) {
+function hasNvidiaGpu(hardware = {}) {
+    if (hardware?.cpuOnly) return false;
+    return Boolean(hardware?.acceleration?.supports_cuda) ||
+        String(hardware?.gpu?.type || '').toLowerCase() === 'nvidia' ||
+        hardware?.summary?.bestBackend === 'cuda';
+}
+
+/**
+ * Whether a runtime can run on this machine. Docker Model Runner picks its
+ * engine by artifact format: llama.cpp for GGUF (everywhere), MLX for `mlx`
+ * tags (Apple Silicon) and vLLM for safetensors (NVIDIA GPUs).
+ */
+function runtimeSupportedOnHardware(runtime = 'ollama', hardware = {}, artifact = null) {
     const normalized = normalizeRuntime(runtime);
     if (!normalized) return false;
     if (normalized === 'mlx') {
         if (hardware?.cpuOnly) return false;
         return isAppleSiliconHardware(hardware);
+    }
+    if (normalized === 'docker') {
+        const format = String(artifact?.format || '').toLowerCase();
+        if (format === 'mlx') return !hardware?.cpuOnly && isAppleSiliconHardware(hardware);
+        if (format === 'safetensors') return hasNvidiaGpu(hardware);
     }
     return true;
 }
@@ -79,6 +100,13 @@ function getRuntimeModelRef(model = {}, runtime = 'ollama') {
     const normalized = resolveCommandRuntime(model, runtime);
     if (!normalized) return null;
     if (normalized === 'ollama' && model.artifact?.source_id && model.artifact.source_id !== 'ollama') return null;
+    // Docker Model Runner pulls `ai/<model>:<tag>` references from Docker Hub.
+    if (normalized === 'docker') {
+        const reference = model.artifact?.source_id === 'docker'
+            ? model.artifact.artifact_name
+            : (String(model.model_identifier || '').startsWith('ai/') ? model.model_identifier : null);
+        return reference || null;
+    }
 
     const candidates = [
         model.hfModel,
@@ -136,6 +164,11 @@ function getRuntimeInstallCommand(runtime = 'ollama') {
         return 'pip install -U mlx-lm';
     }
 
+    if (normalized === 'docker') {
+        // Docker Desktop ships the runner; Docker Engine on Linux installs it as a plugin.
+        return normalizePlatform() === 'linux' ? 'sudo apt-get install docker-model-plugin' : 'docker desktop enable model-runner';
+    }
+
     if (isTermuxEnvironment()) {
         return 'pkg install ollama';
     }
@@ -155,13 +188,21 @@ function getRuntimePullCommand(model = {}, runtime = 'ollama') {
     const normalized = resolveCommandRuntime(model, runtime);
     const modelRef = getRuntimeModelRef(model, normalized);
     if (!normalized || !modelRef) return null;
-    if (normalized === 'transformers') return `hf download ${shellEscapeArg(modelRef)}`;
+    // ModelScope mirrors Hugging Face's layout but downloads from its own hub.
+    const fromModelScope = model.artifact?.source_id === 'modelscope';
+    if (normalized === 'transformers') {
+        return fromModelScope
+            ? `modelscope download --model ${shellEscapeArg(modelRef)}`
+            : `hf download ${shellEscapeArg(modelRef)}`;
+    }
+    if (normalized === 'docker') return `docker model pull ${shellEscapeArg(modelRef)}`;
     if (normalized === 'llama.cpp') {
         const file = getGgufFilename(model);
         if (!file || !modelRef.includes('/')) return null;
         if (model.artifact?.shard_files?.length) {
+            const base = fromModelScope ? `https://www.modelscope.cn/models/${modelRef}/resolve/master` : `https://huggingface.co/${modelRef}/resolve/main`;
             return model.artifact.shard_files.map(shard => {
-                const url = `https://huggingface.co/${modelRef}/resolve/main/${shard.split('/').map(encodeURIComponent).join('/')}`;
+                const url = `${base}/${shard.split('/').map(encodeURIComponent).join('/')}`;
                 return `curl --fail --location ${shellEscapeArg(url)} --output ${shellEscapeArg(`./${shard.split('/').pop()}`)}`;
             }).join(' && ');
         }
@@ -171,7 +212,9 @@ function getRuntimePullCommand(model = {}, runtime = 'ollama') {
     }
 
     if (normalized === 'vllm') {
-        return `huggingface-cli download ${shellEscapeArg(modelRef)}`;
+        return fromModelScope
+            ? `modelscope download --model ${shellEscapeArg(modelRef)}`
+            : `huggingface-cli download ${shellEscapeArg(modelRef)}`;
     }
 
     if (normalized === 'mlx') {
@@ -193,6 +236,9 @@ function getRuntimeRunCommand(model = {}, runtime = 'ollama') {
         const contextOption = Number.isSafeInteger(context) && context > 0 ? ` --ctx-size ${context}` : '';
         return `llama-cli --model ${shellEscapeArg(model.localPath || `./${file.split('/').pop()}`)}${contextOption} --prompt "Hello" --n-predict 64 --single-turn`;
     }
+    if (normalized === 'docker') {
+        return `docker model run ${shellEscapeArg(modelRef)} "Hello"`;
+    }
     if (normalized === 'transformers') {
         const script = 'import sys, torch; from transformers import pipeline; device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"; print(pipeline("text-generation", model=sys.argv[1], dtype="auto", device=device)("Hello", max_new_tokens=64)[0]["generated_text"])';
         return `python -c ${shellEscapeArg(script)} ${shellEscapeArg(modelRef)}`;
@@ -201,7 +247,9 @@ function getRuntimeRunCommand(model = {}, runtime = 'ollama') {
     if (normalized === 'vllm') {
         const context = Number(model.context?.effective);
         const contextOption = Number.isSafeInteger(context) && context > 0 ? ` --max-model-len ${context}` : '';
-        return `python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)}${contextOption} --host 0.0.0.0 --port 8000`;
+        // vLLM resolves repo ids on ModelScope when VLLM_USE_MODELSCOPE is set.
+        const hubPrefix = model.artifact?.source_id === 'modelscope' ? 'VLLM_USE_MODELSCOPE=True ' : '';
+        return `${hubPrefix}python -m vllm.entrypoints.openai.api_server --model ${shellEscapeArg(modelRef)}${contextOption} --host 0.0.0.0 --port 8000`;
     }
 
     if (normalized === 'mlx') {
@@ -234,7 +282,7 @@ function resolveCommandRuntime(model, runtime) {
     const preferred = normalizeRuntime(model.preferredRuntime || model.runtime || null);
     if (preferred && preferred !== 'auto') return preferred;
     if (getGgufFilename(model) || model.artifact?.format === 'gguf') return 'llama.cpp';
-    if (model.hfModel || model.hfId || model.huggingfaceId || model.artifact?.source_id === 'huggingface') return 'transformers';
+    if (model.hfModel || model.hfId || model.huggingfaceId || ['huggingface', 'modelscope'].includes(model.artifact?.source_id)) return 'transformers';
     return 'ollama';
 }
 

@@ -106,6 +106,13 @@ function groupWeightShards(rows) {
     const groups = new Map();
     const output = [];
     for (const row of rows) {
+        // Current ingestors store one row per complete shard set; older
+        // databases still hold one row per shard and are grouped below.
+        const ingestedShards = row.metadata?.shard_files;
+        if (Array.isArray(ingestedShards) && ingestedShards.length > 0) {
+            output.push({ ...row, shard_files: ingestedShards, shards_complete: true });
+            continue;
+        }
         const file = row.filename || row.artifact_name || '';
         const match = file.match(/^(.*)-(\d{5,})-of-(\d{5,})\.(safetensors|bin|gguf)$/i);
         if (!match) { output.push(row); continue; }
@@ -126,12 +133,31 @@ function groupWeightShards(rows) {
     return output;
 }
 
+// A GGUF shard set ingested as one artifact carries an `--include` command for
+// just its files; other shard sets need the whole repo (config and tokenizer).
+function shardInstallCommand(row, shardedFile) {
+    if (!shardedFile || !row.repo_id) return row.install_command || '';
+    if (row.format === 'gguf' && row.metadata?.shard_files && row.install_command) return row.install_command;
+    return row.source_id === 'modelscope' ? `modelscope download --model ${row.repo_id}` : `hf download ${row.repo_id}`;
+}
+
+// GGUF/MLX/AWQ repos of one checkpoint name it as their quantized base, from
+// the Hub's lineage metadata or the `base_model:quantized:` tag.
+function quantizedBaseModel(repoMetadata = {}, repoTags = []) {
+    if (repoMetadata.base_relation === 'quantized' && repoMetadata.base_model) {
+        return String(repoMetadata.base_model).toLowerCase();
+    }
+    const tag = toArray(repoTags).find((value) => /^base_model:quantized:/i.test(String(value)));
+    return tag ? String(tag).replace(/^base_model:quantized:/i, '').toLowerCase() : null;
+}
+
 function choosePreferredRuntime(runtimeSupport = [], format = '', sourceId = '') {
     const runtimes = toArray(runtimeSupport).map((runtime) => String(runtime).toLowerCase());
     const normalizedFormat = String(format || '').toLowerCase();
     const source = String(sourceId || '').toLowerCase();
 
     if (source === 'ollama' || normalizedFormat === 'ollama') return 'ollama';
+    if (source === 'docker') return 'docker';
     if (normalizedFormat === 'gguf') return 'llama.cpp';
     if (normalizedFormat === 'mlx' || runtimes.includes('mlx')) return 'mlx';
     if (runtimes.includes('llama.cpp')) return 'llama.cpp';
@@ -147,7 +173,8 @@ function artifactToSelectorModel(row) {
         ...(row.repo_metadata || {}),
         tags: [...toArray(row.repo_tags), ...toArray(row.repo_tasks), ...toArray(row.tasks)]
     })) return null;
-    const shardedFile = row.source_id === 'huggingface' && isShardedWeightFile(row.filename || row.artifact_name);
+    const shardedFile = ['huggingface', 'modelscope'].includes(row.source_id) &&
+        (Boolean(row.shard_files?.length) || isShardedWeightFile(row.filename || row.artifact_name));
     const identifier = shardedFile && row.format !== 'gguf'
         ? (row.canonical_model_id || row.repo_id)
         : (row.artifact_name || row.filename || row.canonical_model_id || row.repo_id);
@@ -223,6 +250,7 @@ function artifactToSelectorModel(row) {
     return {
         name: displayName,
         model_name: displayName,
+        baseModel: quantizedBaseModel(repoMetadata, repoTags),
         model_identifier: identifier,
         family: inferFamily(`${displayName} ${identifier}`),
         paramsB,
@@ -242,7 +270,7 @@ function artifactToSelectorModel(row) {
         version: shardedFile ? (row.repo_id || identifier) : (row.artifact_name || row.filename || identifier),
         license: row.license || 'unknown',
         digest: row.sha256 || row.etag || 'unknown',
-        installCommand: shardedFile && row.repo_id ? `hf download ${row.repo_id}` : (row.install_command || ''),
+        installCommand: shardInstallCommand(row, shardedFile),
         downloadUrl: shardedFile ? (row.repo_url || '') : (row.download_url || ''),
         preferredRuntime,
         artifact: row,
@@ -253,7 +281,7 @@ function artifactToSelectorModel(row) {
             license: row.license || 'unknown',
             digest: row.sha256 || row.etag || 'unknown',
             download_url: shardedFile ? (row.repo_url || '') : (row.download_url || ''),
-            install_command: shardedFile && row.repo_id ? `hf download ${row.repo_id}` : (row.install_command || ''),
+            install_command: shardInstallCommand(row, shardedFile),
             repo_url: row.repo_url || ''
         }
     };
@@ -295,6 +323,9 @@ const SOURCE_DIVERSITY_FLOOR = 55;
 // `layers-N.safetensors` shard of one HF repo).
 function modelDiversityKey(candidate) {
     const meta = (candidate && candidate.meta) || {};
+    // Every quantization of one base checkpoint is the same model, whichever
+    // repo publishes it (unsloth, bartowski, lmstudio-community, ...).
+    if (meta.baseModel) return `base|${meta.baseModel}`;
     const name = String(meta.name || meta.model_identifier || '')
         .toLowerCase()
         .replace(/:.*$/, '')   // drop an ollama :tag
@@ -517,7 +548,8 @@ class RegistryRecommender {
             limit: poolLimit
         });
         const modelPool = dedupeRecommendationPool(groupWeightShards(rows).map(artifactToSelectorModel)
-            .filter(model => model && (runtimeFilter !== 'ollama' || model.source === 'ollama')));
+            .filter(model => model && (runtimeFilter !== 'ollama' || model.source === 'ollama') &&
+                (!runtimeFilter || runtimeSupportedOnHardware(runtimeFilter, selectorHardware, model.artifact))));
 
         const normalizedRuntime = runtimeFilter || 'auto';
 
@@ -687,7 +719,7 @@ class RegistryRecommender {
                 ...toArray(model.artifact?.runtime_support)
             ].filter((runtime, index, values) => runtime && values.indexOf(runtime) === index);
             const runtime = runtimeCandidates.find((candidateRuntime) =>
-                runtimeSupportedOnHardware(candidateRuntime, normalizedHardware)
+                runtimeSupportedOnHardware(candidateRuntime, normalizedHardware, model.artifact)
             );
             if (!runtime) continue;
             totalEvaluated += 1;

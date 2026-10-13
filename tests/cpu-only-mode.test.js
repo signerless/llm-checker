@@ -139,11 +139,15 @@ function stripAnsi(text = '') {
     return String(text).replace(/\u001b\[[0-9;]*m/g, '');
 }
 
+// Each run spawns the real CLI with live hardware detection. Alone it takes
+// about 20 s; under the full suite on a loaded laptop it can pass 45 s.
+const CLI_TIMEOUT_MS = 120000;
+
 function runCli(args, env = {}) {
     return spawnSync(process.execPath, [CLI, ...args], {
         cwd: ROOT,
         encoding: 'utf8',
-        timeout: 45000,
+        timeout: CLI_TIMEOUT_MS,
         env: {
             ...process.env,
             NO_COLOR: '1',
@@ -170,7 +174,7 @@ function runCliAsync(args, env = {}) {
         const timeout = setTimeout(() => {
             child.kill('SIGKILL');
             reject(new Error(`CLI timed out: ${args.join(' ')}`));
-        }, 45000);
+        }, CLI_TIMEOUT_MS);
 
         child.stdout.on('data', (chunk) => { stdout += chunk; });
         child.stderr.on('data', (chunk) => { stderr += chunk; });

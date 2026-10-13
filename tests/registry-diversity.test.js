@@ -42,6 +42,24 @@ function testDiversityKeyIgnoresTagAndQuant() {
     assert.notStrictEqual(a, c, 'different param sizes are different models');
 }
 
+function testQuantizationsOfOneBaseCollapse() {
+    const { artifactToSelectorModel } = require('../src/data/registry-recommender');
+    const quantized = (repo) => artifactToSelectorModel({
+        source_id: 'huggingface', repo_id: repo, canonical_model_id: repo, artifact_name: 'model-Q4_K_M.gguf',
+        format: 'gguf', parameter_count_b: 7.6, tasks: ['text-generation'],
+        repo_metadata: { pipeline_tag: 'text-generation', base_model: 'Qwen/Qwen2.5-Coder-7B-Instruct', base_relation: 'quantized' }
+    });
+    const bartowski = quantized('bartowski/Qwen2.5-Coder-7B-Instruct-GGUF');
+    const unsloth = quantized('unsloth/Qwen2.5-Coder-7B-Instruct-GGUF');
+    assert.strictEqual(modelDiversityKey({ meta: bartowski }), modelDiversityKey({ meta: unsloth }),
+        'two publishers of one quantized base are one model');
+    const out = collapseToDistinctModels([
+        { score: 80, meta: bartowski }, { score: 79, meta: unsloth }, cand('codellama', 'ollama', 70)
+    ]);
+    assert.strictEqual(out.length, 2);
+    assert.strictEqual(out[0].meta, bartowski, 'the better-scoring publisher is kept');
+}
+
 function testSourceDiversitySurfacesCloseSource() {
     const distinct = [
         cand('qwen2.5-coder', 'ollama', 81.3),
@@ -98,6 +116,7 @@ function testCollapseKeepsDistinctUnknownParamModels() {
 function run() {
     testCollapseVariants();
     testDiversityKeyIgnoresTagAndQuant();
+    testQuantizationsOfOneBaseCollapse();
     testSourceDiversitySurfacesCloseSource();
     testDiversityDoesNotPromoteFarBehindSource();
     testDiversityKeepsGenuineTopUnderRareSourceFlood();

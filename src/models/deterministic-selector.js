@@ -766,7 +766,9 @@ class DeterministicModelSelector {
         if (baseText.includes('instruct')) derivedTags.add('instruct');
         if (baseText.includes('chat') || baseText.includes('assistant') || baseText.includes('conversation')) derivedTags.add('chat');
         if (baseText.includes('embed')) derivedTags.add('embedding');
-        if (baseText.includes('vision') || baseText.includes('vl') || baseText.includes('multimodal') || baseText.includes('image')) derivedTags.add('vision');
+        // A bare 'vl' substring matched words such as "level" and "vllm".
+        if (baseText.includes('vision') || /(?:^|[^a-z])vlm?(?:[^a-z]|$)|\dvl(?:[^a-z]|$)/.test(baseText) ||
+            baseText.includes('multimodal') || baseText.includes('image')) derivedTags.add('vision');
         if (baseText.includes('reason') || baseText.includes('math') || baseText.includes('logic')) derivedTags.add('reasoning');
         if (baseText.includes('creative') || baseText.includes('story') || baseText.includes('roleplay')) derivedTags.add('creative');
 
@@ -776,6 +778,11 @@ class DeterministicModelSelector {
         if (ollamaModel.primary_category === 'multimodal') derivedTags.add('vision');
         if (ollamaModel.primary_category === 'reasoning') derivedTags.add('reasoning');
         if (ollamaModel.primary_category === 'creative') derivedTags.add('creative');
+
+        // When the catalog records image input per tag (gemma3:1b is text-only,
+        // gemma3:4b is not), that beats model-level hints.
+        const tagLevelInputs = variants.some((variant) =>
+            Array.isArray(variant.input_types) && variant.input_types.map(String).some((type) => /^(image|vision)$/i.test(type)));
 
         const hasConcreteVariants = variants.some((variant) => this.variantHasConcreteSizeOrParams(variant));
         const selectableVariants = hasConcreteVariants
@@ -790,7 +797,13 @@ class DeterministicModelSelector {
             const moeMetadata = this.extractMoEMetadata(ollamaModel, variant, paramsB, baseText);
 
             const variantSizeGB = this.extractVariantSizeGB(variant, paramsB);
-            const modalities = this.inferModalities(ollamaModel, variantTag);
+            const modalities = tagLevelInputs
+                ? (variant.input_types.map(String).some((type) => /^(image|vision)$/i.test(type)) ? ['text', 'vision'] : ['text'])
+                : this.inferModalities(ollamaModel, variantTag);
+            // Context windows differ per tag (gemma3:1b 32K, gemma3:4b 128K).
+            const variantContextLength = Number(variant.context_length) > 0
+                ? this.parseContextLength(variant.context_length)
+                : contextLength;
             const modelTags = this.inferTagsForVariant(derivedTags, variant, variantTag);
             const sizeByQuant = {};
 
@@ -830,7 +843,7 @@ class DeterministicModelSelector {
                 active_params_b: normalizedActiveParamsB,
                 expert_count: normalizedExpertCount,
                 experts_active_per_token: normalizedExpertsActive,
-                ctxMax: contextLength,
+                ctxMax: variantContextLength,
                 quant,
                 sizeGB: variantSizeGB,
                 modalities,
@@ -1758,10 +1771,14 @@ class DeterministicModelSelector {
         // estimate below and mark it as such on the result, so nothing ever
         // presents a guess as a measurement.
         const measured = this.lookupMeasuredQuality(model, category);
+        // A pretrained checkpoint completes text but does not follow
+        // instructions, so it is a poor assistant whatever its benchmarks.
+        const pretrainedPenalty = this.isPretrainedVariant(model) ? 15 : 0;
         if (measured) {
             let Qm = measured.score;
             Qm += this.quantPenalties[quant] ?? precisionProfile(quant).penalty;   // benchmarks are run at fp16
             Qm += this.calculateFreshnessAdjustment(model);
+            Qm -= pretrainedPenalty;
             model.qualitySource = measured.provenance;
             return Math.max(0, Math.min(100, Qm));
         }
@@ -1801,8 +1818,30 @@ class DeterministicModelSelector {
         if (category === 'coding' && !model.tags.some(tag => ['coder', 'instruct'].includes(tag))) {
             Q -= 15;
         }
+
+        // Base coder variants carry the `coder` tag, so the coding penalty
+        // above never reached them.
+        Q -= pretrainedPenalty;
         
         return Math.max(0, Math.min(100, Q));
+    }
+
+    /**
+     * Base (pretrained) checkpoints by naming convention: Ollama `-base` /
+     * `-text` tags, Hugging Face `-Base` / `-pt` repos. A name that also says
+     * instruct/chat/it is an instruction-tuned build.
+     */
+    isPretrainedVariant(model = {}) {
+        const text = [
+            model.model_identifier,
+            model.name,
+            model.artifact?.repo_id,
+            model.artifact?.artifact_name
+        ].filter(Boolean).join(' ').toLowerCase();
+        const capability = capabilitiesOf(model);
+        if (capability.embedding || capability.reranking) return false;
+        if (/instruct|chat|assistant|(?:^|[-_:/.\s])it(?=[-_:.\s]|$)/.test(text)) return false;
+        return /(?:^|[-_:/.\s])(base|text|pretrained|pt)(?=[-_:.\s]|$)/.test(text);
     }
 
     /**
@@ -1848,16 +1887,21 @@ class DeterministicModelSelector {
         // first. LiveBench closes the gap for reasoning, creative and chat —
         // the three categories that previously had no task signal at all and
         // therefore ranked purely by model size.
+        // Self-reported model-card results (hf_eval_*) come last: they only
+        // speak for models no independent board has measured.
         const BENCH_FOR_CATEGORY = {
             coding: [
                 'bcb_hard_instruct', 'bcb_instruct', 'livebench_coding',
                 'livebench_agentic_coding', 'humaneval_plus', 'mbpp_plus', 'bcb_complete',
+                'hf_eval_swe_bench_verified', 'hf_eval_terminal_bench_2_1', 'hf_eval_terminal_bench_2_0',
+                'hf_eval_swe_bench_pro',
             ],
-            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr'],
+            reasoning: ['livebench_reasoning', 'hf_bbh', 'hf_gpqa', 'livebench_mathematics', 'hf_math_lvl5', 'hf_musr',
+                'hf_eval_gpqa_diamond', 'hf_eval_hle', 'hf_eval_aime_2026', 'hf_eval_hmmt_feb_2026', 'hf_eval_gsm8k'],
             creative: ['livebench_language'],
-            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if'],
-            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis'],
-            multimodal: ['mmmu_val'],
+            talking: ['lmarena_chat', 'hf_ifeval', 'livebench_if', 'hf_eval_ifeval'],
+            general: ['lmarena_general', 'hf_mmlu_pro', 'livebench_data_analysis', 'hf_eval_mmlu_pro'],
+            multimodal: ['mmmu_val', 'hf_eval_mmmu'],
         };
         const wanted = BENCH_FOR_CATEGORY[category];
         if (!wanted) return null;   // no benchmark speaks to this category yet

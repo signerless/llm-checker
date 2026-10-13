@@ -372,7 +372,8 @@ server.tool(
   },
   async ({ category }) => {
     const args = ["recommend"];
-    if (category) args.push(category);
+    // `recommend` takes the category as an option; a positional value is ignored.
+    if (category) args.push("--category", category);
     const result = await run(args, 180000);
     return { content: [{ type: "text", text: result }] };
   }
@@ -1453,7 +1454,7 @@ server.tool(
       else if (projectSize === "medium") contextNeeded = 8192;
 
       // Get model recommendation
-      const recResult = await run(["recommend", "coding"], 180000);
+      const recResult = await run(["recommend", "--category", "coding"], 180000);
 
       const output = [
         `PROJECT ANALYSIS: ${projectPath}`,

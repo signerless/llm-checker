@@ -12,6 +12,7 @@ permissions:
 jobs:
   update-model-db:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
 
     steps:
       - name: Checkout
@@ -27,6 +28,10 @@ jobs:
         run: npm ci
 
       - name: Refresh packaged model database
+        # A Hugging Face token raises the Hub's rate-limit window; the build
+        # still succeeds without one, it just waits longer between pages.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: npm run sync:seed
 
       - name: Verify packaged model database

@@ -1,6 +1,70 @@
 Changelog
 =========
 
+3.8.2: Exact catalog metadata and hardware fixes (2026-10-13)
+---------------------------------------------------------------
+
+Fixes merged since 3.8.1:
+
+- Strix Halo and other AMD APUs: unified memory is recognized, and 256 MB
+  iGPU apertures are no longer read as 256 GB (#113, #134).
+- Uncensored models are only recommended when you ask for them (#114).
+- `ai-check` reuses the canonical GPU detection, and `gpu-plan` no longer
+  counts the same GPU twice across backends (#116, #117).
+- New `--cpu-only` mode forces CPU/RAM execution even when a GPU is
+  detected (#119).
+- Independent hardware probes run in parallel (#127).
+- Local speed measurements survive catalog rebuilds (#128).
+- All six benchmark sources feed model recommendations (#129).
+- Non-language repositories are excluded from recommendations (#131).
+- Evaluation counts are reported per category (#132).
+- The registry uses native SQLite, with a WASM fallback on older Node
+  versions (#133).
+- llama.cpp, Transformers and explicit runtime choices are honored (#135).
+- Ranking artifacts, benchmark identity and desktop compatibility (#136).
+- Two hardware tests simulate Linux explicitly, so the suite also passes on
+  macOS.
+
+Exact catalog metadata (#138):
+
+- Hugging Face ingestion lists repos per language task and sweeps official
+  publishers, so the limit is spent on models the recommender can rank. The
+  weekly snapshot build had failed since July because the global download
+  ranking left too few language-model repos.
+- Exact parameter counts, dtypes, GGUF context windows and lineage come from
+  the Hub's `expand[]` metadata; `registry-sync --deep` adds observed file
+  sizes, SHA-256 hashes and `config.json` context windows. Complete shard sets
+  are one artifact; projectors, importance matrices and duplicate exports are
+  not artifacts. Official Mistral releases (no pipeline tag) are included.
+- The Ollama sync reads each tag's size, context window, input types and
+  digest, excludes cloud-only tags, and no longer invents sizes, Q4_0 or
+  4096-token defaults. `sync --exact` reads byte sizes, quantizations and
+  parameter counts from `registry.ollama.ai`.
+- Recommendations use each Ollama tag's own context window and inputs.
+- Existing databases adopt a newer packaged snapshot; `sync` keeps the
+  registry's Ollama rows instead of deleting them.
+- MCP `recommend` and `project_recommend` honor the requested category.
+- The packaged snapshot ships benchmark scores; existing databases adopt
+  them unless `quality-sync` refreshed a source more recently. New
+  `hf_eval_results` source (self-reported model-card results), and LiveBench
+  releases newer than the curated list are discovered automatically.
+- Ollama tags record their license from the manifest (`sync --exact`).
+- New registry source: ModelScope (`--sources modelscope`), with exact file
+  sizes, hashes, `config.json` context windows and `modelscope download` /
+  `VLLM_USE_MODELSCOPE` commands.
+- New registry source and runtime: Docker Model Runner (`docker`), from
+  Docker Hub's official `ai/` namespace, with pull/run commands and
+  format-aware hardware checks (MLX tags on Apple Silicon, vLLM tags on
+  NVIDIA).
+- Base/pretrained checkpoints rank below instruct builds; Ollama aliases and
+  quantizations of one base checkpoint collapse into one recommendation.
+- `check` on Apple Silicon ranks the synced catalog like other platforms
+  instead of only the 26 static definitions; `check`, `ai-check` and `ai-run`
+  read each model's real parameter count, size and context window instead of
+  guessing from its name. The curated fallback catalog was refreshed from
+  registry data (wrong families and non-existent tags fixed), and the unused
+  `scripts/update-models.js`, which injected invented models, was removed.
+
 3.8.1 — ModelVet attribution (2026-08-04)
 -------------------------------------------
 

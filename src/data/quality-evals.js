@@ -229,6 +229,19 @@ const SOURCES = {
         // of models; the union covers far more of our catalog than the latest
         // alone, and newer releases win on conflict.
         releases: ['2025_04_25', '2025_05_30', '2025_11_25', '2025_12_23', '2026_01_08', '2026_06_25'],
+        // The site bundle lists every release. Newer ones are added
+        // automatically; older ones used a different question set and stay out.
+        async discoverReleases(request) {
+            const page = await request(this.homepage);
+            if (!page.ok) return [];
+            const script = (await page.text()).match(/src="\.?\/?(static\/js\/main\.[^"]+\.js)"/);
+            if (!script) return [];
+            const bundle = await request(`${this.homepage}/${script[1]}`);
+            if (!bundle.ok) return [];
+            const lists = (await bundle.text()).match(/\[("20\d{2}-\d{2}-\d{2}",?){4,}\]/g) || [];
+            const dates = lists.map((list) => JSON.parse(list)).sort((a, b) => b.length - a.length)[0] || [];
+            return dates.map((date) => date.replace(/-/g, '_'));
+        },
         // Authoritative task -> category map, from categories_<release>.json.
         categories: {
             Reasoning: ['theory_of_mind', 'zebra_puzzle', 'spatial', 'logic_with_navigation'],
@@ -283,6 +296,84 @@ const SOURCES = {
                 }
             }
             return out;
+        },
+    },
+
+    hf_eval_results: {
+        displayName: 'Hugging Face model-card evaluation results (self-reported)',
+        homepage: 'https://huggingface.co/docs/hub/eval-results',
+        url: 'https://huggingface.co/api/models?expand[]=evalResults',
+        // Results publishers attach to their own repos. Almost none are
+        // verified, so they rank below every independent board.
+        independent: false,
+        datasets: {
+            'TIGER-Lab/MMLU-Pro': ['hf_eval_mmlu_pro', 'general'],
+            'Idavidrein/gpqa': ['hf_eval_gpqa_diamond', 'reasoning', /diamond/i],
+            'cais/hle': ['hf_eval_hle', 'reasoning'],
+            'openai/gsm8k': ['hf_eval_gsm8k', 'reasoning'],
+            'MathArena/aime_2026': ['hf_eval_aime_2026', 'reasoning'],
+            'MathArena/hmmt_feb_2026': ['hf_eval_hmmt_feb_2026', 'reasoning'],
+            'SWE-bench/SWE-bench_Verified': ['hf_eval_swe_bench_verified', 'coding'],
+            'ScaleAI/SWE-bench_Pro': ['hf_eval_swe_bench_pro', 'coding'],
+            'harborframework/terminal-bench-2.0': ['hf_eval_terminal_bench_2_0', 'coding'],
+            'harborframework/terminal-bench-2.1': ['hf_eval_terminal_bench_2_1', 'coding'],
+            'google/IFEval': ['hf_eval_ifeval', 'talking'],
+            'MMMU/MMMU': ['hf_eval_mmmu', 'multimodal'],
+            'lmms-lab/MMMU': ['hf_eval_mmmu', 'multimodal']
+        },
+        pipelines: ['text-generation', 'image-text-to-text'],
+        perPipeline: 3000,
+        async collect(request) {
+            const models = [];
+            for (const pipeline of this.pipelines) {
+                let url = `https://huggingface.co/api/models?pipeline_tag=${pipeline}&sort=downloads&direction=-1&limit=1000&expand[]=evalResults`;
+                let fetched = 0;
+                while (url && fetched < this.perPipeline) {
+                    const response = await request(url);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const page = await response.json();
+                    if (!Array.isArray(page) || page.length === 0) break;
+                    fetched += page.length;
+                    models.push(...page.filter((model) => Array.isArray(model.evalResults) && model.evalResults.length));
+                    const link = response.headers?.get?.('link') || '';
+                    url = (link.match(/<([^>]+)>;\s*rel="next"/i) || [])[1] || null;
+                }
+            }
+            return { rows: this.parse(models), payload: JSON.stringify(models) };
+        },
+        parse(models) {
+            const latest = new Map();
+            for (const model of models) {
+                if (typeof model?.id !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(model.id)) continue;
+                for (const entry of model.evalResults || []) {
+                    const data = entry?.data || {};
+                    const spec = this.datasets[data.dataset?.id];
+                    if (!spec) continue;
+                    const [metric, category, taskPattern] = spec;
+                    if (taskPattern && !taskPattern.test(String(data.dataset?.task_id || ''))) continue;
+                    const value = finiteNumber(data.value);
+                    if (value == null || value < 0 || value > 100) continue;
+                    const key = `${model.id}::${metric}`;
+                    const previous = latest.get(key);
+                    if (previous && String(previous.date) >= String(data.date || '')) continue;
+                    latest.set(key, {
+                        date: data.date || '',
+                        row: {
+                            benchModelName: model.id,
+                            benchModelUrl: data.source?.url || `https://huggingface.co/${model.id}`,
+                            paramsB: null,
+                            isMoe: 0,
+                            variantRole: 'instruct',
+                            metric,
+                            category,
+                            rawScore: value,
+                            rawScaleMax: 100,
+                            evalPrecision: entry.verified ? 'verified' : 'self-reported',
+                        }
+                    });
+                }
+            }
+            return [...latest.values()].map((entry) => entry.row);
         },
     },
 
@@ -449,11 +540,19 @@ class QualityEvals {
         let payload = '';
         const request = (url) => fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
 
-        if (Array.isArray(spec.releases)) {
+        if (typeof spec.collect === 'function') {
+            ({ rows, payload } = await spec.collect(request));
+        } else if (Array.isArray(spec.releases)) {
             // Merge releases oldest-first so a newer re-run of the same model
             // overwrites the older score rather than duplicating it.
             const seen = new Map();
-            for (const release of spec.releases) {
+            let discovered = [];
+            try {
+                discovered = typeof spec.discoverReleases === 'function' ? await spec.discoverReleases(request) : [];
+            } catch { discovered = []; }
+            const oldest = [...spec.releases].sort()[0];
+            const releases = [...new Set([...spec.releases, ...discovered.filter((release) => release >= oldest)])].sort();
+            for (const release of releases) {
                 const url = `https://livebench.ai/table_${release}.csv`;
                 let body;
                 try {
@@ -548,8 +647,17 @@ class QualityEvals {
                 SELECT q.*, s.display_name AS source_name, s.homepage_url, s.independent
                 FROM quality_evals q JOIN quality_sources s ON s.id = q.source_id
             `).all().map(row => ({ row, identity: checkpointIdentity(row.bench_model_name, row.params_b) }));
+            // sameCheckpoint requires equal labels, so only rows sharing the
+            // label can match. Scanning every row per candidate made a
+            // recommendation over the full catalog take ~50 s.
+            this._identityIndex = new Map();
+            for (const entry of this._identityRows) {
+                const bucket = this._identityIndex.get(entry.identity.label) || [];
+                bucket.push(entry);
+                this._identityIndex.set(entry.identity.label, bucket);
+            }
         }
-        const wanted = this._identityRows.filter(({ row, identity: measured }) =>
+        const wanted = (this._identityIndex.get(identity.label) || []).filter(({ row, identity: measured }) =>
             (!category || row.category === category) && sameCheckpoint(identity, measured)
         ).map(({ row }) => row);
         if (!wanted.length) return null;

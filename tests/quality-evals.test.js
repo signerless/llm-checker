@@ -438,6 +438,50 @@ test('refresh invalidates percentiles and catalog clear/reopen preserves quality
     assert.deepStrictEqual(new QualityEvals(q.modelDatabase).stats(), before);
 });
 
+test('model-card eval results keep mapped percent metrics, the newest result, and are self-reported', () => {
+    const spec = SOURCES.hf_eval_results;
+    assert.strictEqual(spec.independent, false);
+    const result = (dataset, value, extra = {}) => ({
+        verified: false,
+        data: { dataset: { id: dataset, task_id: extra.task || 'main' }, value, date: extra.date || '2026-06-01', source: { url: 'https://example.invalid' } }
+    });
+    const rows = spec.parse([
+        { id: 'Qwen/Qwen3-8B', evalResults: [
+            result('TIGER-Lab/MMLU-Pro', 70, { date: '2026-01-01' }),
+            result('TIGER-Lab/MMLU-Pro', 72.5, { date: '2026-06-01' }),
+            result('Idavidrein/gpqa', 60, { task: 'gpqa_diamond' }),
+            result('Idavidrein/gpqa', 75, { task: 'main' }),
+            result('internlm/WildClawBench', 605),
+            result('SWE-bench/SWE-bench_Verified', 140)
+        ] },
+        { id: 'not a repo', evalResults: [result('TIGER-Lab/MMLU-Pro', 50)] }
+    ]);
+    assert.deepStrictEqual(rows.map((row) => [row.benchModelName, row.metric, row.category, row.rawScore]).sort(), [
+        ['Qwen/Qwen3-8B', 'hf_eval_gpqa_diamond', 'reasoning', 60],
+        ['Qwen/Qwen3-8B', 'hf_eval_mmlu_pro', 'general', 72.5]
+    ], 'unmapped datasets, other GPQA splits and out-of-range values are dropped');
+    assert.ok(rows.every((row) => row.evalPrecision === 'self-reported'));
+});
+
+test('LiveBench adds newer releases listed by the site and ignores older question sets', async () => {
+    const { q } = await seed();
+    const requested = [];
+    const csv = 'model,code_generation,code_completion\nqwen2.5-coder-32b-instruct,70,60\n';
+    const fetchImpl = async (url) => {
+        requested.push(url);
+        if (url === SOURCES.livebench.homepage) return new Response('<script src="./static/js/main.abc.js"></script>');
+        if (url.endsWith('/static/js/main.abc.js')) {
+            return new Response('x=["2024-06-24","2025-04-25","2026-06-25","2026-12-01"],y=1');
+        }
+        if (/table_\d{4}_\d{2}_\d{2}\.csv$/.test(url)) return new Response(csv);
+        return new Response('missing', { status: 404 });
+    };
+    await q.ingest('livebench', { fetchImpl });
+    const tables = requested.filter((url) => url.endsWith('.csv')).map((url) => url.match(/table_(.+)\.csv/)[1]);
+    assert.ok(tables.includes('2026_12_01'), 'a release newer than the curated list is fetched');
+    assert.ok(!tables.includes('2024_06_24'), 'releases older than the curated list are not mixed in');
+});
+
 async function run() {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-checker-quality-'));
     const backends = ['wasm'];

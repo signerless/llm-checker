@@ -280,7 +280,7 @@ class ExpandedModelsDatabase {
                 performance: {
                     speed: "very_fast",
                     quality: "good",
-                    context_length: 8192,
+                    context_length: 131072,
                     tokens_per_second_estimate: "60-120"
                 },
                 installation: {
@@ -308,7 +308,7 @@ class ExpandedModelsDatabase {
                 performance: {
                     speed: "fast",
                     quality: "very_good",
-                    context_length: 8192,
+                    context_length: 131072,
                     tokens_per_second_estimate: "30-60"
                 },
                 installation: {
@@ -374,7 +374,7 @@ class ExpandedModelsDatabase {
                     ollama: "ollama pull qwen2.5:7b",
                     description: "Alibaba's latest multilingual model with strong coding abilities"
                 },
-                specialization: "code",
+                specialization: "general",
                 languages: ["en", "zh", "ja", "ko", "es", "fr", "de"],
                 year: 2024
             },
@@ -436,14 +436,14 @@ class ExpandedModelsDatabase {
             },
             {
                 name: "Mistral Small 3.1",
-                size: "22B",
+                size: "24B",
                 type: "local",
                 category: "large",
                 requirements: {
                     ram: 24,
                     vram: 12,
                     cpu_cores: 6,
-                    storage: 22,
+                    storage: 15,
                     recommended_ram: 32
                 },
                 frameworks: ["ollama", "vllm", "transformers"],
@@ -455,12 +455,12 @@ class ExpandedModelsDatabase {
                     tokens_per_second_estimate: "8-20"
                 },
                 installation: {
-                    ollama: "ollama pull mistral-small:22b",
+                    ollama: "ollama pull mistral-small3.1:24b",
                     description: "Latest Mistral model with enhanced capabilities"
                 },
                 specialization: "reasoning",
                 languages: ["en", "fr", "de", "es", "it"],
-                year: 2024
+                year: 2025
             },
             {
                 name: "CodeLlama 7B",

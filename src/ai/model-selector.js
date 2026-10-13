@@ -4,6 +4,28 @@ const IntelligentModelSelector = require('./intelligent-selector');
 const { filterModelsBySafety } = require('../models/model-safety');
 const { resolveCpuOnlyMode } = require('../hardware/cpu-only');
 
+// Per-tag sizes and context windows from the synced catalog. A model's own
+// identifier maps to its default (`:latest`) tag.
+function buildCatalogFacts(models = []) {
+    const facts = new Map();
+    for (const model of models) {
+        const variants = Array.isArray(model.variants) ? model.variants : [];
+        for (const variant of variants) {
+            if (!variant?.tag) continue;
+            facts.set(String(variant.tag).toLowerCase(), {
+                params_b: Number(variant.params_b) > 0 ? Number(variant.params_b) : null,
+                size_gb: Number(variant.size_gb) > 0 ? Number(variant.size_gb) : null,
+                context_length: Number(variant.context_length) > 0 ? Number(variant.context_length) : null,
+                quant: variant.quant || null
+            });
+        }
+        const id = String(model.model_identifier || model.id || '').toLowerCase();
+        const defaultTag = facts.get(`${id}:latest`);
+        if (id && defaultTag && !facts.has(id)) facts.set(id, defaultTag);
+    }
+    return facts;
+}
+
 class AIModelSelector {
     constructor(options = {}) {
         this.aiSelectorPath = path.join(__dirname, '../../ml-model/js');
@@ -92,6 +114,7 @@ class AIModelSelector {
             const allAvailableModels = filterModelsBySafety(catalogModels, {
                 includeUncensored: options.includeUncensored === true
             });
+            this.intelligentSelector.setCatalogFacts(buildCatalogFacts(catalogModels));
             
             log(`Evaluating against ${allAvailableModels.length} models from database`);
             
