@@ -196,6 +196,9 @@ async function testUnifiedDetectionDedupesLinuxFallbackWithoutDeviceId() {
         displays: []
     });
     si.mem = async () => ({ total: 124 * 1024 ** 3 });
+    // The fixture is a Linux lspci/ROCm host; the generic GPU inventory only runs on Linux/Windows.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
 
     try {
         const unified = new UnifiedDetector();
@@ -226,6 +229,7 @@ async function testUnifiedDetectionDedupesLinuxFallbackWithoutDeviceId() {
     } finally {
         si.graphics = originalGraphics;
         si.mem = originalMem;
+        Object.defineProperty(process, 'platform', originalPlatform);
     }
 }
 

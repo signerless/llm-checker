@@ -16,6 +16,9 @@ async function run() {
     assert.strictEqual(classic.normalizeVRAM(192), 192, 'explicit GB values remain supported');
 
     const originalGraphics = si.graphics, originalMem = si.mem, originalTotalmem = os.totalmem;
+    // The fixture is a Linux APU; the generic GPU inventory only runs on Linux/Windows.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     si.graphics = async () => ({ controllers: [controller] });
     si.mem = async () => memory;
     os.totalmem = () => memory.total;
@@ -44,7 +47,10 @@ async function run() {
         si.graphics = async () => ({ controllers: [{ model: 'NVIDIA H100', vram: 81920 }] });
         const dedicated = await detector.detectSystemGpuFallback();
         assert.strictEqual(dedicated.totalVRAM, 80);
-    } finally { si.graphics = originalGraphics; si.mem = originalMem; os.totalmem = originalTotalmem; }
+    } finally {
+        si.graphics = originalGraphics; si.mem = originalMem; os.totalmem = originalTotalmem;
+        Object.defineProperty(process, 'platform', originalPlatform);
+    }
     console.log('hardware-integrated-memory-units.test.js: OK');
 }
 
